@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# PlatformIO
+esp32-s3/.pio/
+esp32-s3/.vscode/
+
+# Project
+config.yaml
+profiles/*.json
+!profiles/default.json
+templates/*.png
+logs/
+
+# Claude
+.claude/
