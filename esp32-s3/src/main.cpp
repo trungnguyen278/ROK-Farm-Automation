@@ -258,12 +258,13 @@ void check_serial() {
 // --- Entry points ---
 
 void setup() {
+    Serial.begin(115200);
     Mouse.begin();
     Keyboard.begin();
     USB.begin();
-    Serial.begin(115200);
 
-    while (!Serial) { delay(10); }
+    unsigned long start = millis();
+    while (!Serial && millis() - start < 5000) { delay(10); }
 }
 
 void loop() {

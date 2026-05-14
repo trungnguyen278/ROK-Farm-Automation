@@ -52,7 +52,7 @@ class SerialConnection:
                 baudrate=self._baud,
                 timeout=ACK_TIMEOUT,
             )
-            time.sleep(1.0)  # wait for ESP32 boot
+            time.sleep(2.5)  # wait for ESP32 boot + USB enumeration
             self._serial.reset_input_buffer()
 
             if not self._handshake():

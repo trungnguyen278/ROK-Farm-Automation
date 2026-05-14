@@ -1,0 +1,50 @@
+# ROK Farm Automation — Configuration
+# Copy this file to config.yaml and adjust values as needed.
+
+serial:
+  port: "COM3"                    # ESP32 COM port (or leave for auto-detect)
+  baud: 115200
+  timeout: 0.5                    # serial read timeout (s)
+  heartbeat_interval: 2.0         # PING interval (s)
+  heartbeat_timeout: 5.0          # reconnect if no PONG (s)
+  max_retries: 3                  # per command
+  ack_timeout: 0.5                # wait for ACK (s)
+
+capture:
+  window_title: "Rise of Kingdoms"
+  fps: 5                          # vision analysis rate
+  roi:
+    top_bar:    { x: 0.0,  y: 0.0,  w: 1.0,  h: 0.05 }
+    center:     { x: 0.1,  y: 0.15, w: 0.8,  h: 0.55 }
+    bottom_bar: { x: 0.0,  y: 0.9,  w: 1.0,  h: 0.1  }
+    popup:      { x: 0.25, y: 0.2,  w: 0.5,  h: 0.5  }
+    minimap:    { x: 0.8,  y: 0.75, w: 0.2,  h: 0.25 }
+
+vision:
+  template_dir: "templates/"
+  match_threshold: 0.8            # minimum confidence
+  scales: [0.8, 0.9, 1.0, 1.1, 1.2]
+  cache_max_size: 100
+
+logic:
+  strategy: "basic_gather"        # basic_gather | war_prep | alliance_focus
+  decision_rate: 10               # Hz
+  unknown_state_timeout: 5.0      # seconds before ERROR
+  max_task_queue: 50
+
+anti_detection:
+  profile: "default"              # default | cautious | aggressive | random
+  profile_dir: "profiles/"
+
+session:
+  enabled: true
+  farm_duration: { mean: 25, std: 8 }      # minutes
+  break_duration: { mean: 8, std: 3 }      # minutes
+  daily_hours_max: 6
+  active_window: ["08:00", "23:00"]
+
+logging:
+  level: "INFO"                   # DEBUG | INFO | WARNING | ERROR
+  file: "logs/rok_automation.log"
+  max_size_mb: 10
+  backup_count: 5

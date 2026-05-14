@@ -19,12 +19,23 @@ Automation tool for Rise of Kingdoms (PC). Python host does screen capture + Ope
 ## Architecture (TL;DR)
 ```
 Game Window → mss → OpenCV → State Machine → Anti-Detection → Serial → ESP32-S3 → USB HID
+                                    ↕
+                          tkinter Dashboard (control, monitor, config, stats)
 ```
-3 threads: Capture (grab+vision), Main (state machine+scheduler), Serial (send+ACK).
+4 threads: UI/Main (tkinter), Capture (grab+vision), Logic (state machine+scheduler), Serial (send+ACK).
 
 ## Module Map
 ```
 main.py                            — entry point, orchestrator
+ui/app.py                          — tkinter MainApp, tab manager
+ui/tab_control.py                  — start/stop, strategy, ESP32 status
+ui/tab_monitor.py                  — screenshot + vision overlay
+ui/tab_config.py                   — config editor GUI
+ui/tab_profile.py                  — profile editor GUI
+ui/tab_stats.py                    — statistics, charts, export CSV
+ui/log_panel.py                    — scrollable log widget
+ui/status_bar.py                   — bottom status bar
+ui/utils.py                        — LNK resolver, image helpers
 capture/screen_capture.py          — mss, ROI crop
 vision/template_matcher.py         — OpenCV matchTemplate, multi-scale
 vision/state_detector.py           — detect current game screen
@@ -46,8 +57,9 @@ esp32-s3/                          — PlatformIO firmware project
 ```
 
 ## Tech Stack
-Python 3.10+ | mss | opencv-python | pyserial | pyyaml | numpy
+Python 3.10+ | mss | opencv-python | pyserial | pyyaml | numpy | Pillow | pywin32
 ESP32-S3 DevKitC | PlatformIO | Arduino framework | USB HID libs
+UI: tkinter (built-in) + Pillow (image display) + pywin32 (LNK/window management)
 
 ## Serial Protocol (Python ↔ ESP32)
 Format: `<CMD,param1,param2,...>\n` → ESP32 replies `<ACK,cmd_id>\n` or `<NACK,cmd_id,error>\n`
@@ -83,4 +95,5 @@ Baud: 115200 | Heartbeat: PING every 2s
 - [docs/anti-detection.md](docs/anti-detection.md) — all 5 layers detailed
 - [docs/state-machine.md](docs/state-machine.md) — states, transitions, scheduler
 - [docs/config-reference.md](docs/config-reference.md) — all config options
+- [docs/ui-dashboard.md](docs/ui-dashboard.md) — tkinter dashboard design, tabs, threading
 - [docs/development-guide.md](docs/development-guide.md) — setup, build, test

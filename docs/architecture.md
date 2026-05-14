@@ -1,25 +1,39 @@
 # Architecture
 
-> **AI Note:** System gồm 6 module chạy trên 3 thread. Python host xử lý vision+logic, gửi lệnh qua Serial tới ESP32-S3 phát HID. Mọi action đều qua Anti-Detection trước khi gửi.
+> **AI Note:** System gồm 7 module chạy trên 4 thread. tkinter UI trên main thread, logic/capture/serial trên workers. Mọi action đều qua Anti-Detection trước khi gửi serial.
 
 ## System Flow
 
 ```
 Game Window → mss capture → OpenCV match → State Machine → Anti-Detection → Serial → ESP32 → USB HID
+                                  ↕
+                        tkinter Dashboard (control, monitor, config, stats)
 ```
 
 ## Threads
 
 | Thread | Responsibilities | Communication |
 |---|---|---|
-| Main | State machine, task scheduler, decision | Reads vision results, writes action queue |
+| Main (UI) | tkinter event loop, dashboard display | `after()` polls queues for updates |
+| Logic | State machine, task scheduler, decision | Reads vision results, writes action queue |
 | Capture | Screen grab (30-60fps), vision analysis (2-5fps) | Publishes results via `queue.Queue` |
 | Serial | Send commands, wait ACK, heartbeat | Consumes action queue |
+
+> tkinter **must** run on main thread. Logic thread tách ra thành worker.
 
 ## Module Map
 
 ```
-main.py                          # Entry point, thread orchestrator
+main.py                          # Entry point, launches UI + worker threads
+ui/app.py                        # MainApp(tk.Tk), tab manager, startup
+ui/tab_control.py                # Start/stop, strategy, ESP32 status
+ui/tab_monitor.py                # Screenshot + vision overlay
+ui/tab_config.py                 # Config editor, save/load
+ui/tab_profile.py                # Profile editor
+ui/tab_stats.py                  # Statistics, charts, export
+ui/log_panel.py                  # Scrollable log widget
+ui/status_bar.py                 # Bottom status bar
+ui/utils.py                      # LNK resolver, image conversion
 capture/screen_capture.py        # mss grab, ROI crop
 vision/template_matcher.py       # OpenCV matchTemplate, multi-scale
 vision/state_detector.py         # Determine current game screen

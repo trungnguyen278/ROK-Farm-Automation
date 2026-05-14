@@ -47,6 +47,8 @@ opencv-python>=4.8
 pyserial>=3.5
 pyyaml>=6.0
 numpy>=1.24
+Pillow>=10.0
+pywin32>=306
 ```
 
 ## 3. Config
@@ -76,6 +78,17 @@ rok-automation/
 ├── config.yaml
 ├── config.example.yaml
 ├── requirements.txt
+├── ui/
+│   ├── __init__.py
+│   ├── app.py                 # MainApp(tk.Tk), tab manager
+│   ├── tab_control.py         # Start/stop, strategy select
+│   ├── tab_monitor.py         # Screenshot + vision overlay
+│   ├── tab_config.py          # Config editor GUI
+│   ├── tab_profile.py         # Profile editor GUI
+│   ├── tab_stats.py           # Statistics, charts
+│   ├── log_panel.py           # Scrollable log widget
+│   ├── status_bar.py          # Bottom status bar
+│   └── utils.py               # LNK resolver, image helpers
 ├── capture/
 │   ├── __init__.py
 │   └── screen_capture.py

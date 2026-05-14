@@ -1,0 +1,30 @@
+{
+  "name": "default",
+  "mouse": {
+    "bezier_control_points": 3,
+    "speed_base": 400,
+    "speed_variance": 150,
+    "overshoot_chance": 0.15,
+    "overshoot_distance": [5, 15],
+    "misclick_chance": 0.01,
+    "click_spread": 8,
+    "hold_ms": [50, 150],
+    "jitter_px": 2
+  },
+  "timing": {
+    "action_delay_mean": 1200,
+    "action_delay_std": 400,
+    "micro_pause_chance": 0.2,
+    "micro_pause_range": [2000, 5000],
+    "typing_delay": [30, 120]
+  },
+  "session": {
+    "farm_duration_mean": 25,
+    "farm_duration_std": 8,
+    "break_duration_mean": 8,
+    "break_duration_std": 3,
+    "daily_hours_max": 6,
+    "active_window": ["08:00", "23:00"],
+    "idle_action_chance": 0.08
+  }
+}
