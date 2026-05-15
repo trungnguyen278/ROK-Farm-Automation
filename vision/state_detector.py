@@ -40,7 +40,11 @@ class StateDetector:
         best_conf = 0.0
 
         for screen, templates in SCREEN_TEMPLATES.items():
-            match = self._matcher.match_best(frame, templates)
+            try:
+                match = self._matcher.match_best(frame, templates)
+            except Exception:
+                logger.debug("Template match failed for %s", screen.value, exc_info=True)
+                continue
             if match and match.confidence > best_conf:
                 best_conf = match.confidence
                 best_screen = screen
@@ -58,7 +62,11 @@ class StateDetector:
         best_match: Match | None = None
 
         for screen, templates in SCREEN_TEMPLATES.items():
-            match = self._matcher.match_best(frame, templates)
+            try:
+                match = self._matcher.match_best(frame, templates)
+            except Exception:
+                logger.debug("Template match failed for %s", screen.value, exc_info=True)
+                continue
             if match and (best_match is None or match.confidence > best_match.confidence):
                 best_match = match
                 best_screen = screen

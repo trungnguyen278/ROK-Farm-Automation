@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -114,18 +115,78 @@ class Config:
 
     def validate(self) -> list[str]:
         errors: list[str] = []
+        _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+
+        # Serial
         if self.serial.baud not in (9600, 19200, 38400, 57600, 115200):
             errors.append(f"Invalid baud rate: {self.serial.baud}")
+        if self.serial.timeout <= 0:
+            errors.append(f"serial.timeout must be > 0: {self.serial.timeout}")
+        if self.serial.heartbeat_interval <= 0:
+            errors.append(f"serial.heartbeat_interval must be > 0: {self.serial.heartbeat_interval}")
+        if self.serial.heartbeat_timeout <= self.serial.heartbeat_interval:
+            errors.append("serial.heartbeat_timeout must be > heartbeat_interval")
+        if self.serial.max_retries < 0:
+            errors.append(f"serial.max_retries must be >= 0: {self.serial.max_retries}")
+
+        # Capture
         if self.capture.fps < 1 or self.capture.fps > 60:
-            errors.append(f"FPS out of range [1,60]: {self.capture.fps}")
+            errors.append(f"capture.fps out of range [1,60]: {self.capture.fps}")
+        for name, roi in self.capture.roi.items():
+            if isinstance(roi, ROI):
+                for attr in ("x", "y", "w", "h"):
+                    val = getattr(roi, attr)
+                    if not 0.0 <= val <= 1.0:
+                        errors.append(f"capture.roi.{name}.{attr} out of range [0,1]: {val}")
+
+        # Vision
         if not 0.0 < self.vision.match_threshold <= 1.0:
-            errors.append(f"match_threshold must be (0,1]: {self.vision.match_threshold}")
+            errors.append(f"vision.match_threshold must be (0,1]: {self.vision.match_threshold}")
+        if not self.vision.scales:
+            errors.append("vision.scales must not be empty")
+        for s in self.vision.scales:
+            if s <= 0:
+                errors.append(f"vision.scales values must be > 0: {s}")
+        if self.vision.cache_max_size < 1:
+            errors.append(f"vision.cache_max_size must be >= 1: {self.vision.cache_max_size}")
+        if not Path(self.vision.template_dir).exists():
+            logger.warning("vision.template_dir does not exist: %s", self.vision.template_dir)
+
+        # Logic
         if self.logic.decision_rate < 1 or self.logic.decision_rate > 60:
-            errors.append(f"decision_rate out of range [1,60]: {self.logic.decision_rate}")
+            errors.append(f"logic.decision_rate out of range [1,60]: {self.logic.decision_rate}")
+        if self.logic.unknown_state_timeout <= 0:
+            errors.append(f"logic.unknown_state_timeout must be > 0: {self.logic.unknown_state_timeout}")
+        if self.logic.max_task_queue < 1:
+            errors.append(f"logic.max_task_queue must be >= 1: {self.logic.max_task_queue}")
+
+        # Anti-detection
+        if not Path(self.anti_detection.profile_dir).exists():
+            logger.warning("anti_detection.profile_dir does not exist: %s", self.anti_detection.profile_dir)
+
+        # Session
         if self.session.daily_hours_max < 1 or self.session.daily_hours_max > 24:
-            errors.append(f"daily_hours_max out of range: {self.session.daily_hours_max}")
+            errors.append(f"session.daily_hours_max out of range [1,24]: {self.session.daily_hours_max}")
+        for name, dur in [("farm_duration", self.session.farm_duration), ("break_duration", self.session.break_duration)]:
+            if dur.mean <= 0:
+                errors.append(f"session.{name}.mean must be > 0: {dur.mean}")
+            if dur.std < 0:
+                errors.append(f"session.{name}.std must be >= 0: {dur.std}")
+        if len(self.session.active_window) != 2:
+            errors.append("session.active_window must have exactly 2 entries [start, end]")
+        else:
+            for i, t in enumerate(self.session.active_window):
+                if not _TIME_RE.match(t):
+                    errors.append(f"session.active_window[{i}] invalid format (expected HH:MM): {t}")
+
+        # Logging
         if self.logging.level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
             errors.append(f"Invalid log level: {self.logging.level}")
+        if self.logging.max_size_mb < 1:
+            errors.append(f"logging.max_size_mb must be >= 1: {self.logging.max_size_mb}")
+        if self.logging.backup_count < 0:
+            errors.append(f"logging.backup_count must be >= 0: {self.logging.backup_count}")
+
         return errors
 
 

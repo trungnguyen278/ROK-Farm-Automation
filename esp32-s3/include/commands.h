@@ -2,6 +2,7 @@
 #define COMMANDS_H
 
 #define CMD_MOVE   "MOVE"
+#define CMD_MOVETO "MOVETO"
 #define CMD_CLICK  "CLICK"
 #define CMD_DCLICK "DCLICK"
 #define CMD_DRAG   "DRAG"

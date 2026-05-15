@@ -1,10 +1,12 @@
 #include <Arduino.h>
 #include "USB.h"
 #include "USBHIDMouse.h"
+#include "USBHIDAbsoluteMouse.h"
 #include "USBHIDKeyboard.h"
 #include "commands.h"
 
 USBHIDMouse Mouse;
+USBHIDAbsoluteMouse AbsMouse;
 USBHIDKeyboard Keyboard;
 
 static char line_buf[MAX_LINE_LEN];
@@ -97,6 +99,19 @@ void handle_move(const ParsedCommand& cmd) {
             delay(STEP_INTERVAL_MS);
         }
     }
+    send_ack(cmd.cmd_id);
+}
+
+void handle_moveto(const ParsedCommand& cmd) {
+    if (cmd.param_count < 2) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+
+    int abs_x = atoi(cmd.params[0]);
+    int abs_y = atoi(cmd.params[1]);
+
+    abs_x = constrain(abs_x, 0, 32767);
+    abs_y = constrain(abs_y, 0, 32767);
+
+    AbsMouse.move(abs_x, abs_y);
     send_ack(cmd.cmd_id);
 }
 
@@ -224,6 +239,7 @@ void execute_command(const ParsedCommand& cmd) {
     executing = true;
 
     if      (strcmp(cmd.command, CMD_MOVE) == 0)   handle_move(cmd);
+    else if (strcmp(cmd.command, CMD_MOVETO) == 0) handle_moveto(cmd);
     else if (strcmp(cmd.command, CMD_CLICK) == 0)  handle_click(cmd);
     else if (strcmp(cmd.command, CMD_DCLICK) == 0) handle_dclick(cmd);
     else if (strcmp(cmd.command, CMD_DRAG) == 0)   handle_drag(cmd);
@@ -260,6 +276,7 @@ void check_serial() {
 void setup() {
     Serial.begin(115200);
     Mouse.begin();
+    AbsMouse.begin();
     Keyboard.begin();
     USB.begin();
 

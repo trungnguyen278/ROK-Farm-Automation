@@ -43,6 +43,7 @@ class MainApp(tk.Tk):
         self._serial_conn = None
         self._cmd_buffer = None
         self.screen_capture = None
+        self.template_matcher = None
         self.state_detector = None
         self.stats = SessionStats()
         self._orchestrator = None
@@ -120,7 +121,8 @@ class MainApp(tk.Tk):
         handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
         root_logger = logging.getLogger()
         root_logger.addHandler(handler)
-        root_logger.setLevel(logging.INFO)
+        if not root_logger.handlers or root_logger.level == logging.WARNING:
+            root_logger.setLevel(logging.INFO)
 
     def _init_vision(self):
         try:
@@ -138,6 +140,7 @@ class MainApp(tk.Tk):
             if templates_dir.exists():
                 cache = TemplateCache(str(templates_dir))
                 matcher = TemplateMatcher(cache)
+                self.template_matcher = matcher
                 self.state_detector = StateDetector(matcher)
         except ImportError:
             logger.warning("vision module not available")
@@ -244,6 +247,10 @@ class MainApp(tk.Tk):
             self._orchestrator.set_screen_capture(self.screen_capture)
         if self.state_detector:
             self._orchestrator.set_state_detector(self.state_detector)
+        if self._cmd_buffer:
+            self._orchestrator.set_command_buffer(self._cmd_buffer)
+        if self.template_matcher:
+            self._orchestrator.set_template_matcher(self.template_matcher)
 
         self._orchestrator.start(strategy)
         self._running.set()

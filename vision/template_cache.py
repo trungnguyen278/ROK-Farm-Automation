@@ -15,8 +15,11 @@ class TemplateCache:
         self._dir = Path(template_dir)
         self._max_size = max_size
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._missing: set[str] = set()
 
     def get(self, name: str) -> np.ndarray | None:
+        if name in self._missing:
+            return None
         if name in self._cache:
             self._cache.move_to_end(name)
             return self._cache[name]
@@ -38,6 +41,7 @@ class TemplateCache:
         path = self._dir / f"{name}.png"
         if not path.exists():
             logger.warning("Template not found: %s", path)
+            self._missing.add(name)
             return None
 
         img = cv2.imread(str(path), cv2.IMREAD_COLOR)
