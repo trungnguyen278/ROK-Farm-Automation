@@ -119,11 +119,11 @@
 - [x] Handler: `_handle_dismiss_popup` — find close_btn or click center, verify popup gone
 - [x] Handler: `_handle_collect_rewards` — click quest → claim loop → Escape → verify city_view
 - [x] Handler: `_handle_alliance_help` — click flag → help all → Escape → verify city_view
-- [ ] Flash ESP32 firmware + test MOVETO via serial terminal
-- [ ] Capture `templates/buttons/close_btn.png` từ game
-- [ ] Capture `templates/buttons/claim_btn.png` từ game
-- [ ] Test end-to-end: popup auto-dismiss
-- [ ] Test end-to-end: collect rewards
+- [x] Flash ESP32 firmware + test MOVETO via serial terminal (COM27, 10/10 pass, MOVETO 6/6 ACK)
+- [x] Capture `templates/buttons/close_btn.png` từ game (conf=1.000, false-positive city=0.83)
+- [ ] Capture `templates/buttons/claim_btn.png` từ game (defer — cần quest hoàn thành mới có nút Claim)
+- [x] Test end-to-end: popup auto-dismiss (5/5 PASS — open mail → detect close_btn → click → verify city_view)
+- [ ] Test end-to-end: collect rewards (blocked by claim_btn template)
 - [ ] Thêm handlers: train, gather, heal (cần thêm templates + navigation logic)
 
 ---
@@ -147,6 +147,9 @@
 | 2026-05-15 | Fresh capture trước mỗi session | Template bottom bar bị ảnh hưởng bởi chat/time-of-day |
 | 2026-05-15 | USBHIDAbsoluteMouse + MOVETO command | Relative mouse bị drift, absolute chính xác hơn cho template→click |
 | 2026-05-15 | Giữ cả MOVE (relative) + MOVETO (absolute) | Backward compat, MOVE dùng cho Bézier humanized paths |
+| 2026-05-15 | Firmware: chỉ dùng USBHIDAbsoluteMouse | static init bug: chỉ mouse đầu tiên được đăng ký HID, AbsMouse track position cho MOVE relative |
+| 2026-05-15 | close_btn threshold 0.9 | False positive ~0.83 trong city view, cần threshold cao hơn 0.8 để phân biệt |
+| 2026-05-15 | Re-capture state templates cho resolution 1480x876 | Templates cũ 1037px wide không match, crop bottom-right 500x80 |
 | 2026-05-15 | "Workflow with verification" pattern | Mỗi click phải verify kết quả, retry up to 3x (ref: 4x-game-agent) |
 | 2026-05-15 | Tham khảo GitHub ROK bots | Dylan-Zheng, OSROKBOT, 4x-game-agent, Sunuba/roc — tất cả dùng ADB, mình unique ở HW HID |
 

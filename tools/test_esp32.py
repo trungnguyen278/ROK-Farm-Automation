@@ -62,6 +62,7 @@ class ESP32TestSuite:
 
         self.test_heartbeat()
         self.test_move_square()
+        self.test_moveto()
         self.test_clicks()
         self.test_scroll()
         self.test_key()
@@ -146,6 +147,29 @@ class ESP32TestSuite:
             time.sleep(0.1)
 
         self.record("MOVE square", PASS if all_ok else FAIL)
+
+    def test_moveto(self):
+        print("\n--- Test 4b: HID MOVETO — Absolute Position ---")
+        print("    (Mouse will jump to 4 corners via absolute coords)")
+        time.sleep(0.5)
+        positions = [
+            (8192, 8192, "center-ish"),
+            (3000, 3000, "top-left"),
+            (29000, 3000, "top-right"),
+            (29000, 29000, "bottom-right"),
+            (3000, 29000, "bottom-left"),
+            (16383, 16383, "center"),
+        ]
+        all_ok = True
+        for x, y, label in positions:
+            ok = self.buf.send("MOVETO", x, y)
+            status = "ACK" if ok else "FAIL"
+            print(f"    MOVETO {label:14s} ({x:5d},{y:5d}): {status}")
+            if not ok:
+                all_ok = False
+            time.sleep(0.4)
+
+        self.record("MOVETO absolute", PASS if all_ok else FAIL)
 
     def test_clicks(self):
         print("\n--- Test 5: HID CLICK ---")
