@@ -35,3 +35,5 @@ logs/
 
 # Claude
 .claude/
+
+tools/screenshots/

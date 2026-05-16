@@ -424,9 +424,10 @@ class GemFarmFlowTest:
     def _has_march_line(self, frame, icon: Match) -> tuple[bool, str]:
         """Detect march lines converging on an icon (troops en-route).
 
-        Uses two complementary approaches:
-        1. Color mask: bright low-saturation lines (white/yellow march lines)
-        2. Canny edges: catches colored march lines in tinted territories
+        Multi-color detection:
+        1. White/bright lines (V>200, S<50)
+        2. Teal/cyan lines (H 75-105) -- player's own marches
+        3. Green lines (H 50-84) -- gathering marches
 
         A valid march line must be long (>2x icon) and have an endpoint
         near the icon center.
@@ -452,16 +453,27 @@ class GemFarmFlowTest:
 
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-        # Color mask: bright low-saturation lines (march lines are white/yellow)
-        color_mask = (
+        white_mask = (
             (hsv[:, :, 2] > 200) & (hsv[:, :, 1] < 50)
         ).astype(np.uint8) * 255
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1))
-        closed = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        cyan_mask = (
+            (hsv[:, :, 0] >= 75) & (hsv[:, :, 0] <= 105) &
+            (hsv[:, :, 1] > 60) & (hsv[:, :, 2] > 130)
+        ).astype(np.uint8) * 255
+
+        green_mask = (
+            (hsv[:, :, 0] >= 50) & (hsv[:, :, 0] <= 74) &
+            (hsv[:, :, 1] > 60) & (hsv[:, :, 2] > 130)
+        ).astype(np.uint8) * 255
+
+        combined = cv2.bitwise_or(white_mask, cv2.bitwise_or(cyan_mask, green_mask))
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        closed = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel, iterations=1)
 
         lines = cv2.HoughLinesP(closed, 1, np.pi / 180,
-                                threshold=40, minLineLength=min_len, maxLineGap=8)
+                                threshold=35, minLineLength=min_len, maxLineGap=15)
         if lines is None:
             return False, "no lines"
 
@@ -471,7 +483,6 @@ class GemFarmFlowTest:
             if length < min_len:
                 continue
 
-            # Skip near-horizontal/vertical lines (territory borders)
             angle = abs(np.degrees(np.arctan2(ly2 - ly1, lx2 - lx1)))
             if angle < 15 or angle > 165 or (75 < angle < 105):
                 continue
@@ -481,7 +492,16 @@ class GemFarmFlowTest:
             if min(d1, d2) > near_r:
                 continue
 
-            info = f"len={length:.0f} endpt={min(d1,d2):.0f} angle={angle:.0f}"
+            # Identify which color matched for logging
+            ep_x = lx1 if d1 < d2 else lx2
+            ep_y = ly1 if d1 < d2 else ly2
+            ep_x = max(0, min(ep_x, roi.shape[1] - 1))
+            ep_y = max(0, min(ep_y, roi.shape[0] - 1))
+            h_val = hsv[ep_y, ep_x, 0]
+            s_val = hsv[ep_y, ep_x, 1]
+            color_tag = "white" if s_val < 50 else ("cyan" if h_val >= 75 else "green")
+
+            info = f"{color_tag} len={length:.0f} endpt={min(d1,d2):.0f} angle={angle:.0f}"
             return True, info
 
         return False, "no march lines"
@@ -604,6 +624,14 @@ class GemFarmFlowTest:
             if occupied:
                 save_screenshot(frame, f"{tag}_occupied_{attempt:02d}")
                 print(f"  [{WARN}] [{attempt}] Mine occupied ({occ_info}) -- skipping")
+                self._press_escape()
+                time.sleep(0.5)
+                return False
+
+            has_line, line_info = self._has_march_line(frame, mine)
+            if has_line:
+                save_screenshot(frame, f"{tag}_march_line_{attempt:02d}")
+                print(f"  [{WARN}] [{attempt}] March line at zoomed mine ({line_info}) -- skipping")
                 self._press_escape()
                 time.sleep(0.5)
                 return False
