@@ -122,6 +122,7 @@ class FullLoopTest:
 
         self.orchestrator_sc = sc
         self.orchestrator_sd = detector
+        self.orchestrator_matcher = matcher
         print(f"  [{PASS}] Vision pipeline ready")
         return True
 
@@ -147,6 +148,10 @@ class FullLoopTest:
         self.orchestrator.set_screen_capture(self.orchestrator_sc)
         if self.orchestrator_sd:
             self.orchestrator.set_state_detector(self.orchestrator_sd)
+        if self.cmd_buffer and hasattr(self, 'orchestrator_matcher'):
+            self.orchestrator.set_command_buffer(self.cmd_buffer)
+            self.orchestrator.set_template_matcher(self.orchestrator_matcher)
+            print(f"  [{PASS}] ActionExecutor will handle actions (live HID)")
         self.orchestrator.start(self.strategy)
         print(f"  [{PASS}] Orchestrator started: strategy={self.strategy}")
 
@@ -156,6 +161,7 @@ class FullLoopTest:
         deadline = self.stats["start_time"] + self.duration
         last_state = None
         action_count = 0
+        use_action_executor = not self.dry_run and self.orchestrator._action_executor is not None
 
         try:
             while time.monotonic() < deadline:
@@ -172,20 +178,27 @@ class FullLoopTest:
                 except Empty:
                     pass
 
-                try:
-                    while True:
-                        action = self.orchestrator.action_queue.get_nowait()
-                        action_count += 1
-                        self.stats["actions_dispatched"] += 1
-                        elapsed = time.monotonic() - self.stats["start_time"]
-                        logger.info("[%6.1fs] Action #%d: type=%s state=%s params=%s",
-                                    elapsed, action_count, action["type"],
-                                    action["state"], action.get("params", {}))
+                if not use_action_executor:
+                    try:
+                        while True:
+                            action = self.orchestrator.action_queue.get_nowait()
+                            action_count += 1
+                            self.stats["actions_dispatched"] += 1
+                            elapsed = time.monotonic() - self.stats["start_time"]
+                            logger.info("[%6.1fs] Action #%d: type=%s state=%s params=%s",
+                                        elapsed, action_count, action["type"],
+                                        action["state"], action.get("params", {}))
 
-                        if not self.dry_run and self.cmd_buffer:
-                            self._execute_action(action)
-                except Empty:
-                    pass
+                            if not self.dry_run and self.cmd_buffer:
+                                self._execute_action(action)
+                    except Empty:
+                        pass
+                else:
+                    qsize = self.orchestrator.action_queue.qsize()
+                    if qsize > 0:
+                        self.stats["actions_dispatched"] += qsize
+                        elapsed = time.monotonic() - self.stats["start_time"]
+                        logger.info("[%6.1fs] ActionExecutor queue: %d pending", elapsed, qsize)
 
                 sched = self.orchestrator.scheduler
                 if sched:
@@ -294,7 +307,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Skip serial/HID output")
     parser.add_argument("--duration", type=int, default=60, help="Test duration in seconds")
     parser.add_argument("--strategy", default="basic_gather",
-                        choices=["basic_gather", "war_prep", "alliance_focus"])
+                        choices=["basic_gather", "war_prep", "alliance_focus", "gem_farm"])
     args = parser.parse_args()
 
     if args.port is None:

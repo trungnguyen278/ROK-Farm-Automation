@@ -66,12 +66,25 @@ class CommandBuffer:
             self._execute_with_retry(pending)
             pending.result.set()
 
+    def _ack_timeout_for(self, cmd: str, params: tuple) -> float:
+        """Dynamic ACK timeout: DRAG/MOVE with duration need longer waits."""
+        base = ACK_TIMEOUT
+        if cmd in ("DRAG", "MOVE"):
+            # Last numeric param is often duration_ms
+            try:
+                duration_ms = int(params[-1]) if params else 0
+                base += duration_ms / 1000.0 + 0.2  # duration + margin
+            except (ValueError, IndexError):
+                base += 1.0
+        return base
+
     def _execute_with_retry(self, pending: PendingCommand):
         protocol = self._conn.protocol
+        ack_timeout = self._ack_timeout_for(pending.cmd, pending.params)
         for attempt in range(1, MAX_RETRIES + 1):
             cmd_id, data = protocol.pack(pending.cmd, *pending.params)
             try:
-                resp = self._conn.send_and_wait(data, cmd_id, timeout=ACK_TIMEOUT)
+                resp = self._conn.send_and_wait(data, cmd_id, timeout=ack_timeout)
             except ConnectionError:
                 logger.warning("Connection lost during %s (attempt %d)", pending.cmd, attempt)
                 if not self._conn.reconnect():
