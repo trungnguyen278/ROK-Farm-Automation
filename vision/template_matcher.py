@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 Match = namedtuple("Match", ["name", "x", "y", "w", "h", "confidence", "center"])
 
-DEFAULT_SCALES = [0.8, 0.9, 1.0, 1.1, 1.2]
+DEFAULT_SCALES = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
 
 
 class TemplateMatcher:

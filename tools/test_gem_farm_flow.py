@@ -60,7 +60,8 @@ INFO = "\033[94mINFO\033[0m"
 
 ICON_ZOOM_SCROLLS = 2
 GEM_ICON_THRESHOLD = 0.68
-BUTTON_THRESHOLD = 0.80
+BUTTON_THRESHOLD = 0.70
+GATHER_BTN_THRESHOLD = 0.65
 WORLD_MAP_BTN_THRESHOLD = 0.75
 CLICK_SETTLE = 0.1
 VERIFY_DELAY = 1.5
@@ -670,7 +671,10 @@ class GemFarmFlowTest:
                 mine = m
 
         is_gem = mine is not None
-        g = self._find_on_frame(frame, "buttons/gather_btn", threshold=0.70)
+        g_raw = self.matcher.match_single(frame, "buttons/gather_btn")
+        g_conf = g_raw.confidence if g_raw else 0.0
+        g = g_raw if g_conf >= GATHER_BTN_THRESHOLD else None
+        print(f"  [{INFO}] [{attempt}] gather_btn conf={g_conf:.3f} (threshold={GATHER_BTN_THRESHOLD}, pass={g is not None})")
 
         if self.auto_learn and icon_patch is not None and icon_patch.size > 0:
             n = self.classifier.add_sample(icon_patch, is_gem)
@@ -716,27 +720,44 @@ class GemFarmFlowTest:
             return False
 
         if is_gem and not g:
-            # Popup might be rendering slowly -- re-check before clicking mine again
             time.sleep(1.0)
             frame_recheck = self.sc.grab_full()
             if frame_recheck is not None:
-                g_late = self._find_on_frame(frame_recheck, "buttons/gather_btn", threshold=0.65)
-                if g_late:
-                    print(f"  [{PASS}] [{attempt}] Popup found on re-check (conf={g_late.confidence:.3f})")
+                save_screenshot(frame_recheck, f"{tag}_recheck_{attempt:02d}")
+                g_re_raw = self.matcher.match_single(frame_recheck, "buttons/gather_btn")
+                g_re_conf = g_re_raw.confidence if g_re_raw else 0.0
+                print(f"  [{INFO}] [{attempt}] re-check gather_btn conf={g_re_conf:.3f}")
+                if g_re_conf >= GATHER_BTN_THRESHOLD:
+                    print(f"  [{PASS}] [{attempt}] Popup detected on re-check (conf={g_re_conf:.3f})")
                     return True
 
-            # Popup not open -- click mine structure to open it
             print(f"  [{INFO}] [{attempt}] Gem confirmed, clicking mine structure...")
             msx, msy = self._screen_xy(*mine.center)
             self._click(msx, msy)
             time.sleep(2.0)
             frame2 = self.sc.grab_full()
             if frame2 is not None:
-                g2 = self._find_on_frame(frame2, "buttons/gather_btn", threshold=0.70)
-                if g2:
+                save_screenshot(frame2, f"{tag}_after_mine_click_{attempt:02d}")
+                g2_raw = self.matcher.match_single(frame2, "buttons/gather_btn")
+                g2_conf = g2_raw.confidence if g2_raw else 0.0
+                print(f"  [{INFO}] [{attempt}] after mine click gather_btn conf={g2_conf:.3f}")
+                if g2_conf >= GATHER_BTN_THRESHOLD:
                     print(f"  [{PASS}] [{attempt}] Popup opened after mine click!")
-                    save_screenshot(frame2, f"{tag}_gem_popup_{attempt:02d}")
                     return True
+                # Mine click may have CLOSED an already-open popup (toggle).
+                # Retry once to reopen.
+                print(f"  [{INFO}] [{attempt}] Popup not found -- retrying mine click (toggle recovery)...")
+                self._click(msx, msy)
+                time.sleep(2.0)
+                frame3 = self.sc.grab_full()
+                if frame3 is not None:
+                    save_screenshot(frame3, f"{tag}_retry_mine_{attempt:02d}")
+                    g3_raw = self.matcher.match_single(frame3, "buttons/gather_btn")
+                    g3_conf = g3_raw.confidence if g3_raw else 0.0
+                    print(f"  [{INFO}] [{attempt}] retry gather_btn conf={g3_conf:.3f}")
+                    if g3_conf >= GATHER_BTN_THRESHOLD:
+                        print(f"  [{PASS}] [{attempt}] Popup opened on retry!")
+                        return True
             print(f"  [{WARN}] [{attempt}] Gem confirmed but popup won't open")
             self._press_escape()
             time.sleep(0.5)
@@ -919,7 +940,7 @@ class GemFarmFlowTest:
         print(f"\n--- [{tag}] Step 5: Click Gather ---\n")
 
         for attempt in range(5):
-            m = self._find("buttons/gather_btn", threshold=BUTTON_THRESHOLD)
+            m = self._find("buttons/gather_btn", threshold=GATHER_BTN_THRESHOLD)
             if m:
                 print(f"  [{PASS}] gather_btn: conf={m.confidence:.3f}")
                 save_annotated(self.sc.grab_full(), m, f"{tag}_gather_found")
@@ -942,29 +963,26 @@ class GemFarmFlowTest:
 
     # --- Step: Click march ---
 
+    def _march_btn_screen_xy(self) -> tuple[int, int]:
+        """Fixed position of 'Hanh quan' button relative to window."""
+        sx = self.win["left"] + int(self.win["width"] * 0.655)
+        sy = self.win["top"] + int(self.win["height"] * 0.754)
+        return sx, sy
+
     def _step_click_march(self, tag: str) -> bool:
         print(f"\n--- [{tag}] Step 6: Troop + March ---\n")
 
         selected_new_troop = False
 
         for attempt in range(5):
-            # Try march buttons first
-            for march_tpl in MARCH_TEMPLATES:
-                m = self._find(march_tpl, threshold=BUTTON_THRESHOLD)
-                if m:
-                    print(f"  [{PASS}] {march_tpl}: conf={m.confidence:.3f}")
-                    if self._click_match(m):
-                        print(f"  [{PASS}] March clicked!")
-                        time.sleep(VERIFY_DELAY * 2)
-                        frame = self.sc.grab_full()
-                        if frame is not None:
-                            save_screenshot(frame, f"{tag}_after_march")
-                        self._record(f"{tag}_march", True, march_tpl)
-                        return True
+            frame = self.sc.grab_full()
+            if frame is None:
+                time.sleep(1.0)
+                continue
 
-            # Try "New Troop" button (troop selection panel)
+            # Try "New Troop" button first (troop selection panel)
             if not selected_new_troop:
-                m = self._find("buttons/new_troop_btn", threshold=BUTTON_THRESHOLD)
+                m = self._find_on_frame(frame, "buttons/new_troop_btn", threshold=BUTTON_THRESHOLD)
                 if m:
                     print(f"  [{PASS}] new_troop_btn: conf={m.confidence:.3f}")
                     if self._click_match(m):
@@ -973,10 +991,25 @@ class GemFarmFlowTest:
                         time.sleep(VERIFY_DELAY)
                         continue
 
-            print(f"  [{INFO}] March not found (attempt {attempt+1}/5)")
+            # Click 'Hanh quan' at fixed position
+            mx, my = self._march_btn_screen_xy()
+            print(f"  [{INFO}] Clicking march at fixed pos ({mx},{my}) (attempt {attempt+1}/5)")
+            self._click(mx, my)
+            time.sleep(VERIFY_DELAY * 2)
+            frame2 = self.sc.grab_full()
+            if frame2 is not None:
+                save_screenshot(frame2, f"{tag}_after_march")
+                # Verify popup closed (march started) — new_troop_btn should be gone
+                check = self._find_on_frame(frame2, "buttons/new_troop_btn", threshold=0.50)
+                if check is None:
+                    print(f"  [{PASS}] March clicked! (troop panel gone)")
+                    self._record(f"{tag}_march", True, "fixed_pos")
+                    return True
+                print(f"  [{WARN}] Troop panel still open (new_troop conf={check.confidence:.3f})")
+
             time.sleep(1.0)
 
-        print(f"  [{FAIL}] March button not found")
+        print(f"  [{FAIL}] March button not clicked")
         self._record(f"{tag}_march", False, "Not found")
         return False
 
