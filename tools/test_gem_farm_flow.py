@@ -18,6 +18,7 @@ import os
 import time
 import logging
 import argparse
+import random
 from pathlib import Path
 from datetime import datetime
 
@@ -71,6 +72,8 @@ GEM_MINE_TEMPLATES = ["resources/gem_mine_close", "resources/gem_mine"]
 GEM_MINE_THRESHOLD = 0.60
 OCCUPY_GREEN_PCT = 4.0
 MARCH_LINE_PCT = 0.15
+SAFE_ZONE_MARGIN = 0.08
+DARK_TERRAIN_THRESH = 70
 
 
 def save_screenshot(frame, name):
@@ -95,9 +98,10 @@ def save_annotated(frame, match, name):
 
 
 class GemFarmFlowTest:
-    def __init__(self, port: str, count: int = 1):
+    def __init__(self, port: str, count: int = 1, auto_learn: bool = False):
         self.port = port
         self.count = count
+        self.auto_learn = auto_learn
         self.sc: ScreenCapture | None = None
         self.cache: TemplateCache | None = None
         self.matcher: TemplateMatcher | None = None
@@ -120,9 +124,9 @@ class GemFarmFlowTest:
         return (self.win["left"] + self.win["width"] // 2,
                 self.win["top"] + self.win["height"] // 2)
 
-    def _clamp_to_window(self, sx: int, sy: int) -> tuple[int, int]:
-        x = max(self.win["left"] + 5, min(self.win["left"] + self.win["width"] - 5, sx))
-        y = max(self.win["top"] + 5, min(self.win["top"] + self.win["height"] - 5, sy))
+    def _clamp_to_window(self, sx: int, sy: int, pad: int = 5) -> tuple[int, int]:
+        x = max(self.win["left"] + pad, min(self.win["left"] + self.win["width"] - pad, sx))
+        y = max(self.win["top"] + pad, min(self.win["top"] + self.win["height"] - pad, sy))
         return x, y
 
     def _moveto(self, sx: int, sy: int) -> bool:
@@ -130,23 +134,31 @@ class GemFarmFlowTest:
         hx, hy = screen_to_hid(sx, sy)
         return self.cmd.send("MOVETO", hx, hy)
 
-    def _click(self, sx: int, sy: int, hold_ms: int = 80) -> bool:
+    def _click(self, sx: int, sy: int, hold_ms: int = 0) -> bool:
+        sx += random.randint(-3, 3)
+        sy += random.randint(-3, 3)
         if not self._moveto(sx, sy):
             return False
-        time.sleep(CLICK_SETTLE)
+        time.sleep(random.uniform(0.06, 0.14))
+        if hold_ms <= 0:
+            hold_ms = random.randint(60, 120)
         return self.cmd.send("CLICK", "L", hold_ms)
 
     def _click_match(self, match: Match) -> bool:
         sx, sy = self._screen_xy(*match.center)
-        return self._click(sx, sy)
+        jx = random.randint(-match.w // 6, match.w // 6)
+        jy = random.randint(-match.h // 6, match.h // 6)
+        return self._click(sx + jx, sy + jy)
 
     def _scroll_at_center(self, amount: int, count: int = 1):
         cx, cy = self._center_screen()
+        cx += random.randint(-15, 15)
+        cy += random.randint(-15, 15)
         self._moveto(cx, cy)
-        time.sleep(0.1)
+        time.sleep(random.uniform(0.06, 0.15))
         for _ in range(count):
             self.cmd.send("SCROLL", amount)
-            time.sleep(0.15)
+            time.sleep(random.uniform(0.10, 0.25))
 
     def _press_escape(self):
         self.cmd.send("KEY", 27)
@@ -173,6 +185,10 @@ class GemFarmFlowTest:
         result = []
         for m in matches:
             if m.confidence < GEM_ICON_THRESHOLD:
+                continue
+            ok, zone_info = self._is_clickable_zone(frame, m)
+            if not ok:
+                logger.info("gem_icon zone REJECT at %s conf=%.3f: %s", m.center, m.confidence, zone_info)
                 continue
             is_gem, info = is_gem_icon_color(frame, m.x, m.y, m.w, m.h)
             if not is_gem:
@@ -370,17 +386,22 @@ class GemFarmFlowTest:
         if self.mines_completed > 0:
             ww = self.win["width"]
             margin = 80
-            sx = cx + (ww // 2 - margin)
-            ex = cx - (ww // 2 - margin)
-            sx, sy = self._clamp_to_window(sx, cy)
-            ex, ey = self._clamp_to_window(ex, cy)
-            hx1, hy1 = screen_to_hid(sx, sy)
-            hx2, hy2 = screen_to_hid(ex, ey)
+            angle = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1),
+                                   (1, 1), (-1, -1), (1, -1), (-1, 1)])
+            dp = random.uniform(0.7, 1.0)
+            sx = cx + int(angle[0] * (ww // 2 - margin) * dp) + random.randint(-20, 20)
+            ex = cx - int(angle[0] * (ww // 2 - margin) * dp) + random.randint(-20, 20)
+            s_y = cy + int(angle[1] * (ww // 2 - margin) * dp) + random.randint(-20, 20)
+            e_y = cy - int(angle[1] * (ww // 2 - margin) * dp) + random.randint(-20, 20)
+            sx, s_y = self._clamp_to_window(sx, s_y, pad=40)
+            ex, e_y = self._clamp_to_window(ex, e_y, pad=40)
+            hx1, hy1 = screen_to_hid(sx, s_y)
+            hx2, hy2 = screen_to_hid(ex, e_y)
             self.cmd.send("MOVETO", hx1, hy1)
-            time.sleep(0.08)
-            self.cmd.send("DRAG", 0, 0, hx2 - hx1, hy2 - hy1, 500, timeout=3.0)
-            time.sleep(DRAG_SETTLE)
-            print(f"  [{INFO}] Shifted camera to avoid previous mine area")
+            time.sleep(random.uniform(0.05, 0.15))
+            self.cmd.send("DRAG", 0, 0, hx2 - hx1, hy2 - hy1, random.randint(400, 600), timeout=3.0)
+            time.sleep(random.uniform(2.0, 3.2))
+            print(f"  [{INFO}] Shifted camera (dir={angle})")
 
         frame = self.sc.grab_full()
         if frame is not None:
@@ -400,12 +421,51 @@ class GemFarmFlowTest:
         y2 = min(fh, m.y + m.h)
         return frame[y1:y2, x1:x2].copy()
 
+    def _is_clickable_zone(self, frame, m: Match) -> tuple[bool, str]:
+        """Check if icon is in a clickable area (not edge/fog/dark terrain)."""
+        fh, fw = frame.shape[:2]
+        cx, cy = m.center
+
+        margin_x = int(fw * SAFE_ZONE_MARGIN)
+        margin_y = int(fh * SAFE_ZONE_MARGIN)
+        if cx < margin_x or cx > fw - margin_x or cy < margin_y or cy > fh - margin_y:
+            return False, f"edge({cx},{cy})"
+
+        pad = max(m.w, m.h) * 2
+        y1 = max(0, cy - pad)
+        y2 = min(fh, cy + pad)
+        x1 = max(0, cx - pad)
+        x2 = min(fw, cx + pad)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return False, "empty"
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        ir = max(m.w, m.h) // 2
+        mask = np.ones(gray.shape, dtype=bool)
+        ly, lx = cy - y1, cx - x1
+        mask[max(0, ly - ir):min(gray.shape[0], ly + ir),
+             max(0, lx - ir):min(gray.shape[1], lx + ir)] = False
+        terrain = gray[mask]
+        if terrain.size == 0:
+            return False, "no_terrain"
+
+        med = float(np.median(terrain))
+        if med < DARK_TERRAIN_THRESH:
+            return False, f"dark({med:.0f})"
+
+        return True, f"ok({med:.0f})"
+
     def _find_all_icons(self, frame) -> list[Match]:
         """Find all resource icons (gem_icon template) on frame, sorted by confidence desc."""
         matches = self.matcher.match_all(frame, "resources/gem_icon", overlap_thresh=0.3)
         result = []
         for m in matches:
             if m.confidence < GEM_ICON_THRESHOLD:
+                continue
+            ok, zone_info = self._is_clickable_zone(frame, m)
+            if not ok:
+                print(f"  [ -- ] Zone reject icon at {m.center} conf={m.confidence:.3f}: {zone_info}")
                 continue
             is_gem, info = is_gem_icon_color(frame, m.x, m.y, m.w, m.h)
             if not is_gem:
@@ -540,7 +600,8 @@ class GemFarmFlowTest:
         green_pct = np.sum(green_mask) / total * 100
 
         info = f"R={red_pct:.1f}% B={blue_pct:.1f}% G={green_pct:.1f}%"
-        circle_occupied = red_pct >= OCCUPY_GREEN_PCT
+        circle_occupied = (red_pct >= OCCUPY_GREEN_PCT or
+                           blue_pct >= OCCUPY_GREEN_PCT)
 
         if circle_occupied:
             return True, info
@@ -579,7 +640,7 @@ class GemFarmFlowTest:
         green_pct = np.sum(green_mask) / total * 100
 
         info = f"R={red_pct:.1f}% B={blue_pct:.1f}% G={green_pct:.1f}%"
-        occupied = red_pct >= OCCUPY_GREEN_PCT
+        occupied = red_pct >= OCCUPY_GREEN_PCT or blue_pct >= OCCUPY_GREEN_PCT
         return occupied, info
 
     def _click_icon_and_verify(self, icon: Match, tag: str, attempt: int, icon_frame=None) -> bool:
@@ -611,8 +672,7 @@ class GemFarmFlowTest:
         is_gem = mine is not None
         g = self._find_on_frame(frame, "buttons/gather_btn", threshold=0.70)
 
-        # Auto-label for classifier
-        if icon_patch is not None and icon_patch.size > 0:
+        if self.auto_learn and icon_patch is not None and icon_patch.size > 0:
             n = self.classifier.add_sample(icon_patch, is_gem)
             label_str = "gem" if is_gem else "not_gem"
             stats = self.classifier.get_stats()
@@ -656,7 +716,16 @@ class GemFarmFlowTest:
             return False
 
         if is_gem and not g:
-            # Gem confirmed + not occupied -- click mine structure to open popup
+            # Popup might be rendering slowly -- re-check before clicking mine again
+            time.sleep(1.0)
+            frame_recheck = self.sc.grab_full()
+            if frame_recheck is not None:
+                g_late = self._find_on_frame(frame_recheck, "buttons/gather_btn", threshold=0.65)
+                if g_late:
+                    print(f"  [{PASS}] [{attempt}] Popup found on re-check (conf={g_late.confidence:.3f})")
+                    return True
+
+            # Popup not open -- click mine structure to open it
             print(f"  [{INFO}] [{attempt}] Gem confirmed, clicking mine structure...")
             msx, msy = self._screen_xy(*mine.center)
             self._click(msx, msy)
@@ -667,16 +736,6 @@ class GemFarmFlowTest:
                 if g2:
                     print(f"  [{PASS}] [{attempt}] Popup opened after mine click!")
                     save_screenshot(frame2, f"{tag}_gem_popup_{attempt:02d}")
-                    return True
-            # Try click center as fallback
-            cx, cy = self._center_screen()
-            self._click(cx, cy)
-            time.sleep(2.0)
-            frame3 = self.sc.grab_full()
-            if frame3 is not None:
-                g3 = self._find_on_frame(frame3, "buttons/gather_btn", threshold=0.70)
-                if g3:
-                    print(f"  [{PASS}] [{attempt}] Popup opened after center click!")
                     return True
             print(f"  [{WARN}] [{attempt}] Gem confirmed but popup won't open")
             self._press_escape()
@@ -707,23 +766,26 @@ class GemFarmFlowTest:
         margin = 80
         cx, cy = self._center_screen()
 
-        directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+        all_dirs = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+        start_rot = random.randint(0, 3)
+        directions = all_dirs[start_rot:] + all_dirs[:start_rot]
         leg = 1
         dir_idx = 0
         turns = 0
         scan_count = 0
-        max_scans = 30
+        max_scans = 100
         max_attempts = 20
         max_icons_per_frame = 2
         relocate_after = 8
         attempt = 0
         clicked_positions: list[tuple[int, int]] = []
         relocate_dirs = [(1, 1), (-1, -1), (1, -1), (-1, 1)]
+        random.shuffle(relocate_dirs)
         relocate_count = 0
 
         step_x = ww - 2 * margin
         step_y = wh - 2 * margin
-        print(f"  [{INFO}] Drag: edge-to-edge {step_x}x{step_y}px (margin={margin})")
+        print(f"  [{INFO}] Drag: ~{step_x}x{step_y}px (margin={margin}, rot={start_rot})")
 
         # Check current frame first
         frame = self.sc.grab_full()
@@ -758,24 +820,32 @@ class GemFarmFlowTest:
                     break
                 scan_count += 1
 
-                # Edge-to-edge drag: start from edge in scan direction, drag to opposite edge
+                dist_pct = random.uniform(0.78, 1.0)
+                jx = random.randint(-30, 30)
+                jy = random.randint(-30, 30)
                 if dx_u != 0:
-                    sx = cx + dx_u * (ww // 2 - margin)
-                    ex = cx - dx_u * (ww // 2 - margin)
-                    sy = ey = cy
+                    half = int((ww // 2 - margin) * dist_pct)
+                    sx = cx + dx_u * half + jx
+                    ex = cx - dx_u * half + jx
+                    sy = ey = cy + jy
                 else:
-                    sx = ex = cx
-                    sy = cy + dy_u * (wh // 2 - margin)
-                    ey = cy - dy_u * (wh // 2 - margin)
-                sx, sy = self._clamp_to_window(sx, sy)
-                ex, ey = self._clamp_to_window(ex, ey)
+                    half = int((wh // 2 - margin) * dist_pct)
+                    sx = ex = cx + jx
+                    sy = cy + dy_u * half + jy
+                    ey = cy - dy_u * half + jy
+                sx, sy = self._clamp_to_window(sx, sy, pad=40)
+                ex, ey = self._clamp_to_window(ex, ey, pad=40)
                 hx1, hy1 = screen_to_hid(sx, sy)
                 hx2, hy2 = screen_to_hid(ex, ey)
 
                 self.cmd.send("MOVETO", hx1, hy1)
-                time.sleep(0.08)
-                self.cmd.send("DRAG", 0, 0, hx2 - hx1, hy2 - hy1, 500, timeout=3.0)
-                time.sleep(DRAG_SETTLE)
+                time.sleep(random.uniform(0.05, 0.15))
+                drag_ms = random.randint(380, 650)
+                self.cmd.send("DRAG", 0, 0, hx2 - hx1, hy2 - hy1, drag_ms, timeout=3.0)
+                time.sleep(random.uniform(1.8, 3.2))
+
+                if random.random() < 0.12:
+                    time.sleep(random.uniform(0.5, 1.5))
 
                 frame = self.sc.grab_full()
                 if frame is None:
@@ -821,18 +891,19 @@ class GemFarmFlowTest:
                     and relocate_count < len(relocate_dirs)):
                 rd = relocate_dirs[relocate_count]
                 relocate_count += 1
-                drag_sx = cx + rd[0] * (ww // 2 - margin)
-                drag_sy = cy + rd[1] * (wh // 2 - margin)
-                drag_ex = cx - rd[0] * (ww // 2 - margin)
-                drag_ey = cy - rd[1] * (wh // 2 - margin)
-                drag_sx, drag_sy = self._clamp_to_window(drag_sx, drag_sy)
-                drag_ex, drag_ey = self._clamp_to_window(drag_ex, drag_ey)
+                rp = random.uniform(0.75, 1.0)
+                drag_sx = cx + int(rd[0] * (ww // 2 - margin) * rp) + random.randint(-25, 25)
+                drag_sy = cy + int(rd[1] * (wh // 2 - margin) * rp) + random.randint(-25, 25)
+                drag_ex = cx - int(rd[0] * (ww // 2 - margin) * rp) + random.randint(-25, 25)
+                drag_ey = cy - int(rd[1] * (wh // 2 - margin) * rp) + random.randint(-25, 25)
+                drag_sx, drag_sy = self._clamp_to_window(drag_sx, drag_sy, pad=40)
+                drag_ex, drag_ey = self._clamp_to_window(drag_ex, drag_ey, pad=40)
                 hx1, hy1 = screen_to_hid(drag_sx, drag_sy)
                 hx2, hy2 = screen_to_hid(drag_ex, drag_ey)
                 self.cmd.send("MOVETO", hx1, hy1)
-                time.sleep(0.08)
-                self.cmd.send("DRAG", 0, 0, hx2 - hx1, hy2 - hy1, 600, timeout=3.0)
-                time.sleep(DRAG_SETTLE)
+                time.sleep(random.uniform(0.05, 0.15))
+                self.cmd.send("DRAG", 0, 0, hx2 - hx1, hy2 - hy1, random.randint(450, 700), timeout=3.0)
+                time.sleep(random.uniform(2.0, 3.5))
                 print(f"  [{INFO}] Relocated camera (attempt {attempt}, direction {rd})")
                 leg = 1
                 dir_idx = 0
@@ -940,7 +1011,7 @@ class GemFarmFlowTest:
 
     def _teardown(self):
         print("\n--- Teardown ---")
-        if self.classifier.sample_count > 0:
+        if self.auto_learn and self.classifier.sample_count > 0:
             self.classifier.save()
             stats = self.classifier.get_stats()
             print(f"  Classifier saved: {stats['total']} samples (gem={stats['gem']}, not_gem={stats['not_gem']})")
@@ -978,12 +1049,14 @@ def main():
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--find-only", action="store_true",
                         help="Vision-only scan: capture current frame, run template match + color filter, no ESP32")
+    parser.add_argument("--auto-learn", action="store_true",
+                        help="Enable auto-labeling for classifier (default: OFF)")
     args = parser.parse_args()
 
     if args.find_only:
         _run_find_only()
     else:
-        test = GemFarmFlowTest(port=args.port, count=args.count)
+        test = GemFarmFlowTest(port=args.port, count=args.count, auto_learn=args.auto_learn)
         test.run()
 
 
