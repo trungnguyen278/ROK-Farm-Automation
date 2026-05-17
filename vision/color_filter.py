@@ -4,6 +4,50 @@ import cv2
 import numpy as np
 
 
+# --- Day/Night normalization ---
+# ROK map has a day/night cycle that shifts terrain brightness.
+# We sample terrain brightness and CLAHE-normalize when it's dark.
+NIGHT_BRIGHTNESS_THRESH = 90
+DAY_TARGET_BRIGHTNESS = 130
+
+
+def estimate_terrain_brightness(frame: np.ndarray) -> float:
+    """Sample median brightness from the center band of the frame (avoids UI)."""
+    fh, fw = frame.shape[:2]
+    y1 = int(fh * 0.3)
+    y2 = int(fh * 0.7)
+    x1 = int(fw * 0.2)
+    x2 = int(fw * 0.8)
+    roi = frame[y1:y2, x1:x2]
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    return float(np.median(gray))
+
+
+def normalize_frame(frame: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Normalize frame brightness if night-time detected.
+
+    Returns (normalized_frame, is_night).
+    Day frames pass through unchanged.
+    """
+    brightness = estimate_terrain_brightness(frame)
+    is_night = brightness < NIGHT_BRIGHTNESS_THRESH
+
+    if not is_night:
+        return frame, False
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+
+    scale = min(DAY_TARGET_BRIGHTNESS / max(brightness, 1.0), 2.5)
+    v_scaled = np.clip(v.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    v_eq = clahe.apply(v_scaled)
+
+    out = cv2.merge([h, s, v_eq])
+    return cv2.cvtColor(out, cv2.COLOR_HSV2BGR), True
+
+
 # Gem crystal has H ~38 (green) in HSV. Wood ~15 (brown), gold ~25 (yellow).
 # On alliance territory the map tint affects background but crystal keeps its color.
 GEM_HUE_MIN = 28

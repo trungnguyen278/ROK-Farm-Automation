@@ -29,16 +29,16 @@ WORLD_MAP_SCROLL_STEPS = 5
 WORLD_MAP_ZOOM_IN_RECOVERY_STEPS = 3
 
 ACTION_MIN_CONFIDENCE = {
-    "resources/gem_mine_close": 0.70,
-    "resources/gem_mine_red": 0.65,
-    "resources/gem_mine": 0.72,
-    "buttons/world_map_btn": 0.80,
-    "buttons/world_map_city_btn": 0.85,
-    "buttons/city_btn": 0.80,
-    "buttons/gather_btn": 0.80,
-    "buttons/new_troop_btn": 0.80,
-    "buttons/march_btn_orange": 0.80,
-    "buttons/march_btn": 0.75,
+    "resources/gem_mine_close": 0.60,
+    "resources/gem_mine_red": 0.60,
+    "resources/gem_mine": 0.60,
+    "buttons/world_map_btn": 0.75,
+    "buttons/world_map_city_btn": 0.75,
+    "buttons/city_btn": 0.75,
+    "buttons/gather_btn": 0.65,
+    "buttons/new_troop_btn": 0.70,
+    "buttons/march_btn_orange": 0.70,
+    "buttons/march_btn": 0.70,
 }
 
 GEM_TEMPLATES = [
@@ -60,7 +60,7 @@ RESOURCE_TEMPLATES = set(tpl for templates in RESOURCE_TEMPLATE_MAP.values() for
 MARCH_TEMPLATES = ["buttons/march_btn_orange", "buttons/march_btn"]
 
 GEM_ICON_TEMPLATE = "resources/gem_icon"
-GEM_ICON_THRESHOLD = 0.80
+GEM_ICON_THRESHOLD = 0.68
 GEM_MINE_VERIFY_THRESHOLD = 0.60
 ICON_ZOOM_SCROLLS = 2
 
@@ -768,7 +768,7 @@ class ActionExecutor:
             )
 
         gather = self._find_template_in_frame(frame, "buttons/gather_btn")
-        gather_visible = gather is not None and gather.confidence >= 0.70
+        gather_visible = gather is not None and gather.confidence >= 0.65
 
         if gather_visible and gem_confirmed:
             logger.info("Gem mine confirmed + gather popup open")
@@ -787,7 +787,7 @@ class ActionExecutor:
             frame2 = self._capture.grab_full()
             if frame2 is not None:
                 g2 = self._find_template_in_frame(frame2, "buttons/gather_btn")
-                if g2 and g2.confidence >= 0.70:
+                if g2 and g2.confidence >= 0.65:
                     logger.info("Gather popup opened after mine click")
                     return True, mine_match.center
             self._click_center_of_screen()
@@ -795,7 +795,7 @@ class ActionExecutor:
             frame3 = self._capture.grab_full()
             if frame3 is not None:
                 g3 = self._find_template_in_frame(frame3, "buttons/gather_btn")
-                if g3 and g3.confidence >= 0.70:
+                if g3 and g3.confidence >= 0.65:
                     return True, mine_match.center
             logger.info("Gem confirmed but gather popup won't open")
             self._press_escape()

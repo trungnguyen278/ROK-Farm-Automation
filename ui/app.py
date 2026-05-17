@@ -127,7 +127,8 @@ class MainApp(tk.Tk):
     def _init_vision(self):
         try:
             from capture.screen_capture import ScreenCapture
-            self.screen_capture = ScreenCapture()
+            title = self.config.capture.window_title if self.config else "Rise of Kingdoms"
+            self.screen_capture = ScreenCapture(window_title=title)
         except ImportError:
             logger.warning("capture module not available")
 
@@ -136,10 +137,16 @@ class MainApp(tk.Tk):
             from vision.template_matcher import TemplateMatcher
             from vision.state_detector import StateDetector
 
-            templates_dir = Path("templates")
-            if templates_dir.exists():
-                cache = TemplateCache(str(templates_dir))
-                matcher = TemplateMatcher(cache)
+            if self.config:
+                tpl_dir = Path(self.config.vision.template_dir)
+                scales = self.config.vision.scales
+            else:
+                tpl_dir = Path("templates")
+                scales = None
+
+            if tpl_dir.exists():
+                cache = TemplateCache(str(tpl_dir))
+                matcher = TemplateMatcher(cache, threshold=0.50, scales=scales)
                 self.template_matcher = matcher
                 self.state_detector = StateDetector(matcher)
         except ImportError:
@@ -148,8 +155,20 @@ class MainApp(tk.Tk):
     def _position_window(self):
         win = find_game_window()
         if win:
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+            app_w = 950
+            app_h = 650
+
             x = win["left"] + win["width"] + 10
             y = win["top"]
+
+            if x + app_w > screen_w:
+                x = win["left"] - app_w - 10
+            if x < 0:
+                x = screen_w - app_w - 10
+            y = max(0, min(y, screen_h - app_h))
+
             self.geometry(f"+{x}+{y}")
             self.status_bar.set_game(True)
             self.tab_control.update_game_status(True)

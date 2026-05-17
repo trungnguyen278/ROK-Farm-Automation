@@ -37,3 +37,4 @@ logs/
 .claude/
 
 tools/screenshots/
+data/gem_patches/

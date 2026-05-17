@@ -1,19 +1,35 @@
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .app import MainApp
 
-STRATEGIES = ["basic_gather", "gather_and_train", "alliance_help", "scout_explore"]
-PROFILES = ["default", "cautious", "aggressive"]
-
 BG = "#16163a"
 FG = "#CCCCCC"
 BTN_BG = "#2a2a5e"
 ENTRY_BG = "#1a1a3e"
+
+
+def _load_strategies() -> list[str]:
+    from logic.farm_strategies import FarmStrategy
+    return FarmStrategy.available_strategies()
+
+
+def _load_profiles() -> list[str]:
+    profiles_dir = Path("profiles")
+    if not profiles_dir.exists():
+        return ["default"]
+    found = [p.stem for p in sorted(profiles_dir.glob("*.json"))]
+    if not found:
+        return ["default"]
+    if "default" in found:
+        found.remove("default")
+        found.insert(0, "default")
+    return found
 
 
 class ControlTab(tk.Frame):
@@ -66,23 +82,36 @@ class ControlTab(tk.Frame):
         )
         strat_frame.pack(fill="x", **pad)
 
+        strategies = _load_strategies()
+        profiles = _load_profiles()
+
+        cfg = self._app.config
+        default_strategy = cfg.logic.strategy if cfg else strategies[0]
+        if default_strategy not in strategies:
+            default_strategy = strategies[0]
+        default_profile = cfg.anti_detection.profile if cfg else profiles[0]
+        if default_profile not in profiles:
+            default_profile = profiles[0]
+
         row = tk.Frame(strat_frame, bg=BG)
         row.pack(fill="x", pady=2)
         tk.Label(row, text="Strategy:", **lbl_opts).pack(side="left")
-        self._strategy_var = tk.StringVar(value=STRATEGIES[0])
-        ttk.Combobox(
+        self._strategy_var = tk.StringVar(value=default_strategy)
+        self._strategy_combo = ttk.Combobox(
             row, textvariable=self._strategy_var,
-            values=STRATEGIES, state="readonly", width=20,
-        ).pack(side="left", padx=10)
+            values=strategies, state="readonly", width=20,
+        )
+        self._strategy_combo.pack(side="left", padx=10)
 
         row = tk.Frame(strat_frame, bg=BG)
         row.pack(fill="x", pady=2)
         tk.Label(row, text="Profile:", **lbl_opts).pack(side="left")
-        self._profile_var = tk.StringVar(value=PROFILES[0])
-        ttk.Combobox(
+        self._profile_var = tk.StringVar(value=default_profile)
+        self._profile_combo = ttk.Combobox(
             row, textvariable=self._profile_var,
-            values=PROFILES, state="readonly", width=20,
-        ).pack(side="left", padx=10)
+            values=profiles, state="readonly", width=20,
+        )
+        self._profile_combo.pack(side="left", padx=10)
 
         # --- Controls ---
         ctrl_frame = tk.LabelFrame(

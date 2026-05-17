@@ -186,6 +186,20 @@ void handle_drag(const ParsedCommand& cmd) {
     send_ack(cmd.cmd_id);
 }
 
+void handle_mdown(const ParsedCommand& cmd) {
+    if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    uint8_t button = map_button(cmd.params[0][0]);
+    AbsMouse.press(button);
+    send_ack(cmd.cmd_id);
+}
+
+void handle_mup(const ParsedCommand& cmd) {
+    if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    uint8_t button = map_button(cmd.params[0][0]);
+    AbsMouse.release(button);
+    send_ack(cmd.cmd_id);
+}
+
 void handle_scroll(const ParsedCommand& cmd) {
     if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
 
@@ -245,6 +259,8 @@ void execute_command(const ParsedCommand& cmd) {
     else if (strcmp(cmd.command, CMD_CLICK) == 0)  handle_click(cmd);
     else if (strcmp(cmd.command, CMD_DCLICK) == 0) handle_dclick(cmd);
     else if (strcmp(cmd.command, CMD_DRAG) == 0)   handle_drag(cmd);
+    else if (strcmp(cmd.command, CMD_MDOWN) == 0)  handle_mdown(cmd);
+    else if (strcmp(cmd.command, CMD_MUP) == 0)    handle_mup(cmd);
     else if (strcmp(cmd.command, CMD_SCROLL) == 0) handle_scroll(cmd);
     else if (strcmp(cmd.command, CMD_KEY) == 0)    handle_key(cmd);
     else if (strcmp(cmd.command, CMD_COMBO) == 0)  handle_combo(cmd);

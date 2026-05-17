@@ -56,7 +56,10 @@ STRATEGIES: dict[str, list[TaskConfig]] = {
     ],
     "gem_farm": [
         TaskConfig(TaskType.GATHER_RESOURCE, interval=300, priority=1,
-                   required_states={GameState.CITY_VIEW, GameState.WORLD_MAP},
+                   required_states={
+                       GameState.CITY_VIEW, GameState.WORLD_MAP,
+                       GameState.IDLE, GameState.ERROR, GameState.INIT,
+                   },
                    params={"resource_type": "gem"}),
         TaskConfig(TaskType.COLLECT_REWARDS, interval=600, priority=3,
                    required_states={GameState.CITY_VIEW}),

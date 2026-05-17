@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections import namedtuple
 
 import mss
@@ -19,6 +20,8 @@ class ScreenCapture:
     def __init__(self, window_title: str = "Rise of Kingdoms"):
         self._title = window_title
         self._sct = mss.mss()
+        self._lock = threading.Lock()
+        self._owner_thread = threading.current_thread().ident
         self._window: dict | None = None
         self._last_window_search: float = 0.0
         self._consecutive_failures: int = 0
@@ -80,14 +83,30 @@ class ScreenCapture:
             "height": self._window["height"],
         }
         try:
-            shot = self._sct.grab(monitor)
-            frame = np.array(shot, dtype=np.uint8)
+            with self._lock:
+                current_thread = threading.current_thread().ident
+                if current_thread != self._owner_thread:
+                    try:
+                        self._sct.close()
+                    except Exception:
+                        pass
+                    self._sct = mss.mss()
+                    self._owner_thread = current_thread
+                shot = self._sct.grab(monitor)
+                frame = np.array(shot, dtype=np.uint8)
             self._consecutive_failures = 0
             return frame[:, :, :3]  # BGRA → BGR
         except Exception:
             self._consecutive_failures += 1
             if self._consecutive_failures >= 3:
-                logger.warning("Capture failed %d times, re-detecting window", self._consecutive_failures)
+                logger.warning("Capture failed %d times, recreating mss + re-detecting window", self._consecutive_failures)
+                with self._lock:
+                    try:
+                        self._sct.close()
+                    except Exception:
+                        pass
+                    self._sct = mss.mss()
+                    self._owner_thread = threading.current_thread().ident
                 self._window = None
                 self._consecutive_failures = 0
             return None
@@ -106,4 +125,7 @@ class ScreenCapture:
         return frame[y1:y2, x1:x2]
 
     def close(self):
-        self._sct.close()
+        try:
+            self._sct.close()
+        except Exception:
+            pass

@@ -66,7 +66,19 @@ class Orchestrator:
             self._profile = self._profile_loader.load(profile_name)
         self._humanizer = MouseHumanizer(self._profile)
         self._timing = TimingEngine(self._profile)
-        self._session = SessionManager(self._profile)
+
+        session_cfg = self.config.session
+        session_override = {
+            "farm_duration_mean": session_cfg.farm_duration.mean,
+            "farm_duration_std": session_cfg.farm_duration.std,
+            "break_duration_mean": session_cfg.break_duration.mean,
+            "break_duration_std": session_cfg.break_duration.std,
+            "daily_hours_max": session_cfg.daily_hours_max,
+            "active_window": session_cfg.active_window,
+        }
+        merged_profile = dict(self._profile)
+        merged_profile["session"] = {**self._profile.get("session", {}), **session_override}
+        self._session = SessionManager(merged_profile)
         logger.info("Anti-detection loaded: profile=%s", self._profile.get("name"))
 
         self._state_machine.add_listener(self._on_state_change)
