@@ -1,14 +1,9 @@
 #include <Arduino.h>
 #include "USB.h"
 #include "USBHIDMouse.h"
-#include "USBHIDKeyboard.h"
 #include "commands.h"
 
-USBHIDAbsoluteMouse AbsMouse;
-USBHIDKeyboard Keyboard;
-
-static int16_t cur_x = 16383;
-static int16_t cur_y = 16383;
+USBHIDMouse Mouse;
 
 static char line_buf[MAX_LINE_LEN];
 static int line_pos = 0;
@@ -26,10 +21,15 @@ void send_pong() {
     Serial.printf("<0,%s>\n", RSP_PONG);
 }
 
-void abs_move(int16_t x, int16_t y) {
-    cur_x = constrain(x, 0, 32767);
-    cur_y = constrain(y, 0, 32767);
-    AbsMouse.move(cur_x, cur_y);
+void rel_move(int16_t dx, int16_t dy) {
+    while (dx != 0 || dy != 0) {
+        int8_t sx = (int8_t)constrain(dx, -127, 127);
+        int8_t sy = (int8_t)constrain(dy, -127, 127);
+        Mouse.move(sx, sy, 0);
+        dx -= sx;
+        dy -= sy;
+        if (dx != 0 || dy != 0) delay(1);
+    }
 }
 
 // --- Parser ---
@@ -84,7 +84,7 @@ void handle_move(const ParsedCommand& cmd) {
     int duration_ms = (cmd.param_count >= 3) ? atoi(cmd.params[2]) : 0;
 
     if (duration_ms <= 0) {
-        abs_move(cur_x + dx_total, cur_y + dy_total);
+        rel_move(dx_total, dy_total);
     } else {
         int steps = duration_ms / STEP_INTERVAL_MS;
         if (steps < 1) steps = 1;
@@ -97,7 +97,7 @@ void handle_move(const ParsedCommand& cmd) {
             int mx = (int)accum_x;
             int my = (int)accum_y;
             if (mx != 0 || my != 0) {
-                abs_move(cur_x + mx, cur_y + my);
+                rel_move(mx, my);
             }
             accum_x -= mx;
             accum_y -= my;
@@ -107,25 +107,15 @@ void handle_move(const ParsedCommand& cmd) {
     send_ack(cmd.cmd_id);
 }
 
-void handle_moveto(const ParsedCommand& cmd) {
-    if (cmd.param_count < 2) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
-
-    int abs_x = atoi(cmd.params[0]);
-    int abs_y = atoi(cmd.params[1]);
-
-    abs_move(abs_x, abs_y);
-    send_ack(cmd.cmd_id);
-}
-
 void handle_click(const ParsedCommand& cmd) {
     if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
 
     uint8_t button = map_button(cmd.params[0][0]);
     int hold_ms = (cmd.param_count >= 2) ? atoi(cmd.params[1]) : 50;
 
-    AbsMouse.press(button);
+    Mouse.press(button);
     delay(hold_ms);
-    AbsMouse.release(button);
+    Mouse.release(button);
     send_ack(cmd.cmd_id);
 }
 
@@ -135,68 +125,27 @@ void handle_dclick(const ParsedCommand& cmd) {
     uint8_t button = map_button(cmd.params[0][0]);
     int gap_ms = (cmd.param_count >= 2) ? atoi(cmd.params[1]) : 80;
 
-    AbsMouse.press(button);
+    Mouse.press(button);
     delay(50);
-    AbsMouse.release(button);
+    Mouse.release(button);
     delay(gap_ms);
-    AbsMouse.press(button);
+    Mouse.press(button);
     delay(50);
-    AbsMouse.release(button);
-    send_ack(cmd.cmd_id);
-}
-
-void handle_drag(const ParsedCommand& cmd) {
-    if (cmd.param_count < 4) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
-
-    int x1 = atoi(cmd.params[0]);
-    int y1 = atoi(cmd.params[1]);
-    int x2 = atoi(cmd.params[2]);
-    int y2 = atoi(cmd.params[3]);
-    int duration_ms = (cmd.param_count >= 5) ? atoi(cmd.params[4]) : 200;
-
-    abs_move(cur_x + x1, cur_y + y1);
-    delay(10);
-    AbsMouse.press(MOUSE_LEFT);
-    delay(20);
-
-    int dx = x2 - x1;
-    int dy = y2 - y1;
-    int steps = duration_ms / STEP_INTERVAL_MS;
-    if (steps < 1) steps = 1;
-
-    float step_x = (float)dx / steps;
-    float step_y = (float)dy / steps;
-    float accum_x = 0, accum_y = 0;
-
-    for (int i = 0; i < steps; i++) {
-        accum_x += step_x;
-        accum_y += step_y;
-        int mx = (int)accum_x;
-        int my = (int)accum_y;
-        if (mx != 0 || my != 0) {
-            abs_move(cur_x + mx, cur_y + my);
-        }
-        accum_x -= mx;
-        accum_y -= my;
-        delay(STEP_INTERVAL_MS);
-    }
-
-    delay(10);
-    AbsMouse.release(MOUSE_LEFT);
+    Mouse.release(button);
     send_ack(cmd.cmd_id);
 }
 
 void handle_mdown(const ParsedCommand& cmd) {
     if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
     uint8_t button = map_button(cmd.params[0][0]);
-    AbsMouse.press(button);
+    Mouse.press(button);
     send_ack(cmd.cmd_id);
 }
 
 void handle_mup(const ParsedCommand& cmd) {
     if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
     uint8_t button = map_button(cmd.params[0][0]);
-    AbsMouse.release(button);
+    Mouse.release(button);
     send_ack(cmd.cmd_id);
 }
 
@@ -204,44 +153,19 @@ void handle_scroll(const ParsedCommand& cmd) {
     if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
 
     int amount = atoi(cmd.params[0]);
-    AbsMouse.move(cur_x, cur_y, amount);
-    send_ack(cmd.cmd_id);
-}
-
-void handle_key(const ParsedCommand& cmd) {
-    if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
-
-    uint8_t keycode = (uint8_t)atoi(cmd.params[0]);
-    int hold_ms = (cmd.param_count >= 2) ? atoi(cmd.params[1]) : 50;
-
-    Keyboard.press(keycode);
-    delay(hold_ms);
-    Keyboard.release(keycode);
-    send_ack(cmd.cmd_id);
-}
-
-void handle_combo(const ParsedCommand& cmd) {
-    if (cmd.param_count < 2) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
-
-    uint8_t mod = (uint8_t)atoi(cmd.params[0]);
-    uint8_t keycode = (uint8_t)atoi(cmd.params[1]);
-
-    if (mod & 0x01) Keyboard.press(KEY_LEFT_CTRL);
-    if (mod & 0x02) Keyboard.press(KEY_LEFT_SHIFT);
-    if (mod & 0x04) Keyboard.press(KEY_LEFT_ALT);
-    if (mod & 0x08) Keyboard.press(KEY_LEFT_GUI);
-
-    Keyboard.press(keycode);
-    delay(50);
-    Keyboard.releaseAll();
+    while (amount != 0) {
+        int8_t s = (int8_t)constrain(amount, -127, 127);
+        Mouse.move(0, 0, s);
+        amount -= s;
+        if (amount != 0) delay(1);
+    }
     send_ack(cmd.cmd_id);
 }
 
 void handle_reset(const ParsedCommand& cmd) {
-    AbsMouse.release(MOUSE_LEFT);
-    AbsMouse.release(MOUSE_RIGHT);
-    AbsMouse.release(MOUSE_MIDDLE);
-    Keyboard.releaseAll();
+    Mouse.release(MOUSE_LEFT);
+    Mouse.release(MOUSE_RIGHT);
+    Mouse.release(MOUSE_MIDDLE);
     send_ack(cmd.cmd_id);
 }
 
@@ -255,15 +179,11 @@ void execute_command(const ParsedCommand& cmd) {
     executing = true;
 
     if      (strcmp(cmd.command, CMD_MOVE) == 0)   handle_move(cmd);
-    else if (strcmp(cmd.command, CMD_MOVETO) == 0) handle_moveto(cmd);
     else if (strcmp(cmd.command, CMD_CLICK) == 0)  handle_click(cmd);
     else if (strcmp(cmd.command, CMD_DCLICK) == 0) handle_dclick(cmd);
-    else if (strcmp(cmd.command, CMD_DRAG) == 0)   handle_drag(cmd);
     else if (strcmp(cmd.command, CMD_MDOWN) == 0)  handle_mdown(cmd);
     else if (strcmp(cmd.command, CMD_MUP) == 0)    handle_mup(cmd);
     else if (strcmp(cmd.command, CMD_SCROLL) == 0) handle_scroll(cmd);
-    else if (strcmp(cmd.command, CMD_KEY) == 0)    handle_key(cmd);
-    else if (strcmp(cmd.command, CMD_COMBO) == 0)  handle_combo(cmd);
     else send_nack(cmd.cmd_id, ERR_UNKNOWN_CMD);
 
     executing = false;
@@ -293,12 +213,14 @@ void check_serial() {
 
 void setup() {
     Serial.begin(115200);
-    AbsMouse.begin();
-    Keyboard.begin();
-    USB.begin();
 
-    unsigned long start = millis();
-    while (!Serial && millis() - start < 5000) { delay(10); }
+    USB.VID(0x046D);
+    USB.PID(0xC077);
+    USB.productName("USB Optical Mouse");
+    USB.manufacturerName("Logitech");
+
+    Mouse.begin();
+    USB.begin();
 }
 
 void loop() {

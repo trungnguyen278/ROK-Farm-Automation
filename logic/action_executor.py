@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from queue import Queue, Empty
 
-from capture.screen_info import screen_to_hid
+from capture.screen_info import get_cursor_pos
 from vision.color_filter import is_gem_icon_color
 from vision.gem_classifier import GemPatchClassifier
 from vision.state_detector import GameScreen, StateDetector
@@ -89,6 +90,7 @@ class ActionExecutor:
         self._thread: threading.Thread | None = None
         self._elapsed_minutes = 0.0
         self._start_time = 0.0
+        self._cursor_scale = 1.0
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -161,11 +163,63 @@ class ActionExecutor:
         if pause is not None:
             time.sleep(pause)
 
+    def _move_to_screen(self, target_x: int, target_y: int) -> bool:
+        cur_x, cur_y = get_cursor_pos()
+        dx = target_x - cur_x
+        dy = target_y - cur_y
+        if abs(dx) < 3 and abs(dy) < 3:
+            return True
+
+        s = self._cursor_scale
+        if self._humanizer:
+            path = self._humanizer.humanize_move(cur_x, cur_y, target_x, target_y)
+            prev_x, prev_y = float(cur_x), float(cur_y)
+            for px, py, step_ms in path:
+                mdx, mdy = px - prev_x, py - prev_y
+                send_dx = int(mdx / s) if s != 1.0 else int(mdx)
+                send_dy = int(mdy / s) if s != 1.0 else int(mdy)
+                if abs(send_dx) > 0 or abs(send_dy) > 0:
+                    self._cmd.send("MOVE", send_dx, send_dy, step_ms)
+                prev_x, prev_y = px, py
+        else:
+            send_dx = int(dx / s)
+            send_dy = int(dy / s)
+            if not self._cmd.send("MOVE", send_dx, send_dy):
+                return False
+
+        self._correct_cursor(target_x, target_y)
+        return True
+
+    def _correct_cursor(self, tx: int, ty: int, max_attempts: int = 4) -> None:
+        for _ in range(max_attempts):
+            time.sleep(0.03)
+            cur_x, cur_y = get_cursor_pos()
+            dx = tx - cur_x
+            dy = ty - cur_y
+            if abs(dx) < 3 and abs(dy) < 3:
+                return
+            send_dx = int(dx / self._cursor_scale)
+            send_dy = int(dy / self._cursor_scale)
+            if send_dx == 0 and send_dy == 0:
+                send_dx = 1 if dx > 0 else (-1 if dx < 0 else 0)
+                send_dy = 1 if dy > 0 else (-1 if dy < 0 else 0)
+            dist = (send_dx**2 + send_dy**2) ** 0.5
+            dur = max(30, int(dist * random.uniform(0.5, 1.2)))
+            self._cmd.send("MOVE", send_dx, send_dy, dur)
+            time.sleep(0.03)
+            new_x, new_y = get_cursor_pos()
+            actual_dx = new_x - cur_x
+            actual_dy = new_y - cur_y
+            ref_sent = send_dx if abs(send_dx) > abs(send_dy) else send_dy
+            ref_actual = actual_dx if abs(send_dx) > abs(send_dy) else actual_dy
+            if abs(ref_sent) > 15 and abs(ref_actual) > 5:
+                measured = ref_actual / ref_sent
+                if measured > 0.1:
+                    self._cursor_scale = self._cursor_scale * 0.6 + measured * 0.4
+
     def _click_at_screen(self, screen_x: int, screen_y: int, hold_ms: int = 50) -> bool:
-        hid_x, hid_y = screen_to_hid(screen_x, screen_y)
-        ok = self._cmd.send("MOVETO", hid_x, hid_y)
-        if not ok:
-            logger.warning("MOVETO failed at (%d, %d)", screen_x, screen_y)
+        if not self._move_to_screen(screen_x, screen_y):
+            logger.warning("MOVE failed to (%d, %d)", screen_x, screen_y)
             return False
         time.sleep(CLICK_SETTLE)
         ok = self._cmd.send("CLICK", "L", hold_ms)
@@ -361,8 +415,7 @@ class ActionExecutor:
         if frame is not None and not self._match_is_actionable(template_name, match, frame):
             return False
 
-        hid_x, hid_y = screen_to_hid(screen_x, screen_y)
-        if not self._cmd.send("MOVETO", hid_x, hid_y):
+        if not self._move_to_screen(screen_x, screen_y):
             return False
 
         time.sleep(VERIFY_SETTLE)
@@ -371,7 +424,7 @@ class ActionExecutor:
         if frame is not None:
             v = self._matcher.match_single(frame, template_name)
             if v is None:
-                logger.warning("Verify failed: %s gone after MOVETO", template_name)
+                logger.warning("Verify failed: %s gone after move", template_name)
                 return False
             if not self._match_is_actionable(template_name, v, frame):
                 logger.warning("Verify failed: %s match not actionable", template_name)
@@ -379,8 +432,7 @@ class ActionExecutor:
             if abs(v.center[0] - frame_x) > 20 or abs(v.center[1] - frame_y) > 20:
                 logger.info("Target %s shifted, re-aiming", template_name)
                 new_sx, new_sy = self._frame_to_screen(v.center[0], v.center[1])
-                hid_x, hid_y = screen_to_hid(new_sx, new_sy)
-                if not self._cmd.send("MOVETO", hid_x, hid_y):
+                if not self._move_to_screen(new_sx, new_sy):
                     return False
                 time.sleep(CLICK_SETTLE)
 
@@ -397,10 +449,12 @@ class ActionExecutor:
         return ok, match.center if ok else None
 
     def _press_escape(self) -> bool:
-        return self._cmd.send("KEY", 27)
+        rx = random.uniform(0.20, 0.80)
+        ry = random.uniform(0.22, 0.40)
+        return self._click_at_window_relative(rx, ry)
 
     def _press_space(self) -> bool:
-        return self._cmd.send("KEY", 32)
+        return self._click_center_of_screen()
 
     def _recover_unknown_screen(self) -> GameScreen:
         logger.info("Current screen unknown; trying Space/Escape recovery via ESP32")
@@ -699,13 +753,15 @@ class ActionExecutor:
     def _drag_map(
         self, from_x: int, from_y: int, to_x: int, to_y: int, duration_ms: int = 500
     ):
-        hx1, hy1 = screen_to_hid(from_x, from_y)
-        hx2, hy2 = screen_to_hid(to_x, to_y)
-        dx = hx2 - hx1
-        dy = hy2 - hy1
-        self._cmd.send("MOVETO", hx1, hy1)
+        self._move_to_screen(from_x, from_y)
         time.sleep(CLICK_SETTLE)
-        self._cmd.send("DRAG", 0, 0, dx, dy, duration_ms)
+        self._cmd.send("MDOWN", "L")
+        time.sleep(0.02)
+        dx = int((to_x - from_x) / self._cursor_scale)
+        dy = int((to_y - from_y) / self._cursor_scale)
+        self._cmd.send("MOVE", dx, dy, duration_ms)
+        time.sleep(0.02)
+        self._cmd.send("MUP", "L")
         time.sleep(0.3)
 
     def _scroll_at_center(self, amount: int, count: int = 1):
@@ -714,8 +770,7 @@ class ActionExecutor:
             return
         cx = win["left"] + win["width"] // 2
         cy = win["top"] + win["height"] // 2
-        hx, hy = screen_to_hid(cx, cy)
-        self._cmd.send("MOVETO", hx, hy)
+        self._move_to_screen(cx, cy)
         time.sleep(CLICK_SETTLE)
         for _ in range(count):
             self._cmd.send("SCROLL", amount)

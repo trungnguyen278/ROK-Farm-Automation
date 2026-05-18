@@ -3,10 +3,20 @@ import ctypes
 HID_ABS_MAX = 32767
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
 def get_screen_resolution() -> tuple[int, int]:
     user32 = ctypes.windll.user32
     user32.SetProcessDPIAware()
     return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+
+def get_cursor_pos() -> tuple[int, int]:
+    pt = _POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    return pt.x, pt.y
 
 
 def screen_to_hid(screen_x: int, screen_y: int) -> tuple[int, int]:

@@ -2,15 +2,11 @@
 #define COMMANDS_H
 
 #define CMD_MOVE   "MOVE"
-#define CMD_MOVETO "MOVETO"
 #define CMD_CLICK  "CLICK"
 #define CMD_DCLICK "DCLICK"
-#define CMD_DRAG   "DRAG"
 #define CMD_MDOWN  "MDOWN"
 #define CMD_MUP    "MUP"
 #define CMD_SCROLL "SCROLL"
-#define CMD_KEY    "KEY"
-#define CMD_COMBO  "COMBO"
 #define CMD_PING   "PING"
 #define CMD_RESET  "RESET"
 

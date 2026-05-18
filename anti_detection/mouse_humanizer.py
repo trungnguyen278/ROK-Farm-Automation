@@ -52,6 +52,10 @@ class MouseHumanizer:
         self._click_spread = m.get("click_spread", 8)
         self._hold_ms = m.get("hold_ms", [50, 150])
         self._jitter_px = m.get("jitter_px", 2)
+        self._speed_lo = max(50, self._speed_base - self._speed_variance)
+        self._speed_hi = self._speed_base + self._speed_variance
+        self._speed_current = float(self._speed_base)
+        self._speed_target = float(self._speed_base)
 
     def humanize_move(
         self, x1: int, y1: int, x2: int, y2: int,
@@ -60,7 +64,10 @@ class MouseHumanizer:
         if dist < 2:
             return [(x2, y2, 0)]
 
-        speed = max(50, _gauss(self._speed_base, self._speed_variance))
+        if random.random() < 0.06:
+            self._speed_target = random.uniform(self._speed_lo, self._speed_hi)
+        self._speed_current += (self._speed_target - self._speed_current) * random.uniform(0.03, 0.07)
+        speed = max(50, self._speed_current + _gauss(0, self._speed_variance * 0.08))
         total_ms = max(30, dist / speed * 1000)
 
         control_pts = self._make_control_points(x1, y1, x2, y2, dist)
@@ -129,10 +136,17 @@ class MouseHumanizer:
         oy = ty + int(dist * math.sin(angle))
 
         pause_ms = random.randint(50, 150)
-        correction_ms = random.randint(40, 100)
 
+        mid1_x = ox + int((tx - ox) * 0.35 + _gauss(0, dist * 0.15))
+        mid1_y = oy + int((ty - oy) * 0.35 + _gauss(0, dist * 0.15))
+        mid2_x = ox + int((tx - ox) * 0.7 + _gauss(0, dist * 0.1))
+        mid2_y = oy + int((ty - oy) * 0.7 + _gauss(0, dist * 0.1))
+
+        seg_ms = random.randint(25, 50)
         return [
             (ox, oy, step_ms),
             (ox, oy, pause_ms),
-            (tx, ty, correction_ms),
+            (mid1_x, mid1_y, seg_ms),
+            (mid2_x, mid2_y, seg_ms),
+            (tx, ty, random.randint(20, 40)),
         ]

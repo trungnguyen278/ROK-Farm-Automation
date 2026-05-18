@@ -15,7 +15,9 @@ Run: .venv\Scripts\python -m tools.test_gem_farm_flow --port COM27 --count 2
 
 import sys
 import os
+import re
 import time
+import math
 import logging
 import argparse
 import random
@@ -25,10 +27,22 @@ from datetime import datetime
 import cv2
 import numpy as np
 
+try:
+    from rapidocr_onnxruntime import RapidOCR
+    _ocr_engine = RapidOCR()
+    _OCR_BACKEND = "rapidocr"
+except ImportError:
+    _ocr_engine = None
+    try:
+        import pytesseract
+        _OCR_BACKEND = "pytesseract"
+    except ImportError:
+        _OCR_BACKEND = None
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from capture.screen_capture import ScreenCapture
-from capture.screen_info import screen_to_hid, screen_delta_to_hid
+from capture.screen_info import get_cursor_pos
 from vision.template_cache import TemplateCache
 from vision.template_matcher import TemplateMatcher, Match
 from vision.state_detector import StateDetector
@@ -63,8 +77,8 @@ WARN = "\033[93mWARN\033[0m"
 INFO = "\033[94mINFO\033[0m"
 
 # --- Thresholds ---
-ICON_ZOOM_SCROLLS = 2
-GEM_ICON_THRESHOLD = 0.68
+ICON_ZOOM_SCROLLS = 0
+GEM_ICON_THRESHOLD = 0.72
 BUTTON_THRESHOLD = 0.70
 GATHER_BTN_THRESHOLD = 0.65
 WORLD_MAP_BTN_THRESHOLD = 0.75
@@ -80,24 +94,29 @@ GEM_MINE_TEMPLATES = ["resources/gem_mine_close", "resources/gem_mine"]
 # --- Window layout ---
 TITLE_BAR_H = 40
 
-# --- Time delays (seconds) -- human-realistic ranges ---
-DELAY_AFTER_CLICK = 1.0         # sau click thuong
-DELAY_AFTER_ESCAPE = 1.5        # sau ESC
-DELAY_AFTER_SCROLL = 2.5        # sau scroll zoom
-DELAY_ZOOM_IN = 3.0             # cho game zoom vao mine
-DELAY_MINE_CLICK = 2.0          # cho popup sau click mine
-DELAY_RECHECK = 2.5             # cho truoc recheck
-DELAY_VERIFY = 3.0              # cho verify sau action
-DELAY_DRAG_SETTLE = 3.0         # cho map on dinh sau drag
-DELAY_WORLD_MAP = 3.0           # cho chuyen sang world map
-DELAY_BETWEEN_MINES = 12.0      # nghi giua cac mine (base, actual = 8-25s)
-DELAY_DRAG_PRE = (0.3, 0.8)     # random truoc drag
-DELAY_DRAG_POST = (1.5, 4.0)    # random sau drag scan
-DELAY_MICRO_PAUSE = (3.0, 8.0)  # random micro pause
+# --- Time delays (seconds) ---
+DELAY_AFTER_CLICK = 0.4
+DELAY_AFTER_ESCAPE = 0.5
+DELAY_AFTER_SCROLL = 1.0
+DELAY_ZOOM_IN = 2.0
+DELAY_MINE_CLICK = 1.0
+DELAY_RECHECK = 0.8
+DELAY_VERIFY = 1.2
+DELAY_DRAG_SETTLE = 1.2
+DELAY_WORLD_MAP = 1.5
+DELAY_BETWEEN_MINES = 4.0
+DELAY_DRAG_PRE = (0.15, 0.4)
+DELAY_DRAG_POST = (0.5, 1.5)
+DELAY_MICRO_PAUSE = (1.0, 3.0)
 
+
+
+_SAVE_SCREENSHOTS = True
 
 
 def save_screenshot(frame, name):
+    if not _SAVE_SCREENSHOTS:
+        return None
     ts = datetime.now().strftime("%H%M%S")
     path = SCREENSHOT_DIR / f"{name}_{ts}.png"
     cv2.imwrite(str(path), frame)
@@ -119,10 +138,13 @@ def save_annotated(frame, match, name):
 
 
 class GemFarmFlowTest:
-    def __init__(self, port: str, count: int = 1, auto_learn: bool = False):
+    def __init__(self, port: str, count: int = 1, auto_learn: bool = False,
+                 loop: bool = False, max_marches: int = 5):
         self.port = port
         self.count = count
         self.auto_learn = auto_learn
+        self.loop = loop
+        self.max_marches = max_marches
         self.sc: ScreenCapture | None = None
         self.cache: TemplateCache | None = None
         self.matcher: TemplateMatcher | None = None
@@ -138,7 +160,7 @@ class GemFarmFlowTest:
         self.classifier.load()
         self._night_logged = False
         self._raw_frame: np.ndarray | None = None
-        self._last_hid: tuple[int, int] | None = None
+        self._cursor_scale = 1.0
 
         loader = ProfileLoader()
         self._profile = loader.load_random() if loader.list_profiles() else DEFAULT_PROFILE.copy()
@@ -170,8 +192,8 @@ class GemFarmFlowTest:
         if action == IdleAction.PAN_MAP:
             dx = random.randint(-150, 150)
             dy = random.randint(-100, 100)
-            sx, sy = self._clamp_to_window(cx + dx, cy + dy)
-            ex, ey = self._clamp_to_window(cx - dx, cy - dy)
+            sx, sy = self._clamp_to_play_area(cx + dx, cy + dy)
+            ex, ey = self._clamp_to_play_area(cx - dx, cy - dy)
             self._human_drag(sx, sy, ex, ey)
             self._wait(2.0, 1.0)
             logger.info("idle: pan_map")
@@ -187,11 +209,187 @@ class GemFarmFlowTest:
             time.sleep(pause)
             logger.info("idle: pause %.1fs", pause)
 
+    _BTN_POS = {
+        "bag":      (0.755, 0.953),
+        "alliance": (0.803, 0.953),
+        "mail":     (0.898, 0.953),
+    }
+    _X_CLOSE_POS = {
+        "bag":      (0.865, 0.187),
+        "alliance": (0.765, 0.233),
+        "mail":     (0.830, 0.086),
+    }
+    _PANEL_ITEMS = {
+        "bag": [
+            (0.12, 0.187), (0.24, 0.187), (0.36, 0.187),
+            (0.48, 0.187), (0.60, 0.187), (0.72, 0.187),
+        ],
+        "alliance": [
+            (0.38, 0.52), (0.48, 0.52), (0.58, 0.52), (0.68, 0.52), (0.78, 0.52),
+            (0.38, 0.72), (0.48, 0.72), (0.58, 0.72), (0.68, 0.72), (0.78, 0.72),
+        ],
+        "mail": [
+            (0.08, 0.086), (0.18, 0.086), (0.27, 0.086),
+            (0.37, 0.086), (0.46, 0.086), (0.57, 0.086),
+        ],
+    }
+
+    def _click_pct(self, pct_x: float, pct_y: float, jitter_px: int = 10):
+        ww, wh = self.win["width"], self.win["height"]
+        sx = self.win["left"] + int(ww * pct_x) + random.randint(-jitter_px, jitter_px)
+        sy = self.win["top"] + int(wh * pct_y) + random.randint(-jitter_px, jitter_px)
+        self._click(sx, sy)
+
+    def _close_panel(self, panel: str):
+        x_tpl = f"ui/btn_x_close_{panel}"
+        for _ in range(3):
+            if panel in self._X_CLOSE_POS:
+                self._click_pct(*self._X_CLOSE_POS[panel], jitter_px=5)
+                time.sleep(random.uniform(0.5, 1.0))
+            frame = self._grab()
+            if frame is None:
+                break
+            m = self.matcher.match_single(frame, x_tpl)
+            if not m or m.confidence < 0.80 or m.center[1] >= frame.shape[0] * 0.30:
+                break
+            logger.debug("close_panel: %s X still visible (conf=%.3f), retrying",
+                         panel, m.confidence)
+
+    def _collect_city_resources(self):
+        frame = self._grab()
+        if frame is None:
+            return 0
+        tpl_names = [
+            "resources/city_food", "resources/city_wood",
+            "resources/city_gold", "resources/city_stone",
+        ]
+        collected = 0
+        for tpl_name in tpl_names:
+            tpl = self.cache.get(tpl_name)
+            if tpl is None:
+                continue
+            matches = [m for m in self.matcher.match_all(frame, tpl_name)
+                       if m.confidence >= 0.95]
+            if matches:
+                best = max(matches, key=lambda m: m.confidence)
+                self._click_match(best)
+                time.sleep(random.uniform(0.3, 0.8))
+                collected += 1
+        if collected > 0:
+            logger.info("Collected %d city resources", collected)
+        return collected
+
+    def _idle_while_queue_full(self):
+        if not hasattr(self, '_queue_wait_start'):
+            self._queue_wait_start = time.time()
+
+        waited_min = (time.time() - self._queue_wait_start) / 60.0
+        if waited_min > 20:
+            self.mines_completed = max(0, self.mines_completed - 1)
+            self._queue_wait_start = time.time()
+            print(f"  [{INFO}] Waited {waited_min:.0f}min, assuming 1 slot freed")
+
+        actions = (["pause"] * 20 + ["collect", "mail", "alliance", "bag", "pan"])
+        pick = random.choice(actions)
+        cx, cy = self._center_screen()
+        ww, wh = self.win["width"], self.win["height"]
+
+        if pick == "collect":
+            n = self._collect_city_resources()
+            logger.info("idle-queue: collected %d resources", n)
+        elif pick in ("mail", "alliance", "bag"):
+            self._click_pct(*self._BTN_POS[pick])
+            time.sleep(random.uniform(2.0, 5.0))
+            items = self._PANEL_ITEMS.get(pick, [])
+            n_clicks = random.randint(0, min(3, len(items)))
+            clicked = random.sample(items, n_clicks)
+            for ix, iy in clicked:
+                self._click_pct(ix, iy)
+                time.sleep(random.uniform(2.0, 8.0))
+            self._close_panel(pick)
+            logger.info("idle-queue: browsed %s (%d items)", pick, n_clicks)
+        elif pick == "pan":
+            m = self._find("buttons/world_map_city_btn", threshold=WORLD_MAP_BTN_THRESHOLD)
+            if not m:
+                logger.debug("idle-queue: world map btn not found, skipping pan")
+            else:
+                self._click_match(m)
+                self._wait(DELAY_WORLD_MAP)
+                zoom_out = random.randint(0, 3)
+                if zoom_out > 0:
+                    self._scroll_at_center(-1, zoom_out)
+                    time.sleep(random.uniform(0.5, 1.5))
+                drags = random.randint(1, 3)
+                for _ in range(drags):
+                    dx = random.randint(-int(ww * 0.3), int(ww * 0.3))
+                    dy = random.randint(-int(wh * 0.2), int(wh * 0.2))
+                    sx, sy = self._clamp_to_play_area(cx + dx, cy + dy)
+                    ex, ey = self._clamp_to_play_area(cx - dx, cy - dy)
+                    self._human_drag(sx, sy, ex, ey)
+                    time.sleep(random.uniform(1.0, 4.0))
+                city_btn = self._find("buttons/city_btn", threshold=0.75)
+                if city_btn:
+                    self._click_match(city_btn)
+                    self._wait(DELAY_WORLD_MAP)
+                else:
+                    self._press_escape()
+                    self._wait(DELAY_AFTER_ESCAPE)
+                logger.info("idle-queue: browsed world map (zoom=%d, drags=%d)",
+                            zoom_out, drags)
+        else:
+            wait = random.uniform(15.0, 45.0)
+            time.sleep(wait)
+            logger.info("idle-queue: paused %.1fs", wait)
+
+        time.sleep(random.uniform(5.0, 15.0))
+
     def _check_session(self) -> str | None:
-        if self.session.should_stop_daily():
-            return "daily_limit"
         if self.session.should_take_break():
             return "break"
+        return None
+
+    def _detect_march_queue(self) -> tuple[int, int] | None:
+        """Read march queue (e.g. '1/5') from city view via OCR. Returns (used, total) or None."""
+        if _OCR_BACKEND is None:
+            return None
+        frame = self._grab()
+        if frame is None:
+            return None
+        fh, fw = frame.shape[:2]
+        x1 = int(fw * 0.93)
+        y1 = int(fh * 0.15)
+        x2 = fw
+        y2 = int(fh * 0.26)
+        roi = frame[y1:y2, x1:x2]
+
+        if not hasattr(self, '_queue_roi_saved') or not self._queue_roi_saved:
+            save_screenshot(roi, "queue_roi_debug")
+            self._queue_roi_saved = True
+
+        try:
+            texts = []
+            if _OCR_BACKEND == "rapidocr":
+                result, _ = _ocr_engine(roi)
+                if result:
+                    sorted_r = sorted(result, key=lambda r: r[0][0][0])
+                    texts = [''.join(r[1] for r in sorted_r)]
+            else:
+                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+                binary = cv2.resize(binary, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+                raw = pytesseract.image_to_string(
+                    binary, config='--psm 7 -c tessedit_char_whitelist=0123456789/')
+                texts = [raw.strip()]
+
+            for text in texts:
+                logger.debug("Queue OCR: '%s'", text)
+                m = re.search(r'(\d)\s*/\s*(\d)', text)
+                if m:
+                    used, total = int(m.group(1)), int(m.group(2))
+                    if 0 <= used <= total <= 9:
+                        return used, total
+        except Exception as e:
+            logger.debug("Queue OCR error: %s", e)
         return None
 
     # --- Frame capture with day/night normalization ---
@@ -217,34 +415,108 @@ class GemFarmFlowTest:
         return (self.win["left"] + self.win["width"] // 2,
                 self.win["top"] + self.win["height"] // 2)
 
+    @staticmethod
+    def _zoom_scrolls() -> int:
+        return ICON_ZOOM_SCROLLS if ICON_ZOOM_SCROLLS > 0 else 3
+
     def _clamp_to_window(self, sx: int, sy: int, pad: int = 5) -> tuple[int, int]:
         x = max(self.win["left"] + pad, min(self.win["left"] + self.win["width"] - pad, sx))
         top_pad = max(pad, TITLE_BAR_H)
         y = max(self.win["top"] + top_pad, min(self.win["top"] + self.win["height"] - pad, sy))
         return x, y
 
+    def _clamp_to_play_area(self, sx: int, sy: int) -> tuple[int, int]:
+        wl, wt = self.win["left"], self.win["top"]
+        ww, wh = self.win["width"], self.win["height"]
+        x = max(wl + int(ww * 0.12), min(wl + int(ww * 0.88), sx))
+        y = max(wt + int(wh * 0.22), min(wt + int(wh * 0.70), sy))
+        return x, y
+
     def _moveto(self, sx: int, sy: int) -> bool:
         sx, sy = self._clamp_to_window(sx, sy)
-        hx, hy = screen_to_hid(sx, sy)
-        if self._last_hid is None:
-            ok = self.cmd.send("MOVETO", hx, hy)
-        else:
-            dx = hx - self._last_hid[0]
-            dy = hy - self._last_hid[1]
-            dist = (dx**2 + dy**2) ** 0.5
-            if dist < 10:
-                ok = True
+        cur_x, cur_y = get_cursor_pos()
+        dx = sx - cur_x
+        dy = sy - cur_y
+        if abs(dx) < 3 and abs(dy) < 3:
+            return True
+
+        path = self.humanizer.humanize_move(cur_x, cur_y, sx, sy)
+        path = self._apply_easing(path, "in_out")
+
+        s = self._cursor_scale
+        prev_x, prev_y = float(cur_x), float(cur_y)
+        for px, py, step_ms in path:
+            mdx, mdy = px - prev_x, py - prev_y
+            send_dx = int(mdx / s) if s != 1.0 else int(mdx)
+            send_dy = int(mdy / s) if s != 1.0 else int(mdy)
+            if abs(send_dx) > 0 or abs(send_dy) > 0:
+                self.cmd.send("MOVE", send_dx, send_dy, step_ms)
+            prev_x, prev_y = px, py
+
+        self._correct_position(sx, sy)
+        return True
+
+    def _correct_position(self, tx: int, ty: int, max_attempts: int = 4) -> None:
+        for _ in range(max_attempts):
+            time.sleep(0.03)
+            cur_x, cur_y = get_cursor_pos()
+            dx = tx - cur_x
+            dy = ty - cur_y
+            if abs(dx) < 3 and abs(dy) < 3:
+                return
+            send_dx = int(dx / self._cursor_scale)
+            send_dy = int(dy / self._cursor_scale)
+            if send_dx == 0 and send_dy == 0:
+                send_dx = 1 if dx > 0 else (-1 if dx < 0 else 0)
+                send_dy = 1 if dy > 0 else (-1 if dy < 0 else 0)
+            dist = (send_dx**2 + send_dy**2) ** 0.5
+            if dist > 15:
+                steps = random.randint(2, 3)
+                perp_x, perp_y = -send_dy / dist, send_dx / dist
+                curve_offset = random.gauss(0, dist * 0.1)
+                for s in range(1, steps + 1):
+                    t = s / steps
+                    frac_x = int(send_dx * t + perp_x * curve_offset * math.sin(t * math.pi))
+                    frac_y = int(send_dy * t + perp_y * curve_offset * math.sin(t * math.pi))
+                    seg_dx = frac_x - (int(send_dx * (s - 1) / steps) if s > 1 else 0)
+                    seg_dy = frac_y - (int(send_dy * (s - 1) / steps) if s > 1 else 0)
+                    seg_dur = max(20, int(dist / steps * random.uniform(0.5, 1.0)))
+                    if abs(seg_dx) > 0 or abs(seg_dy) > 0:
+                        self.cmd.send("MOVE", seg_dx, seg_dy, seg_dur)
+                        time.sleep(0.02)
             else:
-                dur = max(50, int(dist / 32767 * random.uniform(600, 1200)))
-                ok = self.cmd.send("MOVE", dx, dy, dur)
-        if ok:
-            self._last_hid = (hx, hy)
-        return ok
+                dur = max(30, int(dist * random.uniform(0.5, 1.2)))
+                self.cmd.send("MOVE", send_dx, send_dy, dur)
+            time.sleep(0.03)
+            new_x, new_y = get_cursor_pos()
+            actual_dx = new_x - cur_x
+            actual_dy = new_y - cur_y
+            ref_sent = send_dx if abs(send_dx) > abs(send_dy) else send_dy
+            ref_actual = actual_dx if abs(send_dx) > abs(send_dy) else actual_dy
+            if abs(ref_sent) > 15 and abs(ref_actual) > 5:
+                measured = ref_actual / ref_sent
+                if measured > 0.1:
+                    self._cursor_scale = self._cursor_scale * 0.6 + measured * 0.4
+
+    _NO_CLICK_ZONES = [
+        (0.0, 0.0, 0.70, 0.13),
+    ]
+
+    def _in_no_click_zone(self, sx: int, sy: int) -> bool:
+        rx = (sx - self.win["left"]) / self.win["width"]
+        ry = (sy - self.win["top"]) / self.win["height"]
+        for x1, y1, x2, y2 in self._NO_CLICK_ZONES:
+            if x1 <= rx <= x2 and y1 <= ry <= y2:
+                return True
+        return False
 
     def _click(self, sx: int, sy: int, hold_ms: int = 0) -> bool:
         ox, oy, h = self.humanizer.humanize_click(sx, sy)
         sx += ox
         sy += oy
+        if self._in_no_click_zone(sx, sy):
+            logger.debug("Click blocked: (%d,%d) in no-click zone", sx, sy)
+            return False
         if not self._moveto(sx, sy):
             return False
         time.sleep(random.uniform(0.08, 0.25))
@@ -261,49 +533,91 @@ class GemFarmFlowTest:
         jy = random.randint(-match.h // 6, match.h // 6)
         return self._click(sx + jx, sy + jy)
 
-    def _human_drag(self, sx: int, sy: int, ex: int, ey: int, button: str = "L"):
+    def _human_drag(self, sx: int, sy: int, ex: int, ey: int,
+                    button: str = "L", speed_factor: float = 1.0,
+                    easing: str = "in_out"):
         self._moveto(sx, sy)
         time.sleep(random.uniform(0.08, 0.2))
 
         path = self.humanizer.humanize_move(sx, sy, ex, ey)
-        path = self._apply_easing(path)
+        if speed_factor != 1.0:
+            path = [(x, y, max(3, int(ms / speed_factor))) for x, y, ms in path]
+        path = self._apply_easing(path, easing)
 
         self.cmd.send("MDOWN", button)
         time.sleep(random.uniform(0.01, 0.03))
 
         prev_x, prev_y = sx, sy
+        s = self._cursor_scale
         for px, py, step_ms in path:
-            dx, dy = px - prev_x, py - prev_y
-            hid_dx, hid_dy = screen_delta_to_hid(int(dx), int(dy))
-            if abs(hid_dx) > 0 or abs(hid_dy) > 0:
-                self.cmd.send("MOVE", hid_dx, hid_dy, step_ms)
+            dx, dy = int(px - prev_x), int(py - prev_y)
+            send_dx = int(dx / s) if s != 1.0 else dx
+            send_dy = int(dy / s) if s != 1.0 else dy
+            if abs(send_dx) > 0 or abs(send_dy) > 0:
+                self.cmd.send("MOVE", send_dx, send_dy, step_ms)
             prev_x, prev_y = px, py
 
         time.sleep(random.uniform(0.01, 0.03))
         self.cmd.send("MUP", button)
-        self._last_hid = screen_to_hid(*self._clamp_to_window(ex, ey))
 
-    def _apply_easing(self, path: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
+        time.sleep(0.03)
+        actual_x, actual_y = get_cursor_pos()
+        intended_dx = ex - sx
+        intended_dy = ey - sy
+        actual_dx = actual_x - sx
+        actual_dy = actual_y - sy
+        ref_i = intended_dx if abs(intended_dx) > abs(intended_dy) else intended_dy
+        ref_a = actual_dx if abs(intended_dx) > abs(intended_dy) else actual_dy
+        if abs(ref_i) > 50 and abs(ref_a) > 20:
+            ratio = ref_a / (ref_i / s)
+            if 0.2 < ratio < 5.0:
+                self._cursor_scale = self._cursor_scale * 0.5 + ratio * 0.5
+
+    def _apply_easing(self, path: list[tuple[int, int, int]],
+                      mode: str = "in_out") -> list[tuple[int, int, int]]:
         n = len(path)
         result = []
         for i, (x, y, ms) in enumerate(path):
             t = i / max(n - 1, 1)
-            factor = 0.6 + 0.8 * abs(2 * t - 1)
-            result.append((x, y, max(5, int(ms * factor))))
+            if mode == "in":
+                factor = 1.6 - t * 1.0
+            else:
+                factor = 0.6 + 0.8 * abs(2 * t - 1)
+            result.append((x, y, max(3, int(ms * factor))))
         return result
 
     def _scroll_at_center(self, amount: int, count: int = 1):
         cx, cy = self._center_screen()
-        cx += random.randint(-25, 25)
-        cy += random.randint(-25, 25)
+        cx += random.randint(-int(self.win["width"] * 0.25), int(self.win["width"] * 0.25))
+        cy += random.randint(-int(self.win["height"] * 0.15), int(self.win["height"] * 0.15))
+        cx, cy = self._clamp_to_play_area(cx, cy)
         self._moveto(cx, cy)
         time.sleep(random.uniform(0.15, 0.4))
-        for _ in range(count):
-            self.cmd.send("SCROLL", amount)
-            time.sleep(random.uniform(0.3, 0.7))
+
+        overshoot = random.random() < 0.15
+        extra = random.randint(1, 2) if overshoot else 0
+        total_notches = abs(amount) * (count + extra)
+        direction = 1 if amount > 0 else -1
+        for i in range(total_notches):
+            self.cmd.send("SCROLL", direction)
+            time.sleep(random.uniform(0.04, 0.12))
+            if random.random() < 0.15:
+                time.sleep(random.uniform(0.1, 0.3))
+        if overshoot and extra > 0:
+            time.sleep(random.uniform(0.4, 1.0))
+            correction = max(1, int(extra * 0.6))
+            for _ in range(correction):
+                self.cmd.send("SCROLL", -direction)
+                time.sleep(random.uniform(0.04, 0.12))
 
     def _press_escape(self):
-        self.cmd.send("KEY", 27)
+        rx = random.uniform(0.20, 0.80)
+        ry = random.uniform(0.22, 0.40)
+        sx = self.win["left"] + int(self.win["width"] * rx)
+        sy = self.win["top"] + int(self.win["height"] * ry)
+        self._moveto(sx, sy)
+        time.sleep(random.uniform(0.03, 0.12))
+        self.cmd.send("CLICK", "L", random.randint(30, 80))
 
     # --- Template helpers ---
 
@@ -357,7 +671,10 @@ class GemFarmFlowTest:
         print("  GEM FARM FLOW -- E2E Test (Anti-Detection ON)")
         print("=" * 60)
         print(f"  Port: {self.port}")
-        print(f"  Target mines: {self.count}")
+        if self.loop:
+            print(f"  Mode: loop (max {self.max_marches} marches)")
+        else:
+            print(f"  Target mines: {self.count}")
         print(f"  Profile: {self._profile.get('name', 'default')}")
         print()
 
@@ -365,16 +682,31 @@ class GemFarmFlowTest:
             if not self._setup():
                 return
 
-            if self.session.should_stop_daily():
-                print(f"  [{WARN}] Outside active window or daily limit -- aborting")
-                return
+            pass
 
             i = 1
-            while i <= self.count:
-                status = self._check_session()
-                if status == "daily_limit":
-                    print(f"\n  [{WARN}] Daily limit reached -- stopping")
+            consecutive_fails = 0
+            while True:
+                if not self.loop and i > self.count:
                     break
+
+                if self.loop:
+                    queue = self._detect_march_queue()
+                    if queue:
+                        used, total = queue
+                        if used >= total:
+                            print(f"\n  [{INFO}] Queue full ({used}/{total}), waiting...")
+                            self._idle_while_queue_full()
+                            self.mines_completed = used
+                            continue
+                        self.mines_completed = used
+                        print(f"  [{INFO}] Queue: {used}/{total}, {total - used} slot(s) free")
+                    elif self.mines_completed >= self.max_marches:
+                        print(f"\n  [{INFO}] Queue likely full ({self.mines_completed}/{self.max_marches} by counter), waiting...")
+                        self._idle_while_queue_full()
+                        continue
+
+                status = self._check_session()
                 if status == "break":
                     dur = self.session.get_break_duration()
                     mins = dur / 60.0
@@ -383,26 +715,34 @@ class GemFarmFlowTest:
                     time.sleep(dur)
                     continue
 
+                label = f"{i}" if self.loop else f"{i}/{self.count}"
                 print(f"\n{'*' * 60}")
-                print(f"  *** MINE {i}/{self.count} ***")
+                print(f"  *** MINE {label} ***")
                 print(f"  Session: {self.session.elapsed_minutes:.0f} min | "
                       f"Fatigue: x{self.timing.apply_fatigue(self.session.elapsed_minutes):.2f}")
                 print(f"{'*' * 60}")
 
                 if not self._mine_flow(i):
                     print(f"\n  Mine {i} FAILED")
-                    break
+                    consecutive_fails += 1
+                    if consecutive_fails >= 5:
+                        print(f"  [{WARN}] {consecutive_fails} consecutive fails, stopping")
+                        break
+                    self._wait(random.uniform(3.0, 8.0))
+                    i += 1
+                    continue
 
+                consecutive_fails = 0
                 self.mines_completed += 1
-                print(f"\n  Mine {i} DONE ({self.mines_completed}/{self.count})")
+                self._queue_wait_start = time.time()
+                print(f"\n  Mine {i} DONE (total: {self.mines_completed})")
 
-                if i < self.count:
-                    self._wait(DELAY_BETWEEN_MINES, 5.0)
-                    if random.random() < 0.35:
-                        extra = random.uniform(5.0, 20.0)
-                        print(f"  [{INFO}] Extra pause {extra:.1f}s (human hesitation)")
-                        time.sleep(extra)
-                    self._do_idle_action()
+                self._wait(DELAY_BETWEEN_MINES, 2.0)
+                if random.random() < 0.20:
+                    extra = random.uniform(2.0, 8.0)
+                    print(f"  [{INFO}] Extra pause {extra:.1f}s")
+                    time.sleep(extra)
+                self._do_idle_action()
 
                 i += 1
 
@@ -473,6 +813,10 @@ class GemFarmFlowTest:
             "resources/gem_icon", "buttons/gather_btn",
             "buttons/new_troop_btn", "buttons/march_btn_orange",
             "buttons/march_btn", "buttons/city_btn",
+            "ui/btn_mail", "ui/btn_alliance", "ui/btn_x_close",
+            "ui/btn_x_close_mail", "ui/btn_x_close_alliance", "ui/btn_x_close_bag",
+            "resources/city_food", "resources/city_wood",
+            "resources/city_gold", "resources/city_stone",
         ]
         for t in key_templates:
             img = self.cache.get(t)
@@ -517,6 +861,13 @@ class GemFarmFlowTest:
               f"spread +/-{p['mouse']['click_spread']}px, "
               f"hold {p['mouse']['hold_ms'][0]}-{p['mouse']['hold_ms'][1]}ms")
 
+        if self.loop:
+            if _OCR_BACKEND:
+                print(f"  [{PASS}] Queue detection: {_OCR_BACKEND}")
+            else:
+                print(f"  [{INFO}] Queue detection: internal counter (no OCR)")
+            print(f"  [{INFO}] Max marches: {self.max_marches}")
+
         self._record("setup", True, "OK")
         return True
 
@@ -536,10 +887,7 @@ class GemFarmFlowTest:
                     self._record(f"{tag}_world", True, f"Already icon-zoom, {len(gems)} gems")
                     return True
                 print(f"  [{INFO}] On world map but not icon-zoom, zooming out...")
-                cx, cy = self._center_screen()
-                self._click(cx, cy)
-                self._wait(DELAY_AFTER_CLICK)
-                self._scroll_at_center(-5, ICON_ZOOM_SCROLLS)
+                self._scroll_at_center(-1, self._zoom_scrolls())
                 self._wait(DELAY_AFTER_SCROLL)
                 self._record(f"{tag}_world", True, "World map, zoomed out")
                 return True
@@ -567,13 +915,16 @@ class GemFarmFlowTest:
             self._record(f"{tag}_world", False, "World map nav failed")
             return False
 
-        print(f"  [{PASS}] On world map, zooming out {ICON_ZOOM_SCROLLS}x...")
+        zs = self._zoom_scrolls()
+        print(f"  [{PASS}] On world map, zooming out {zs}x...")
 
-        # Click center for focus, then zoom out exactly 2
         cx, cy = self._center_screen()
-        self._click(cx, cy)
-        self._wait(DELAY_AFTER_CLICK)
-        self._scroll_at_center(-5, ICON_ZOOM_SCROLLS)
+        if random.random() < 0.3:
+            pdx = random.randint(-80, 80)
+            pdy = random.randint(-50, 50)
+            self._human_drag(cx + pdx, cy + pdy, cx - pdx, cy - pdy)
+            self._wait(random.uniform(0.5, 1.5))
+        self._scroll_at_center(-1, zs)
         self._wait(DELAY_AFTER_SCROLL)
 
         # After previous mine: 2-3 smaller drags to move camera away naturally
@@ -599,8 +950,8 @@ class GemFarmFlowTest:
                 ex = cx - int(dx_u * (ww // 2 - margin) * dp) + random.randint(-30, 30)
                 s_y = cy + int(dy_u * (wh // 2 - margin) * dp) + random.randint(-30, 30)
                 e_y = cy - int(dy_u * (wh // 2 - margin) * dp) + random.randint(-30, 30)
-                sx, s_y = self._clamp_to_window(sx, s_y, pad=40)
-                ex, e_y = self._clamp_to_window(ex, e_y, pad=40)
+                sx, s_y = self._clamp_to_play_area(sx, s_y)
+                ex, e_y = self._clamp_to_play_area(ex, e_y)
                 self._human_drag(sx, s_y, ex, e_y)
                 self._wait(random.uniform(1.5, 3.5), 0.8)
             print(f"  [{INFO}] Shifted camera ({num_drags} drags, base dir={base_angle})")
@@ -609,7 +960,7 @@ class GemFarmFlowTest:
         if frame is not None:
             save_screenshot(frame, f"{tag}_icon_zoom")
 
-        self._record(f"{tag}_world", True, f"City -> world map -> zoom out {ICON_ZOOM_SCROLLS}x")
+        self._record(f"{tag}_world", True, f"City -> world map -> zoom out {zs}x")
         return True
 
     # --- Step 2/3/4: Wander scan + click icon + verify gem type ---
@@ -670,6 +1021,10 @@ class GemFarmFlowTest:
             should_click, label, clf_conf = self.classifier.should_click(patch)
             if not should_click:
                 print(f"  [ -- ] Classifier reject at {m.center} conf={m.confidence:.3f}: {label} ({clf_conf:.2f})")
+                continue
+            is_gem_color, color_info = is_gem_icon_color(frame, m.x, m.y, m.w, m.h)
+            if not is_gem_color:
+                print(f"  [ -- ] Color reject at {m.center} conf={m.confidence:.3f}: {color_info.get('reason','')}")
                 continue
             ok, zone_info = self._is_clickable_zone(frame, m)
             if not ok:
@@ -827,17 +1182,19 @@ class GemFarmFlowTest:
         contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         min_area = 15 * 15
-        max_area = 50 * 50
+        max_area = 45 * 45
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if area < min_area or area > max_area:
                 continue
             x, y, w, h = cv2.boundingRect(cnt)
+            if max(w, h) > 48:
+                continue
             aspect = max(w, h) / max(min(w, h), 1)
-            if aspect > 2.0:
+            if aspect > 1.8:
                 continue
             fill = area / max(w * h, 1)
-            if fill < 0.5:
+            if fill < 0.55:
                 continue
             cx_blob = x + w // 2
             cy_blob = y + h // 2
@@ -970,8 +1327,6 @@ class GemFarmFlowTest:
             if occupied:
                 save_screenshot(frame, f"{tag}_occupied_{attempt:02d}")
                 print(f"  [{WARN}] [{attempt}] Mine occupied ({occ_info}) -- skipping")
-                self._press_escape()
-                self._wait(DELAY_AFTER_ESCAPE)
                 return False
 
             raw = self._raw_frame if self._raw_frame is not None else frame
@@ -979,18 +1334,14 @@ class GemFarmFlowTest:
             if has_line:
                 save_screenshot(frame, f"{tag}_march_line_{attempt:02d}")
                 print(f"  [{WARN}] [{attempt}] Incoming march at mine ({line_info}) -- skipping")
-                self._press_escape()
-                self._wait(DELAY_AFTER_ESCAPE)
                 return False
 
             is_gem_color, color_info = is_gem_mine_color(frame, mine.x, mine.y, mine.w, mine.h)
             if not is_gem_color:
-                save_screenshot(frame, f"{tag}_not_gem_mine_{attempt:02d}")
-                print(f"  [{WARN}] [{attempt}] Mine color check failed ({color_info}) -- not gem")
-                self._press_escape()
-                self._wait(DELAY_AFTER_ESCAPE)
-                return False
-            print(f"  [{INFO}] [{attempt}] Mine color OK ({color_info})")
+                save_screenshot(frame, f"{tag}_mine_color_warn_{attempt:02d}")
+                print(f"  [{WARN}] [{attempt}] Mine color suspect ({color_info}) -- continuing (icon filter passed)")
+            else:
+                print(f"  [{INFO}] [{attempt}] Mine color OK ({color_info})")
 
         if g and is_gem:
             print(f"  [{PASS}] [{attempt}] Gem mine confirmed + popup open (gather conf={g.confidence:.3f})")
@@ -1016,6 +1367,8 @@ class GemFarmFlowTest:
 
             print(f"  [{INFO}] [{attempt}] Gem confirmed, clicking mine structure...")
             msx, msy = self._screen_xy(*mine.center)
+            msx += mine.w // 5
+            msy -= mine.h // 5
             self._click(msx, msy)
             self._wait(DELAY_MINE_CLICK)
             frame2 = self._grab()
@@ -1027,35 +1380,16 @@ class GemFarmFlowTest:
                 if g2_conf >= GATHER_BTN_THRESHOLD:
                     print(f"  [{PASS}] [{attempt}] Popup opened after mine click!")
                     return True
-                print(f"  [{INFO}] [{attempt}] Popup not found -- retrying mine click (toggle recovery)...")
-                self._click(msx, msy)
-                self._wait(DELAY_MINE_CLICK)
-                frame3 = self._grab()
-                if frame3 is not None:
-                    save_screenshot(frame3, f"{tag}_retry_mine_{attempt:02d}")
-                    g3_raw = self.matcher.match_single(frame3, "buttons/gather_btn")
-                    g3_conf = g3_raw.confidence if g3_raw else 0.0
-                    print(f"  [{INFO}] [{attempt}] retry gather_btn conf={g3_conf:.3f}")
-                    if g3_conf >= GATHER_BTN_THRESHOLD:
-                        print(f"  [{PASS}] [{attempt}] Popup opened on retry!")
-                        return True
             print(f"  [{WARN}] [{attempt}] Gem confirmed but popup won't open")
-            self._press_escape()
-            self._wait(DELAY_AFTER_ESCAPE)
             return False
 
         # Neither gem structure nor popup -- not a gem mine
-        print(f"  [{WARN}] [{attempt}] Not a gem mine -- dismissing")
-        self._press_escape()
-        self._wait(DELAY_AFTER_ESCAPE)
+        print(f"  [{WARN}] [{attempt}] Not a gem mine")
         return False
 
     def _return_to_icon_zoom(self):
-        """After a failed icon click, dismiss and zoom back to icon level."""
-        cx, cy = self._center_screen()
-        self._click(cx, cy)
-        self._wait(DELAY_AFTER_ESCAPE)
-        self._scroll_at_center(-5, ICON_ZOOM_SCROLLS)
+        """After a failed icon click, zoom back to icon level."""
+        self._scroll_at_center(-1, self._zoom_scrolls())
         self._wait(DELAY_AFTER_SCROLL)
 
     def _step_scan_and_verify_gem(self, tag: str) -> Match | None:
@@ -1066,17 +1400,22 @@ class GemFarmFlowTest:
         margin = 80
         cx, cy = self._center_screen()
 
-        wander_dirs = [
-            (1, 0), (-1, 0), (0, 1), (0, -1),
-            (1, 1), (1, -1), (-1, 1), (-1, -1),
-        ]
-        last_dir = random.choice(wander_dirs)
+        spiral_angle = random.uniform(0, 2 * math.pi)
+        scans_per_rev = random.uniform(5, 8)
+        spiral_step = 2 * math.pi / scans_per_rev
         scan_count = 0
-        max_scans = 35
+        scan_speed = random.uniform(3.6, 5.0)
+        _speed_target = random.uniform(3.6, 7.0)
+        max_scans = 60
         max_attempts = 10
+        empty_streak = 0
+        max_empty_streak = 12
         max_icons_per_frame = 2
         attempt = 0
-        clicked_positions: list[tuple[int, int]] = []
+        SKIP_RADIUS = 80
+        clicked_positions: list[tuple[int, int, int]] = []
+        cam_offset = [0.0, 0.0]
+        visited_cells: set[tuple[int, int]] = {(0, 0)}
 
         print(f"  [{INFO}] Wander scan (margin={margin})")
 
@@ -1092,18 +1431,18 @@ class GemFarmFlowTest:
             for icon in icons:
                 if attempt >= max_attempts or tried_this_frame >= max_icons_per_frame:
                     break
-                if any(abs(icon.center[0]-px) < 80 and abs(icon.center[1]-py) < 80
-                       for px, py in clicked_positions):
+                if any(abs(icon.center[0]-px) < r and abs(icon.center[1]-py) < r
+                       for px, py, r in clicked_positions):
                     continue
                 raw = self._raw_frame if self._raw_frame is not None else frame
                 occupied, occ_info = self._check_icon_occupied(raw, icon)
                 if occupied:
                     print(f"  [{WARN}] Icon at {icon.center} occupied ({occ_info}) -- skip")
-                    clicked_positions.append(icon.center)
+                    clicked_positions.append((*icon.center, SKIP_RADIUS))
                     continue
                 attempt += 1
                 tried_this_frame += 1
-                clicked_positions.append(icon.center)
+                clicked_positions.append((*icon.center, SKIP_RADIUS))
                 if self._click_icon_and_verify(icon, tag, attempt, icon_frame=frame):
                     self._record(f"{tag}_find", True, f"Gem found at attempt {attempt} (no drag)")
                     return icon
@@ -1118,37 +1457,49 @@ class GemFarmFlowTest:
                 print(f"  [{INFO}] Mid-scan break: {dur/60:.1f} min")
                 time.sleep(dur)
 
-            # Pick direction: 45% continue roughly same way, 35% random, 20% backtrack
-            r = random.random()
-            if r < 0.45:
-                same_ish = [d for d in wander_dirs
-                            if d[0] * last_dir[0] >= 0 and d[1] * last_dir[1] >= 0]
-                dx_u, dy_u = random.choice(same_ish) if same_ish else random.choice(wander_dirs)
-            elif r < 0.80:
-                dx_u, dy_u = random.choice(wander_dirs)
-            else:
-                dx_u, dy_u = -last_dir[0], -last_dir[1]
-            last_dir = (dx_u, dy_u)
+            dist_pct = random.uniform(2.0, 3.0)
 
-            # Vary drag distance: 30-100% of available space
-            dist_pct = random.uniform(0.30, 1.0)
+            angle = spiral_angle + random.gauss(0, 0.2)
+            dx_f = math.cos(angle)
+            dy_f = math.sin(angle)
+
+            target_cell = (round(cam_offset[0] + dx_f * dist_pct),
+                           round(cam_offset[1] + dy_f * dist_pct))
+            if target_cell in visited_cells:
+                for nudge in [0.5, -0.5, 1.0, -1.0]:
+                    alt = spiral_angle + nudge
+                    adx, ady = math.cos(alt), math.sin(alt)
+                    ac = (round(cam_offset[0] + adx * dist_pct),
+                          round(cam_offset[1] + ady * dist_pct))
+                    if ac not in visited_cells:
+                        dx_f, dy_f = adx, ady
+                        break
+
+            spiral_angle += spiral_step + random.gauss(0, 0.12)
+
             jx = random.randint(-45, 45)
-            jy = random.randint(-45, 45)
+            jy = random.randint(-35, 35)
             half_x = int((ww // 2 - margin) * dist_pct)
             half_y = int((wh // 2 - margin) * dist_pct)
-            sx = cx + dx_u * half_x + jx
-            sy = cy + dy_u * half_y + jy
-            ex = cx - dx_u * half_x + jx
-            ey = cy - dy_u * half_y + jy
-            sx, sy = self._clamp_to_window(sx, sy, pad=40)
-            ex, ey = self._clamp_to_window(ex, ey, pad=40)
-            self._human_drag(sx, sy, ex, ey)
-            self._wait(random.uniform(*DELAY_DRAG_POST), 1.0)
+            sx = cx + int(dx_f * half_x) + jx
+            sy = cy + int(dy_f * half_y) + jy
+            ex = cx - int(dx_f * half_x) + jx
+            ey = cy - int(dy_f * half_y) + jy
+            sx, sy = self._clamp_to_play_area(sx, sy)
+            ex, ey = self._clamp_to_play_area(ex, ey)
 
-            if random.random() < 0.25:
-                self._wait(random.uniform(*DELAY_MICRO_PAUSE), 2.0)
+            if random.random() < 0.12:
+                _speed_target = random.uniform(3.6, 7.0)
+            scan_speed += (_speed_target - scan_speed) * random.uniform(0.08, 0.15)
+            self._human_drag(sx, sy, ex, ey, speed_factor=scan_speed, easing="in")
+            time.sleep(random.uniform(0.3, 0.8))
 
-            self._do_idle_action()
+            cam_offset[0] += dx_f * dist_pct
+            cam_offset[1] += dy_f * dist_pct
+            visited_cells.add((round(cam_offset[0]), round(cam_offset[1])))
+
+            if random.random() < 0.10:
+                time.sleep(random.uniform(1.0, 2.5))
 
             frame = self._grab()
             if frame is None:
@@ -1163,27 +1514,33 @@ class GemFarmFlowTest:
                 icons = self._recenter_edge_gem(self._edge_gems[0])
 
             if not icons:
-                print(f"  [ -- ] Scan {scan_count:2d}/{max_scans}: no icons")
+                empty_streak += 1
+                print(f"  [ -- ] Scan {scan_count:2d}/{max_scans}: no icons "
+                      f"(spd={scan_speed:.1f}x, cells={len(visited_cells)}, empty={empty_streak})")
+                if empty_streak >= max_empty_streak:
+                    print(f"  [{WARN}] {max_empty_streak} consecutive empty scans -- zoom likely wrong, restarting from city")
+                    return None
                 continue
 
+            empty_streak = 0
             print(f"  [{INFO}] Scan {scan_count:2d}/{max_scans}: {len(icons)} icon(s)")
             tried_this_frame = 0
             for icon in icons:
                 if attempt >= max_attempts or tried_this_frame >= max_icons_per_frame:
                     break
-                if any(abs(icon.center[0]-px) < 80 and abs(icon.center[1]-py) < 80
-                       for px, py in clicked_positions):
+                if any(abs(icon.center[0]-px) < r and abs(icon.center[1]-py) < r
+                       for px, py, r in clicked_positions):
                     print(f"  [ -- ] Skip already-clicked icon at {icon.center}")
                     continue
                 raw = self._raw_frame if self._raw_frame is not None else frame
                 occupied, occ_info = self._check_icon_occupied(raw, icon)
                 if occupied:
                     print(f"  [{WARN}] Icon at {icon.center} occupied ({occ_info}) -- skip")
-                    clicked_positions.append(icon.center)
+                    clicked_positions.append((*icon.center, SKIP_RADIUS))
                     continue
                 attempt += 1
                 tried_this_frame += 1
-                clicked_positions.append(icon.center)
+                clicked_positions.append((*icon.center, SKIP_RADIUS))
                 if self._click_icon_and_verify(icon, tag, attempt, icon_frame=frame):
                     self._record(f"{tag}_find", True, f"Gem at attempt {attempt}, scan {scan_count}")
                     return icon
@@ -1344,7 +1701,10 @@ class GemFarmFlowTest:
         print(f"\n{'=' * 60}")
         print("  GEM FARM FLOW REPORT")
         print(f"{'=' * 60}")
-        print(f"  Target: {self.count} | Completed: {self.mines_completed}")
+        if self.loop:
+            print(f"  Mode: loop | Max: {self.max_marches} | Completed: {self.mines_completed}")
+        else:
+            print(f"  Target: {self.count} | Completed: {self.mines_completed}")
 
         for r in self.results:
             s = PASS if r["success"] else FAIL
@@ -1368,12 +1728,30 @@ def main():
                         help="Vision-only scan: capture current frame, run template match + color filter, no ESP32")
     parser.add_argument("--auto-learn", action="store_true",
                         help="Enable auto-labeling for classifier (default: OFF)")
+    parser.add_argument("--loop", action="store_true",
+                        help="Loop until march queue is full (uses --max-marches as limit)")
+    parser.add_argument("--max-marches", type=int, default=5,
+                        help="Max march slots (default: 5)")
+    parser.add_argument("--no-screenshots", action="store_true",
+                        help="Disable saving screenshots (for overnight runs)")
+    parser.add_argument("--zoom-scrolls", type=int, default=None,
+                        help="Override ICON_ZOOM_SCROLLS (default: random 2-3)")
     args = parser.parse_args()
 
+    if args.no_screenshots:
+        global _SAVE_SCREENSHOTS
+        _SAVE_SCREENSHOTS = False
+
+    if args.zoom_scrolls is not None:
+        global ICON_ZOOM_SCROLLS
+        ICON_ZOOM_SCROLLS = args.zoom_scrolls
     if args.find_only:
         _run_find_only()
     else:
-        test = GemFarmFlowTest(port=args.port, count=args.count, auto_learn=args.auto_learn)
+        test = GemFarmFlowTest(
+            port=args.port, count=args.count, auto_learn=args.auto_learn,
+            loop=args.loop, max_marches=args.max_marches,
+        )
         test.run()
 
 

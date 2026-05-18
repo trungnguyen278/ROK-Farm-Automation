@@ -69,7 +69,7 @@ class CommandBuffer:
     def _ack_timeout_for(self, cmd: str, params: tuple) -> float:
         """Dynamic ACK timeout: DRAG/MOVE with duration need longer waits."""
         base = ACK_TIMEOUT
-        if cmd in ("DRAG", "MOVE"):
+        if cmd == "MOVE":
             # Last numeric param is often duration_ms
             try:
                 duration_ms = int(params[-1]) if params else 0

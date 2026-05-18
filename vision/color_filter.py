@@ -212,7 +212,7 @@ def is_gem_mine_color(
 
     info = {"gem_pct": round(gem_pct, 1), "gold_pct": round(gold_pct, 1)}
 
-    if gold_pct > gem_pct and gold_pct > 8:
+    if gold_pct > gem_pct * 3 and gold_pct > 40:
         info["reason"] = "gold_mine"
         return False, info
 
