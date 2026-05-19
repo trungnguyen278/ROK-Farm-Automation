@@ -217,7 +217,7 @@ class GemFarmFlowTest:
     _X_CLOSE_POS = {
         "bag":      (0.865, 0.187),
         "alliance": (0.765, 0.233),
-        "mail":     (0.830, 0.086),
+        "mail":     (0.817, 0.086),
     }
     _PANEL_ITEMS = {
         "bag": [
@@ -240,20 +240,48 @@ class GemFarmFlowTest:
         sy = self.win["top"] + int(wh * pct_y) + random.randint(-jitter_px, jitter_px)
         self._click(sx, sy)
 
+    _X_SEARCH_REGION = {
+        "bag":      (0.78, 0.10, 0.95, 0.28),
+        "alliance": (0.68, 0.14, 0.85, 0.32),
+        "mail":     (0.74, 0.00, 0.92, 0.18),
+    }
+
+    def _find_x_button(self, frame, panel: str):
+        """Detect X close button in a small region around expected position."""
+        region = self._X_SEARCH_REGION.get(panel)
+        if region is None:
+            return None
+        fh, fw = frame.shape[:2]
+        rx1, ry1, rx2, ry2 = region
+        x1, y1 = int(fw * rx1), int(fh * ry1)
+        x2, y2 = int(fw * rx2), int(fh * ry2)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        for tpl_name in [f"ui/btn_x_close_{panel}", "ui/btn_x_close"]:
+            m = self.matcher.match_single(crop, tpl_name)
+            if m and m.confidence >= 0.60:
+                ax, ay = m.x + x1, m.y + y1
+                return Match(m.name, ax, ay, m.w, m.h, m.confidence,
+                             (ax + m.w // 2, ay + m.h // 2))
+        return None
+
     def _close_panel(self, panel: str):
-        x_tpl = f"ui/btn_x_close_{panel}"
-        for _ in range(3):
-            if panel in self._X_CLOSE_POS:
-                self._click_pct(*self._X_CLOSE_POS[panel], jitter_px=5)
-                time.sleep(random.uniform(0.5, 1.0))
-            frame = self._grab()
-            if frame is None:
-                break
-            m = self.matcher.match_single(frame, x_tpl)
-            if not m or m.confidence < 0.80 or m.center[1] >= frame.shape[0] * 0.30:
-                break
-            logger.debug("close_panel: %s X still visible (conf=%.3f), retrying",
-                         panel, m.confidence)
+        if panel in self._X_CLOSE_POS:
+            self._click_pct(*self._X_CLOSE_POS[panel], jitter_px=3)
+            time.sleep(random.uniform(0.4, 0.8))
+
+    def _dismiss_popups(self):
+        """Detect and close any open panel popup."""
+        frame = self._grab()
+        if frame is None:
+            return
+        for panel in ("alliance", "mail", "bag"):
+            m = self._find_x_button(frame, panel)
+            if m:
+                logger.debug("dismiss_popups: %s detected (conf=%.3f), closing", panel, m.confidence)
+                self._close_panel(panel)
+                return
 
     def _collect_city_resources(self):
         frame = self._grab()
@@ -300,14 +328,8 @@ class GemFarmFlowTest:
         elif pick in ("mail", "alliance", "bag"):
             self._click_pct(*self._BTN_POS[pick])
             time.sleep(random.uniform(2.0, 5.0))
-            items = self._PANEL_ITEMS.get(pick, [])
-            n_clicks = random.randint(0, min(3, len(items)))
-            clicked = random.sample(items, n_clicks)
-            for ix, iy in clicked:
-                self._click_pct(ix, iy)
-                time.sleep(random.uniform(2.0, 8.0))
             self._close_panel(pick)
-            logger.info("idle-queue: browsed %s (%d items)", pick, n_clicks)
+            logger.info("idle-queue: opened+closed %s", pick)
         elif pick == "pan":
             m = self._find("buttons/world_map_city_btn", threshold=WORLD_MAP_BTN_THRESHOLD)
             if not m:
@@ -406,6 +428,19 @@ class GemFarmFlowTest:
             self._night_logged = True
         return normalized
 
+    def _check_reconnect_popup(self) -> bool:
+        """Check and dismiss network disconnect popup. Call when flow seems stuck."""
+        frame = self.sc.grab_full()
+        if frame is None:
+            return False
+        m = self.matcher.match_single(frame, "ui/btn_confirm_reconnect")
+        if m and m.confidence >= 0.75:
+            print(f"  [{WARN}] Network disconnect popup detected (conf={m.confidence:.3f}), clicking confirm...")
+            self._click_match(m)
+            time.sleep(random.uniform(3.0, 5.0))
+            return True
+        return False
+
     # --- Coordinate helpers (all constrained to game window) ---
 
     def _screen_xy(self, frame_x: int, frame_y: int) -> tuple[int, int]:
@@ -500,6 +535,7 @@ class GemFarmFlowTest:
 
     _NO_CLICK_ZONES = [
         (0.0, 0.0, 0.70, 0.13),
+        (0.0, 0.80, 0.45, 1.0),
     ]
 
     def _in_no_click_zone(self, sx: int, sy: int) -> bool:
@@ -817,6 +853,7 @@ class GemFarmFlowTest:
             "ui/btn_x_close_mail", "ui/btn_x_close_alliance", "ui/btn_x_close_bag",
             "resources/city_food", "resources/city_wood",
             "resources/city_gold", "resources/city_stone",
+            "ui/btn_confirm_reconnect",
         ]
         for t in key_templates:
             img = self.cache.get(t)
@@ -876,6 +913,9 @@ class GemFarmFlowTest:
     def _step_to_world_map(self, tag: str) -> bool:
         print(f"\n--- [{tag}] Step 1: City -> World Map -> Zoom out ---\n")
 
+        # Dismiss any open panel/popup before starting
+        self._dismiss_popups()
+
         # Check if already on world map at icon zoom
         frame = self._grab()
         if frame is not None:
@@ -899,11 +939,19 @@ class GemFarmFlowTest:
             self._click_match(m)
             self._wait(DELAY_WORLD_MAP)
         else:
-            print(f"  [{WARN}] world_map_city_btn not found, trying bottom-right click...")
-            br_x = self.win["left"] + int(self.win["width"] * 0.95)
-            br_y = self.win["top"] + int(self.win["height"] * 0.93)
-            self._click(br_x, br_y)
-            self._wait(DELAY_WORLD_MAP)
+            if self._check_reconnect_popup():
+                m = self._find("buttons/world_map_city_btn", threshold=WORLD_MAP_BTN_THRESHOLD)
+                if m:
+                    self._click_match(m)
+                    self._wait(DELAY_WORLD_MAP)
+                else:
+                    print(f"  [{WARN}] world_map_city_btn not found after reconnect")
+            else:
+                print(f"  [{WARN}] world_map_city_btn not found, trying bottom-right click...")
+                br_x = self.win["left"] + int(self.win["width"] * 0.95)
+                br_y = self.win["top"] + int(self.win["height"] * 0.93)
+                self._click(br_x, br_y)
+                self._wait(DELAY_WORLD_MAP)
 
         # Verify we're on world map
         city_btn = self._find("buttons/city_btn", threshold=0.75)
@@ -1283,6 +1331,26 @@ class GemFarmFlowTest:
 
         return False, "no march lines"
 
+    def _recenter_to_safe_zone(self, icon: Match) -> Match | None:
+        """If icon is in no-click zone, drag map to move it to center."""
+        sx, sy = self._screen_xy(*icon.center)
+        if not self._in_no_click_zone(sx, sy):
+            return icon
+        cx, cy = self._center_screen()
+        drag_dy = sy - cy
+        drag_dx = sx - cx
+        print(f"  [{INFO}] Icon at ({sx},{sy}) in no-click zone, dragging map to recenter")
+        self._human_drag(cx - drag_dx // 3, cy - drag_dy // 3,
+                         cx + drag_dx, cy + drag_dy)
+        time.sleep(random.uniform(0.3, 0.6))
+        frame = self._grab()
+        if frame is None:
+            return None
+        icons = self._find_all_icons(frame)
+        if icons:
+            return icons[0]
+        return None
+
     def _click_icon_and_verify(self, icon: Match, tag: str, attempt: int, icon_frame=None) -> bool:
         """Click an icon, wait for zoom-in, verify it's a gem mine. Returns True if gem popup opens."""
         sx, sy = self._screen_xy(*icon.center)
@@ -1440,6 +1508,9 @@ class GemFarmFlowTest:
                     print(f"  [{WARN}] Icon at {icon.center} occupied ({occ_info}) -- skip")
                     clicked_positions.append((*icon.center, SKIP_RADIUS))
                     continue
+                icon = self._recenter_to_safe_zone(icon)
+                if icon is None:
+                    continue
                 attempt += 1
                 tried_this_frame += 1
                 clicked_positions.append((*icon.center, SKIP_RADIUS))
@@ -1518,6 +1589,9 @@ class GemFarmFlowTest:
                 print(f"  [ -- ] Scan {scan_count:2d}/{max_scans}: no icons "
                       f"(spd={scan_speed:.1f}x, cells={len(visited_cells)}, empty={empty_streak})")
                 if empty_streak >= max_empty_streak:
+                    if self._check_reconnect_popup():
+                        empty_streak = 0
+                        continue
                     print(f"  [{WARN}] {max_empty_streak} consecutive empty scans -- zoom likely wrong, restarting from city")
                     return None
                 continue
@@ -1537,6 +1611,9 @@ class GemFarmFlowTest:
                 if occupied:
                     print(f"  [{WARN}] Icon at {icon.center} occupied ({occ_info}) -- skip")
                     clicked_positions.append((*icon.center, SKIP_RADIUS))
+                    continue
+                icon = self._recenter_to_safe_zone(icon)
+                if icon is None:
                     continue
                 attempt += 1
                 tried_this_frame += 1
@@ -1581,6 +1658,8 @@ class GemFarmFlowTest:
             print(f"  [{INFO}] gather_btn not found (attempt {attempt+1}/5)")
             self._wait(DELAY_RECHECK)
 
+        if self._check_reconnect_popup():
+            return self._step_click_gather(tag)
         print(f"  [{FAIL}] gather_btn not found")
         self._record(f"{tag}_gather", False, "Not found")
         return False
