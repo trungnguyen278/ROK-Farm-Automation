@@ -16,11 +16,14 @@ Run: .venv\Scripts\python -m tools.test_gem_farm_flow --port COM27 --count 2
 import sys
 import os
 import re
+import json
 import time
 import math
+import hashlib
 import logging
 import argparse
 import random
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -94,20 +97,20 @@ GEM_MINE_TEMPLATES = ["resources/gem_mine_close", "resources/gem_mine"]
 # --- Window layout ---
 TITLE_BAR_H = 40
 
-# --- Time delays (seconds) ---
-DELAY_AFTER_CLICK = 0.4
-DELAY_AFTER_ESCAPE = 0.5
-DELAY_AFTER_SCROLL = 1.0
-DELAY_ZOOM_IN = 2.0
-DELAY_MINE_CLICK = 1.0
-DELAY_RECHECK = 0.8
-DELAY_VERIFY = 1.2
-DELAY_DRAG_SETTLE = 1.2
-DELAY_WORLD_MAP = 1.5
-DELAY_BETWEEN_MINES = 4.0
-DELAY_DRAG_PRE = (0.15, 0.4)
-DELAY_DRAG_POST = (0.5, 1.5)
-DELAY_MICRO_PAUSE = (1.0, 3.0)
+# --- Time delays (center, spread) — actual delay is log-normal around center ---
+DELAY_AFTER_CLICK = (0.3, 0.12)
+DELAY_AFTER_ESCAPE = (0.35, 0.15)
+DELAY_AFTER_SCROLL = (0.7, 0.25)
+DELAY_ZOOM_IN = (1.4, 0.5)
+DELAY_MINE_CLICK = (0.7, 0.25)
+DELAY_RECHECK = (0.5, 0.2)
+DELAY_VERIFY = (0.9, 0.3)
+DELAY_DRAG_SETTLE = (0.9, 0.35)
+DELAY_WORLD_MAP = (1.2, 0.4)
+DELAY_BETWEEN_MINES = (3.0, 1.5)
+DELAY_DRAG_PRE = (0.15, 0.08)
+DELAY_DRAG_POST = (0.6, 0.3)
+DELAY_MICRO_PAUSE = (1.0, 0.5)
 
 
 
@@ -117,7 +120,9 @@ _SAVE_SCREENSHOTS = True
 def save_screenshot(frame, name):
     if not _SAVE_SCREENSHOTS:
         return None
-    ts = datetime.now().strftime("%H%M%S")
+    ts_offset = random.randint(-30, 30)
+    fake_ts = datetime.now().timestamp() + ts_offset
+    ts = datetime.fromtimestamp(fake_ts).strftime("%H%M%S")
     path = SCREENSHOT_DIR / f"{name}_{ts}.png"
     cv2.imwrite(str(path), frame)
     return str(path)
@@ -139,12 +144,27 @@ def save_annotated(frame, match, name):
 
 class GemFarmFlowTest:
     def __init__(self, port: str, count: int = 1, auto_learn: bool = False,
-                 loop: bool = False, max_marches: int = 5):
+                 loop: bool = False, max_marches: int = 5,
+                 account_id: str = "default",
+                 night_mode: bool = False, bed_time: str | None = None,
+                 wake_time: str | None = None, stop_margin: int | None = None,
+                 manual_handoff: bool = False):
         self.port = port
         self.count = count
         self.auto_learn = auto_learn
         self.loop = loop
         self.max_marches = max_marches
+        self._account_id = account_id
+        self._night_mode = night_mode
+        self._bed_time = bed_time
+        self._wake_time = wake_time
+        self._stop_margin = stop_margin
+        self._manual_handoff = manual_handoff
+        self._night_schedule = None
+        self._is_transitioning = False
+        self._transition_start: float | None = None
+        self._wind_down_active = False
+        self._mines_since_wind_down = 0
         self.sc: ScreenCapture | None = None
         self.cache: TemplateCache | None = None
         self.matcher: TemplateMatcher | None = None
@@ -164,30 +184,327 @@ class GemFarmFlowTest:
 
         loader = ProfileLoader()
         self._profile = loader.load_random() if loader.list_profiles() else DEFAULT_PROFILE.copy()
+
+        self._persona = self._load_or_create_persona()
+        self._apply_persona()
+
         self.timing = TimingEngine(self._profile)
         self.session = SessionManager(self._profile)
         self.humanizer = MouseHumanizer(self._profile)
 
+        self._scroll_overshoot_chance = self._jitter(
+            self._persona["scroll_overshoot"], 0.08)
+        self._last_alliance_time = 0.0
+        self._last_memory_drift = 0.0
+        self._hand_memory = {
+            k: (self._persona["click_bias_x"] + random.gauss(0, 0.003),
+                self._persona["click_bias_y"] + random.gauss(0, 0.002))
+            for k in ["world_map", "gather", "march", "city"]
+        }
+        self._idle_weights = {
+            "alt_tab": random.randint(6, 18),
+            "pause": random.randint(3, 10),
+            "collect": random.randint(1, 4),
+            "mail": random.randint(1, 3),
+            "alliance": random.randint(1, 3),
+            "bag": random.randint(1, 2),
+            "pan": random.randint(1, 4),
+        }
+
+    # --- Persistent persona ---
+
+    def _persona_path(self) -> Path:
+        base = Path(os.environ.get("APPDATA", Path.home())) / ".rok_data"
+        base.mkdir(parents=True, exist_ok=True)
+        h = hashlib.sha256(self._account_id.encode()).hexdigest()[:12]
+        return base / f"{h}.dat"
+
+    def _load_or_create_persona(self) -> dict:
+        path = self._persona_path()
+        if path.exists():
+            try:
+                with open(path, "r") as f:
+                    persona = json.load(f)
+                persona.setdefault("session_count", 0)
+                persona["session_count"] += 1
+                if persona["session_count"] % 20 == 0:
+                    persona["speed_base"] = max(600, min(1200,
+                        persona["speed_base"] + random.randint(-30, 30)))
+                    persona["curve_spread"] = max(0.05, min(0.22,
+                        persona["curve_spread"] + random.uniform(-0.01, 0.01)))
+                with open(path, "w") as f:
+                    json.dump(persona, f, indent=2)
+                logger.info("Loaded persona: %s (session #%d)", path.name,
+                            persona["session_count"])
+                return persona
+            except Exception as e:
+                logger.warning("Failed to load persona %s: %s", path, e)
+
+        persona = {
+            "speed_base": random.randint(700, 1100),
+            "speed_variance": random.randint(200, 400),
+            "curve_spread": round(random.uniform(0.08, 0.18), 3),
+            "overshoot_chance": round(random.uniform(0.05, 0.15), 3),
+            "click_bias_x": round(random.gauss(0, 0.015), 4),
+            "click_bias_y": round(random.gauss(0, 0.012), 4),
+            "scroll_overshoot": round(random.uniform(0.08, 0.25), 3),
+            "hesitation_level": round(random.uniform(0.02, 0.12), 3),
+            "fatigue_sensitivity": round(random.uniform(0.7, 1.3), 2),
+            "afk_frequency": round(random.uniform(0.02, 0.08), 3),
+            "bezier_points": random.choice([2, 2, 3]),
+            "jitter_px": random.choice([1, 1, 2]),
+            "preferred_idle": random.sample(
+                ["pan", "zoom", "mail", "chat", "stare", "alt_tab"],
+                k=random.randint(2, 4)),
+            "session_count": 1,
+            "created": datetime.now().isoformat(),
+        }
+        try:
+            with open(path, "w") as f:
+                json.dump(persona, f, indent=2)
+            logger.info("Created new persona: %s", path.name)
+        except Exception as e:
+            logger.warning("Failed to save persona: %s", e)
+        return persona
+
+    @staticmethod
+    def _jitter(value: float, pct: float = 0.06) -> float:
+        return value * random.uniform(1 - pct, 1 + pct)
+
+    def _apply_persona(self):
+        p = self._persona
+        self._profile.setdefault("mouse", {})
+        self._profile["mouse"]["speed_base"] = int(self._jitter(p["speed_base"]))
+        self._profile["mouse"]["speed_variance"] = int(self._jitter(p["speed_variance"]))
+        self._profile["mouse"]["bezier_control_points"] = p["bezier_points"]
+        self._profile["mouse"]["jitter_px"] = p["jitter_px"]
+        self._profile["mouse"]["curve_spread"] = self._jitter(p["curve_spread"])
+        self._profile["mouse"]["overshoot_chance"] = self._jitter(p["overshoot_chance"])
+
     # --- Anti-detection helpers ---
 
-    def _wait(self, base: float, variance: float = 0.0) -> float:
-        fatigue = self.timing.apply_fatigue(self.session.elapsed_minutes)
-        std = max(base * 0.3, variance)
-        actual = random.gauss(base, std) * fatigue
-        actual = max(base * 0.4, actual)
+    def _human_delay(self, center: float, spread: float = 0.0) -> float:
+        if spread <= 0:
+            spread = center * 0.35
+        base = random.lognormvariate(math.log(max(0.05, center)), spread / center)
+        r = random.random()
+        if r < self._persona.get("afk_frequency", 0.03):
+            base = random.uniform(15.0, 45.0)
+        elif r < self._persona.get("afk_frequency", 0.03) + 0.06:
+            base = random.uniform(5.0, 15.0)
+        return max(0.05, base)
 
-        pause = self.timing.micro_pause()
+    def _wait(self, spec, variance: float = 0.0) -> float:
+        if isinstance(spec, tuple):
+            center, spread = spec
+        else:
+            center = float(spec)
+            spread = center * 0.35
+
+        if self._night_mode and self._night_schedule:
+            progress = self._night_schedule.time_progress()
+            fatigue = self.timing.apply_night_fatigue(
+                self.session.elapsed_minutes, progress,
+                is_transition=self._is_transitioning)
+            pause = self.timing.night_micro_pause(progress)
+        else:
+            fatigue = self.timing.apply_fatigue(self.session.elapsed_minutes)
+            pause = self.timing.micro_pause()
+
+        actual = self._human_delay(center, spread) * fatigue
         if pause:
             actual += pause
-            logger.debug("micro-pause +%.1fs", pause)
+
+        if self._night_mode and self._night_schedule:
+            micro_sleep = self.timing.should_micro_sleep(
+                self._night_schedule.time_progress())
+            if micro_sleep:
+                logger.info("Micro-sleep: %.1fs", micro_sleep)
+                actual += micro_sleep
+
+        if actual > 2.0 and random.random() < 0.15:
+            self._cursor_fidget()
 
         time.sleep(actual)
         return actual
 
+    def _cursor_fidget(self):
+        if random.random() > 0.5:
+            return
+        for _ in range(random.randint(1, 4)):
+            dx = int(random.gauss(0, 8))
+            dy = int(random.gauss(0, 5))
+            if dx != 0 or dy != 0:
+                self.cmd.send("MOVE", dx, dy, random.randint(50, 200))
+            time.sleep(random.uniform(0.05, 0.3))
+
+    def _maybe_purposeless(self, chance: float = 0.06):
+        if self._night_mode and self._night_schedule:
+            progress = self._night_schedule.time_progress()
+            chance *= (1.5 + 1.5 * progress)
+        if random.random() > chance:
+            return
+        actions = [
+            self._purposeless_hover,
+            self._purposeless_empty_click,
+            self._purposeless_open_close,
+            self._purposeless_cursor_wander,
+            self._purposeless_hesitate,
+        ]
+        random.choice(actions)()
+
+    def _purposeless_hover(self):
+        targets = [(0.755, 0.953), (0.803, 0.953), (0.898, 0.953),
+                   (0.015, 0.45), (0.50, 0.02), (0.985, 0.50)]
+        rx, ry = random.choice(targets)
+        sx = self.win["left"] + int(self.win["width"] * rx)
+        sy = self.win["top"] + int(self.win["height"] * ry)
+        self._moveto(sx + random.randint(-15, 15), sy + random.randint(-10, 10))
+        time.sleep(random.uniform(0.8, 3.0))
+        cx, cy = self._center_screen()
+        self._moveto(cx + random.randint(-100, 100), cy + random.randint(-60, 60))
+
+    def _purposeless_empty_click(self):
+        rx = random.uniform(0.15, 0.85)
+        ry = random.uniform(0.25, 0.65)
+        sx = self.win["left"] + int(self.win["width"] * rx)
+        sy = self.win["top"] + int(self.win["height"] * ry)
+        self._moveto(sx, sy)
+        time.sleep(random.uniform(0.1, 0.5))
+        self.cmd.send("CLICK", "L", random.randint(30, 80))
+        time.sleep(random.uniform(0.5, 2.0))
+        self._press_escape()
+
+    def _purposeless_open_close(self):
+        panel = random.choice(["mail", "bag", "alliance"])
+        self._click_pct(*self._BTN_POS[panel])
+        time.sleep(random.uniform(0.5, 2.0))
+        self._close_panel(panel)
+
+    def _purposeless_cursor_wander(self):
+        for _ in range(random.randint(3, 8)):
+            dx = int(random.gauss(0, 30))
+            dy = int(random.gauss(0, 20))
+            dur = random.randint(80, 300)
+            self.cmd.send("MOVE", dx, dy, dur)
+            time.sleep(random.uniform(0.1, 0.6))
+
+    def _purposeless_hesitate(self):
+        panel = random.choice(["mail", "bag", "alliance"])
+        rx, ry = self._BTN_POS[panel]
+        sx = self.win["left"] + int(self.win["width"] * rx)
+        sy = self.win["top"] + int(self.win["height"] * ry)
+        offset = random.randint(20, 40)
+        self._moveto(sx + random.choice([-1, 1]) * offset,
+                     sy + random.choice([-1, 1]) * offset)
+        time.sleep(random.uniform(0.5, 2.0))
+        cx, cy = self._center_screen()
+        self._moveto(cx, cy)
+
+    def _genuine_afk(self):
+        duration = random.lognormvariate(3.5, 0.7)
+        if self._night_mode and self._night_schedule:
+            progress = self._night_schedule.time_progress()
+            duration *= (1.5 + 2.0 * progress)
+        duration = max(20, min(600, duration))
+        if random.random() < 0.4:
+            rx = random.uniform(0.3, 0.7)
+            ry = random.uniform(0.3, 0.6)
+            sx = self.win["left"] + int(self.win["width"] * rx)
+            sy = self.win["top"] + int(self.win["height"] * ry)
+            self._moveto(sx, sy)
+        logger.info("AFK: %.0fs", duration)
+        time.sleep(duration)
+
+    def _session_warmup(self):
+        actions = random.randint(1, 3)
+        for _ in range(actions):
+            pick = random.choice(["check_mail", "pan_city", "zoom_random", "stare"])
+            if pick == "stare":
+                time.sleep(random.uniform(2.0, 8.0))
+            elif pick == "pan_city":
+                cx, cy = self._center_screen()
+                dx, dy = random.randint(-100, 100), random.randint(-60, 60)
+                self._human_drag(cx + dx, cy + dy, cx - dx, cy - dy)
+                time.sleep(random.uniform(1.0, 3.0))
+            elif pick == "check_mail":
+                self._click_pct(*self._BTN_POS["mail"])
+                time.sleep(random.uniform(2.0, 6.0))
+                self._close_panel("mail")
+            elif pick == "zoom_random":
+                amt = random.choice([-2, -1, 1, 2])
+                self._scroll_at_center(amt, 1)
+                time.sleep(random.uniform(1.0, 2.0))
+                self._scroll_at_center(-amt, 1)
+
+    def _alliance_activity(self):
+        pick = random.choice(["help", "check", "browse"])
+        logger.info("Alliance activity: %s", pick)
+        if pick == "help":
+            self._click_pct(*self._BTN_POS["alliance"])
+            time.sleep(random.uniform(2.0, 5.0))
+            help_btn = self._find("buttons/alliance_help_btn", threshold=0.65)
+            if help_btn:
+                self._click_match(help_btn)
+                time.sleep(random.uniform(1.0, 2.0))
+            self._close_panel("alliance")
+        elif pick == "check":
+            self._click_pct(*self._BTN_POS["alliance"])
+            time.sleep(random.uniform(2.0, 4.0))
+            self._close_panel("alliance")
+        elif pick == "browse":
+            self._click_pct(*self._BTN_POS["alliance"])
+            time.sleep(random.uniform(3.0, 8.0))
+            if random.random() < 0.4:
+                self.cmd.send("SCROLL", random.choice([-1, -2]))
+                time.sleep(random.uniform(1.0, 3.0))
+            self._close_panel("alliance")
+
+    def _use_game_hotkey(self):
+        hotkeys = [("SPACE", 40, 90), ("F1", 30, 70), ("F2", 30, 70)]
+        key, lo, hi = random.choice(hotkeys)
+        self.cmd.send("KEY", key, random.randint(lo, hi))
+        time.sleep(random.uniform(0.5, 2.0))
+        self._press_escape()
+
+    def _simulate_chat_typing(self):
+        self._click_pct(0.015, 0.45, jitter_px=5)
+        time.sleep(random.uniform(1.0, 3.0))
+
+        variant = random.random()
+        if variant < 0.40:
+            scrolls = random.randint(1, 4)
+            for _ in range(scrolls):
+                self.cmd.send("SCROLL", -1)
+                time.sleep(random.uniform(0.3, 1.5))
+            time.sleep(random.uniform(1.0, 5.0))
+        elif variant < 0.85:
+            msg_len = random.randint(3, 15)
+            for _ in range(msg_len):
+                char = random.choice("abcdefghijklmnopqrstuvwxyz ")
+                self.cmd.send("KEY", char, random.randint(30, 100))
+                time.sleep(random.uniform(0.05, 0.25))
+            time.sleep(random.uniform(0.3, 1.5))
+            for _ in range(msg_len + 2):
+                self.cmd.send("KEY", "BKSP", random.randint(20, 50))
+                time.sleep(random.uniform(0.03, 0.08))
+        else:
+            time.sleep(random.uniform(0.5, 2.0))
+
+        self._press_escape()
+
     def _do_idle_action(self):
+        if self._night_mode and self._night_schedule:
+            progress = self._night_schedule.time_progress()
+            night_idle_chance = 0.08 + 0.15 * progress
+            if random.random() < night_idle_chance:
+                self._do_night_idle(progress)
+                return
+
         action = self.session.get_idle_action()
         if action is None:
             return
+        self._maybe_purposeless(0.10)
         cx, cy = self._center_screen()
         if action == IdleAction.PAN_MAP:
             dx = random.randint(-150, 150)
@@ -195,19 +512,94 @@ class GemFarmFlowTest:
             sx, sy = self._clamp_to_play_area(cx + dx, cy + dy)
             ex, ey = self._clamp_to_play_area(cx - dx, cy - dy)
             self._human_drag(sx, sy, ex, ey)
-            self._wait(2.0, 1.0)
+            self._wait((2.0, 1.0))
             logger.info("idle: pan_map")
         elif action in (IdleAction.ZOOM_IN, IdleAction.ZOOM_OUT):
-            amt = 3 if action == IdleAction.ZOOM_IN else -3
+            amt = random.randint(1, 4)
+            if action == IdleAction.ZOOM_OUT:
+                amt = -amt
             self._scroll_at_center(amt, 1)
-            self._wait(1.5, 0.5)
-            self._scroll_at_center(-amt, 1)
-            self._wait(1.5, 0.5)
+            time.sleep(random.uniform(1.0, 6.0))
+            if random.random() < 0.3:
+                dx, dy = random.randint(-80, 80), random.randint(-50, 50)
+                self._human_drag(cx + dx, cy + dy, cx - dx, cy - dy)
+                time.sleep(random.uniform(0.5, 2.0))
+            correction = amt + random.choice([0, 0, 0, -1 if amt > 0 else 1])
+            self._scroll_at_center(-correction, 1)
+            self._wait((1.5, 0.5))
             logger.info("idle: %s (reverted)", action.value)
+        elif action == IdleAction.ALT_TAB:
+            self._alt_tab()
+            logger.info("idle: alt_tab")
         else:
-            pause = random.uniform(3.0, 8.0)
+            if random.random() < 0.005:
+                self.cmd.send("CLICK", "R", random.randint(30, 80))
+                time.sleep(random.uniform(0.3, 1.0))
+                self._press_escape()
+                logger.info("idle: accidental right-click")
+            else:
+                pause = random.uniform(3.0, 8.0)
+                time.sleep(pause)
+                logger.info("idle: pause %.1fs", pause)
+
+    def _do_night_idle(self, progress: float):
+        roll = random.random()
+        if roll < 0.2 * progress:
+            self._alt_tab(away_duration=(120.0, 300.0))
+            logger.info("night idle: bathroom break")
+        elif roll < 0.3 + 0.2 * progress:
+            stare = random.uniform(10.0, 60.0) * (1 + progress)
+            time.sleep(stare)
+            logger.info("night idle: drowsy stare %.0fs", stare)
+        elif roll < 0.5:
+            self._alt_tab(away_duration=(30.0, 120.0))
+            logger.info("night idle: phone check")
+        else:
+            pause = random.uniform(5.0, 20.0) * (1 + progress)
+            if random.random() < 0.3:
+                self._cursor_fidget()
             time.sleep(pause)
-            logger.info("idle: pause %.1fs", pause)
+            logger.info("night idle: drowsy pause %.0fs", pause)
+
+    def _night_shutdown_sequence(self):
+        logger.info("Night shutdown sequence starting")
+        stare_time = random.uniform(30, 120)
+        elapsed = 0.0
+        while elapsed < stare_time:
+            chunk = random.uniform(5, 15)
+            time.sleep(min(chunk, stare_time - elapsed))
+            elapsed += chunk
+            if random.random() < 0.3:
+                self._cursor_fidget()
+
+        if random.random() < 0.4:
+            cx, cy = self._center_screen()
+            dx, dy = random.randint(-80, 80), random.randint(-50, 50)
+            self._human_drag(cx + dx, cy + dy, cx - dx, cy - dy)
+            time.sleep(random.uniform(10, 30))
+
+        if random.random() < 0.6:
+            self._alt_tab(away_duration=(60.0, 180.0))
+
+        logger.info("Night shutdown complete")
+
+    def _wind_down_idle_loop(self):
+        logger.info("Wind-down idle loop -- no more new marches")
+        while self._night_schedule and self._night_schedule.is_active_now():
+            progress = self._night_schedule.time_progress()
+            idle_time = random.uniform(30, 120) * (1 + progress)
+            time.sleep(idle_time)
+
+            roll = random.random()
+            if roll < 0.15:
+                self._cursor_fidget()
+            elif roll < 0.25:
+                self._alt_tab(away_duration=(60.0, 300.0))
+            elif roll < 0.30:
+                self._scroll_at_center(random.choice([-1, 1]), 1)
+                time.sleep(random.uniform(5, 15))
+
+        self._night_shutdown_sequence()
 
     _BTN_POS = {
         "bag":      (0.755, 0.953),
@@ -245,6 +637,11 @@ class GemFarmFlowTest:
         "alliance": (0.68, 0.14, 0.85, 0.32),
         "mail":     (0.74, 0.00, 0.92, 0.18),
     }
+    _X_BUTTON_THRESHOLD = {
+        "mail":     0.55,
+        "alliance": 0.65,
+        "bag":      0.65,
+    }
 
     def _find_x_button(self, frame, panel: str):
         """Detect X close button in a small region around expected position."""
@@ -258,9 +655,10 @@ class GemFarmFlowTest:
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             return None
+        threshold = self._X_BUTTON_THRESHOLD.get(panel, 0.60)
         for tpl_name in [f"ui/btn_x_close_{panel}", "ui/btn_x_close"]:
             m = self.matcher.match_single(crop, tpl_name)
-            if m and m.confidence >= 0.60:
+            if m and m.confidence >= threshold:
                 ax, ay = m.x + x1, m.y + y1
                 return Match(m.name, ax, ay, m.w, m.h, m.confidence,
                              (ax + m.w // 2, ay + m.h // 2))
@@ -317,8 +715,10 @@ class GemFarmFlowTest:
             self._queue_wait_start = time.time()
             print(f"  [{INFO}] Waited {waited_min:.0f}min, assuming 1 slot freed")
 
-        actions = (["pause"] * 20 + ["collect", "mail", "alliance", "bag", "pan"])
-        pick = random.choice(actions)
+        weighted = []
+        for action, weight in self._idle_weights.items():
+            weighted.extend([action] * weight)
+        pick = random.choice(weighted) if weighted else "pause"
         cx, cy = self._center_screen()
         ww, wh = self.win["width"], self.win["height"]
 
@@ -330,6 +730,9 @@ class GemFarmFlowTest:
             time.sleep(random.uniform(2.0, 5.0))
             self._close_panel(pick)
             logger.info("idle-queue: opened+closed %s", pick)
+        elif pick == "alt_tab":
+            self._alt_tab(away_duration=(60.0, 300.0))
+            logger.info("idle-queue: alt_tab")
         elif pick == "pan":
             m = self._find("buttons/world_map_city_btn", threshold=WORLD_MAP_BTN_THRESHOLD)
             if not m:
@@ -366,6 +769,19 @@ class GemFarmFlowTest:
         time.sleep(random.uniform(5.0, 15.0))
 
     def _check_session(self) -> str | None:
+        if self._night_mode and self._night_schedule:
+            if not self._night_schedule.is_active_now():
+                return "stop_night"
+            if self._night_schedule.is_wind_down():
+                if not self._wind_down_active:
+                    self._wind_down_active = True
+                    self._mines_since_wind_down = 0
+                    logger.info("Entering wind-down phase")
+                return "wind_down"
+
+        if self.session.should_stop_daily():
+            return "stop_daily"
+
         if self.session.should_take_break():
             return "break"
         return None
@@ -416,11 +832,35 @@ class GemFarmFlowTest:
 
     # --- Frame capture with day/night normalization ---
 
+    def _start_capture_thread(self):
+        self._capture_running = True
+        self._frame_lock = threading.Lock()
+        self._bg_frame = None
+        self._bg_back = None
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._capture_thread.start()
+
+    def _stop_capture_thread(self):
+        self._capture_running = False
+        if hasattr(self, '_capture_thread') and self._capture_thread.is_alive():
+            self._capture_thread.join(timeout=2.0)
+
+    def _capture_loop(self):
+        while self._capture_running:
+            frame = self.sc.grab_full()
+            if frame is not None:
+                with self._frame_lock:
+                    self._bg_back = self._bg_frame
+                    self._bg_frame = frame
+            time.sleep(random.uniform(0.03, 0.15))
+
     def _grab(self) -> np.ndarray | None:
-        frame = self.sc.grab_full()
-        if frame is None:
-            self._raw_frame = None
-            return None
+        with self._frame_lock:
+            if self._bg_frame is None:
+                self._raw_frame = None
+                return None
+            frame = self._bg_frame
+            self._bg_frame = self._bg_back
         self._raw_frame = frame
         normalized, is_night = normalize_frame(frame)
         if is_night and not self._night_logged:
@@ -435,9 +875,32 @@ class GemFarmFlowTest:
             return False
         m = self.matcher.match_single(frame, "ui/btn_confirm_reconnect")
         if m and m.confidence >= 0.75:
-            print(f"  [{WARN}] Network disconnect popup detected (conf={m.confidence:.3f}), clicking confirm...")
+            roll = random.random()
+            if roll < 0.30:
+                time.sleep(random.uniform(1.0, 5.0))
+            elif roll < 0.60:
+                delay = random.uniform(30, 120)
+                logger.info("Reconnect: delayed %.0fs (brief AFK)", delay)
+                time.sleep(delay)
+            elif roll < 0.80:
+                delay = random.uniform(300, 900)
+                logger.info("Reconnect: long delay %.0fs (extended AFK)", delay)
+                time.sleep(delay)
+                frame = self.sc.grab_full()
+                m = self.matcher.match_single(frame, "ui/btn_confirm_reconnect") if frame is not None else None
+                if not m or m.confidence < 0.75:
+                    return False
+            else:
+                delay = random.uniform(900, 1800)
+                logger.info("Reconnect: very long delay %.0fs (simulating player left)", delay)
+                time.sleep(delay)
+                frame = self.sc.grab_full()
+                m = self.matcher.match_single(frame, "ui/btn_confirm_reconnect") if frame is not None else None
+                if not m or m.confidence < 0.75:
+                    return False
+            print(f"  [{WARN}] Network disconnect popup (conf={m.confidence:.3f}), clicking confirm...")
             self._click_match(m)
-            time.sleep(random.uniform(3.0, 5.0))
+            time.sleep(random.uniform(3.0, 8.0))
             return True
         return False
 
@@ -492,12 +955,16 @@ class GemFarmFlowTest:
         return True
 
     def _correct_position(self, tx: int, ty: int, max_attempts: int = 4) -> None:
+        if random.random() < 0.15:
+            return
+        max_attempts = random.randint(2, 5)
         for _ in range(max_attempts):
-            time.sleep(0.03)
+            time.sleep(random.uniform(0.02, 0.08))
             cur_x, cur_y = get_cursor_pos()
             dx = tx - cur_x
             dy = ty - cur_y
-            if abs(dx) < 3 and abs(dy) < 3:
+            tolerance = random.choice([3, 3, 3, 5, 5, 8])
+            if abs(dx) < tolerance and abs(dy) < tolerance:
                 return
             send_dx = int(dx / self._cursor_scale)
             send_dy = int(dy / self._cursor_scale)
@@ -541,10 +1008,14 @@ class GemFarmFlowTest:
     def _in_no_click_zone(self, sx: int, sy: int) -> bool:
         rx = (sx - self.win["left"]) / self.win["width"]
         ry = (sy - self.win["top"]) / self.win["height"]
+        in_zone = False
         for x1, y1, x2, y2 in self._NO_CLICK_ZONES:
             if x1 <= rx <= x2 and y1 <= ry <= y2:
-                return True
-        return False
+                in_zone = True
+                break
+        if in_zone and random.random() < 0.05:
+            return False
+        return in_zone
 
     def _click(self, sx: int, sy: int, hold_ms: int = 0) -> bool:
         ox, oy, h = self.humanizer.humanize_click(sx, sy)
@@ -555,18 +1026,32 @@ class GemFarmFlowTest:
             return False
         if not self._moveto(sx, sy):
             return False
-        time.sleep(random.uniform(0.08, 0.25))
+        perceive = random.lognormvariate(-0.5, 0.4)
+        time.sleep(max(0.15, min(2.0, perceive)))
+        if random.random() < 0.015:
+            miss_dx = random.randint(-40, 40)
+            miss_dy = random.randint(-30, 30)
+            self._moveto(sx + miss_dx, sy + miss_dy)
+            time.sleep(random.uniform(0.05, 0.15))
+            self.cmd.send("CLICK", "L", random.randint(30, 60))
+            time.sleep(random.uniform(0.2, 0.6))
+            self._moveto(sx, sy)
+            time.sleep(random.uniform(0.1, 0.3))
         if hold_ms <= 0:
             hold_ms = h
+            if random.random() < 0.08:
+                hold_ms = random.randint(200, 400)
         ok = self.cmd.send("CLICK", "L", hold_ms)
         self.session.record_action()
-        self._wait(DELAY_AFTER_CLICK, 0.4)
+        self._wait(DELAY_AFTER_CLICK)
         return ok
 
     def _click_match(self, match: Match) -> bool:
         sx, sy = self._screen_xy(*match.center)
-        jx = random.randint(-match.w // 6, match.w // 6)
-        jy = random.randint(-match.h // 6, match.h // 6)
+        jx = int(random.gauss(0, match.w / 8))
+        jy = int(random.gauss(0, match.h / 8))
+        jx = max(-match.w // 3, min(match.w // 3, jx))
+        jy = max(-match.h // 3, min(match.h // 3, jy))
         return self._click(sx + jx, sy + jy)
 
     def _human_drag(self, sx: int, sy: int, ex: int, ey: int,
@@ -630,30 +1115,70 @@ class GemFarmFlowTest:
         self._moveto(cx, cy)
         time.sleep(random.uniform(0.15, 0.4))
 
-        overshoot = random.random() < 0.15
+        overshoot = random.random() < self._scroll_overshoot_chance
         extra = random.randint(1, 2) if overshoot else 0
         total_notches = abs(amount) * (count + extra)
         direction = 1 if amount > 0 else -1
         for i in range(total_notches):
             self.cmd.send("SCROLL", direction)
-            time.sleep(random.uniform(0.04, 0.12))
-            if random.random() < 0.15:
-                time.sleep(random.uniform(0.1, 0.3))
+            if random.random() < 0.3:
+                time.sleep(random.uniform(0.15, 0.5))
+            else:
+                time.sleep(random.uniform(0.04, 0.12))
+            if random.random() < 0.08:
+                time.sleep(random.uniform(0.3, 1.5))
         if overshoot and extra > 0:
             time.sleep(random.uniform(0.4, 1.0))
             correction = max(1, int(extra * 0.6))
             for _ in range(correction):
                 self.cmd.send("SCROLL", -direction)
-                time.sleep(random.uniform(0.04, 0.12))
+                if random.random() < 0.3:
+                    time.sleep(random.uniform(0.15, 0.5))
+                else:
+                    time.sleep(random.uniform(0.04, 0.12))
 
     def _press_escape(self):
-        rx = random.uniform(0.20, 0.80)
-        ry = random.uniform(0.22, 0.40)
-        sx = self.win["left"] + int(self.win["width"] * rx)
-        sy = self.win["top"] + int(self.win["height"] * ry)
-        self._moveto(sx, sy)
-        time.sleep(random.uniform(0.03, 0.12))
-        self.cmd.send("CLICK", "L", random.randint(30, 80))
+        if random.random() < 0.5:
+            hold = random.randint(30, 80)
+            self.cmd.send("KEY", "ESC", hold)
+            logger.debug("press_escape: KEY ESC hold=%dms", hold)
+        else:
+            rx = random.uniform(0.20, 0.80)
+            ry = random.uniform(0.22, 0.40)
+            sx = self.win["left"] + int(self.win["width"] * rx)
+            sy = self.win["top"] + int(self.win["height"] * ry)
+            self._moveto(sx, sy)
+            time.sleep(random.uniform(0.03, 0.12))
+            self.cmd.send("CLICK", "L", random.randint(30, 80))
+            logger.debug("press_escape: click empty area (%.2f, %.2f)", rx, ry)
+
+    def _alt_tab(self, away_duration: tuple = (2.0, 8.0)):
+        hold = random.randint(50, 120)
+        self.cmd.send("COMBO", "ALT", "TAB", hold)
+        away_s = random.uniform(*away_duration)
+        logger.info("alt_tab: switching away for %.0fs", away_s)
+        time.sleep(away_s)
+
+        hold = random.randint(50, 120)
+        self.cmd.send("COMBO", "ALT", "TAB", hold)
+        logger.info("alt_tab: switching back")
+        time.sleep(random.uniform(1.5, 3.0))
+
+        self.win = self.sc.find_window()
+        if not self.win:
+            logger.warning("alt_tab: game window lost after tab back, retrying...")
+            time.sleep(2.0)
+            self.win = self.sc.find_window()
+
+        cx, cy = self._center_screen()
+        self._moveto(cx + random.randint(-50, 50), cy + random.randint(-30, 30))
+        time.sleep(random.uniform(0.1, 0.3))
+        self.cmd.send("CLICK", "L", random.randint(30, 60))
+        time.sleep(random.uniform(0.5, 1.0))
+
+        if self._check_reconnect_popup():
+            logger.info("alt_tab: dismissed reconnect popup after tab back")
+            time.sleep(random.uniform(2.0, 4.0))
 
     # --- Template helpers ---
 
@@ -697,6 +1222,53 @@ class GemFarmFlowTest:
         self._edge_gems = edge_gems
         return result
 
+    # --- Night mode ---
+
+    def _init_night_mode(self):
+        from anti_detection.session_manager import NightSchedule
+        night_cfg = self._profile.get("night_mode", {})
+        if self._bed_time:
+            night_cfg["bed_time"] = self._bed_time
+        if self._wake_time:
+            night_cfg["wake_time"] = self._wake_time
+        if self._stop_margin is not None:
+            night_cfg["stop_margin_min"] = self._stop_margin
+
+        self._night_schedule = NightSchedule(night_cfg)
+
+        day_drift = self._persona.get("day_drift", 0.0)
+        day_variance = night_cfg.get("day_variance_min", 10)
+        day_drift = NightSchedule.update_day_drift(day_drift, day_variance)
+        self._persona["day_drift"] = round(day_drift, 2)
+        self._save_persona()
+
+        schedule = self._night_schedule.compute_tonight(day_drift)
+        s = self._night_schedule.schedule_summary()
+        print(f"  [{INFO}] Night Mode ON")
+        print(f"  [{INFO}] Tonight: {s['start']} - {s['stop']} "
+              f"(wind-down at {s['wind_down']})")
+
+        if not self._night_schedule.is_active_now():
+            wait_min = self._night_schedule.minutes_until_start()
+            print(f"  [{INFO}] Waiting {wait_min:.0f} min until start...")
+            while not self._night_schedule.is_active_now():
+                time.sleep(60)
+            print(f"  [{INFO}] Night session starting now")
+
+        if self._manual_handoff:
+            self._is_transitioning = True
+            self._transition_start = time.monotonic()
+            tr_min = night_cfg.get("transition_duration_min", 15)
+            print(f"  [{INFO}] Manual handoff: transitioning over {tr_min} min")
+
+    def _save_persona(self):
+        try:
+            path = self._persona_path()
+            with open(path, "w") as f:
+                json.dump(self._persona, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save persona: %s", e)
+
     # --- Main flow ---
 
     def run(self):
@@ -712,13 +1284,18 @@ class GemFarmFlowTest:
         else:
             print(f"  Target mines: {self.count}")
         print(f"  Profile: {self._profile.get('name', 'default')}")
+        if self._night_mode:
+            print(f"  Night mode: ON")
         print()
 
         try:
             if not self._setup():
                 return
 
-            pass
+            if self._night_mode:
+                self._init_night_mode()
+
+            self._session_warmup()
 
             i = 1
             consecutive_fails = 0
@@ -742,8 +1319,29 @@ class GemFarmFlowTest:
                         self._idle_while_queue_full()
                         continue
 
+                if self._is_transitioning and self._transition_start is not None:
+                    elapsed_tr = time.monotonic() - self._transition_start
+                    tr_dur = self._profile.get("night_mode", {}).get(
+                        "transition_duration_min", 15) * 60
+                    if elapsed_tr >= tr_dur:
+                        self._is_transitioning = False
+                        logger.info("Transition complete, full night mode active")
+
                 status = self._check_session()
-                if status == "break":
+                if status == "stop_night":
+                    print(f"\n  [{INFO}] Night session ending (schedule)")
+                    self._night_shutdown_sequence()
+                    break
+                elif status == "stop_daily":
+                    print(f"\n  [{INFO}] Daily limit reached, stopping")
+                    break
+                elif status == "wind_down":
+                    self._mines_since_wind_down += 1
+                    if self._mines_since_wind_down > random.randint(1, 3):
+                        print(f"\n  [{INFO}] Wind-down: no more new marches")
+                        self._wind_down_idle_loop()
+                        break
+                elif status == "break":
                     dur = self.session.get_break_duration()
                     mins = dur / 60.0
                     print(f"\n  [{INFO}] Session break: {mins:.1f} min "
@@ -752,10 +1350,15 @@ class GemFarmFlowTest:
                     continue
 
                 label = f"{i}" if self.loop else f"{i}/{self.count}"
+                night_tag = ""
+                if self._night_mode and self._night_schedule:
+                    p = self._night_schedule.time_progress()
+                    night_tag = f" | Night: {p:.0%}"
                 print(f"\n{'*' * 60}")
                 print(f"  *** MINE {label} ***")
                 print(f"  Session: {self.session.elapsed_minutes:.0f} min | "
-                      f"Fatigue: x{self.timing.apply_fatigue(self.session.elapsed_minutes):.2f}")
+                      f"Fatigue: x{self.timing.apply_fatigue(self.session.elapsed_minutes):.2f}"
+                      f"{night_tag}")
                 print(f"{'*' * 60}")
 
                 if not self._mine_flow(i):
@@ -773,12 +1376,39 @@ class GemFarmFlowTest:
                 self._queue_wait_start = time.time()
                 print(f"\n  Mine {i} DONE (total: {self.mines_completed})")
 
-                self._wait(DELAY_BETWEEN_MINES, 2.0)
-                if random.random() < 0.20:
-                    extra = random.uniform(2.0, 8.0)
-                    print(f"  [{INFO}] Extra pause {extra:.1f}s")
+                self._wait(DELAY_BETWEEN_MINES)
+                pause_roll = random.random()
+                if pause_roll < 0.40:
+                    pass
+                elif pause_roll < 0.70:
+                    extra = random.uniform(1.0, 5.0)
+                    print(f"  [{INFO}] Short pause {extra:.1f}s")
                     time.sleep(extra)
+                elif pause_roll < 0.90:
+                    extra = random.uniform(5.0, 15.0)
+                    print(f"  [{INFO}] Medium pause {extra:.1f}s")
+                    time.sleep(extra)
+                else:
+                    extra = random.uniform(15.0, 60.0)
+                    print(f"  [{INFO}] Long pause {extra:.1f}s")
+                    time.sleep(extra)
+
+                if random.random() < self._persona.get("afk_frequency", 0.05):
+                    self._genuine_afk()
+
+                if (self.session.elapsed_minutes - self._last_alliance_time
+                        > random.uniform(30, 60)):
+                    self._alliance_activity()
+                    self._last_alliance_time = self.session.elapsed_minutes
+
+                remaining_min = getattr(self, '_current_farm_duration', 40) - self.session.elapsed_minutes
+                if remaining_min < 5 and random.random() < 0.3:
+                    afk = random.uniform(20.0, 90.0)
+                    logger.info("Pre-break AFK: %.0fs", afk)
+                    time.sleep(afk)
+
                 self._do_idle_action()
+                self._maybe_purposeless(0.04)
 
                 i += 1
 
@@ -791,31 +1421,116 @@ class GemFarmFlowTest:
             self._teardown()
             self._print_report()
 
+    def _flow_distraction(self):
+        pick = random.choice(["chat", "mail_quick", "stare", "zoom_peek", "hotkey"])
+        logger.info("Flow distraction: %s", pick)
+        if pick == "chat":
+            self._simulate_chat_typing()
+        elif pick == "mail_quick":
+            self._click_pct(*self._BTN_POS["mail"])
+            time.sleep(random.uniform(2.0, 8.0))
+            self._close_panel("mail")
+        elif pick == "stare":
+            time.sleep(random.uniform(3.0, 15.0))
+        elif pick == "zoom_peek":
+            amt = random.choice([-3, -2, 2, 3])
+            self._scroll_at_center(amt, 1)
+            time.sleep(random.uniform(2.0, 6.0))
+            self._scroll_at_center(-amt, 1)
+        elif pick == "hotkey":
+            self._use_game_hotkey()
+
     def _mine_flow(self, idx: int) -> bool:
         tag = f"m{idx}"
+
+        fail_point = None
+        if random.random() < 0.06:
+            fail_point = random.choice([
+                "after_world_map", "during_scan", "after_icon_click",
+                "after_gather_click", "after_troop_select",
+            ])
+            logger.info("Mine %d: planned abandon at %s", idx, fail_point)
+
+        distraction_point = None
+        if random.random() < 0.08:
+            distraction_point = random.choice([
+                "after_world_map", "after_scan", "after_gather",
+            ])
+
+        self._maybe_purposeless(0.05)
 
         # Step 1: City view -> world map -> zoom out 2x
         if not self._step_to_world_map(tag):
             return False
 
+        if fail_point == "after_world_map":
+            logger.info("Flow abandon at world_map (simulated)")
+            time.sleep(random.uniform(2.0, 6.0))
+            self._step_return_city(tag)
+            return False
+
+        if distraction_point == "after_world_map":
+            self._flow_distraction()
+
         self._do_idle_action()
-        self._wait(random.uniform(1.0, 3.0), 0.5)
+        self._wait(random.uniform(1.0, 3.0))
+
+        self._maybe_purposeless(0.05)
 
         # Step 2+3+4: Wander scan, clicking each icon to verify gem type
+        if fail_point == "during_scan":
+            scan_limit = random.randint(3, 8)
+            logger.info("Flow abandon during scan after %d scans (simulated)", scan_limit)
+            time.sleep(random.uniform(3.0, 10.0))
+            self._step_return_city(tag)
+            return False
+
         gem = self._step_scan_and_verify_gem(tag)
         if gem is None:
             self._step_return_city(tag)
             return False
 
-        self._wait(random.uniform(1.5, 4.0), 1.0)
+        if distraction_point == "after_scan":
+            self._flow_distraction()
+
+        if fail_point == "after_icon_click":
+            logger.info("Flow abandon after icon click (simulated - not worth it)")
+            time.sleep(random.uniform(1.5, 4.0))
+            self._press_escape()
+            self._wait(DELAY_AFTER_ESCAPE)
+            self._step_return_city(tag)
+            return False
+
+        self._wait(random.uniform(1.5, 4.0))
+
+        self._maybe_purposeless(0.05)
 
         # Step 5: Click "Thu Thap" (gather)
         if not self._step_click_gather(tag):
             return False
 
-        self._wait(random.uniform(1.0, 3.0), 0.5)
+        if fail_point == "after_gather_click":
+            logger.info("Flow abandon after gather (simulated - wrong troop)")
+            time.sleep(random.uniform(1.0, 3.0))
+            self._press_escape()
+            self._wait(DELAY_AFTER_ESCAPE)
+            self._step_return_city(tag)
+            return False
+
+        if distraction_point == "after_gather":
+            self._flow_distraction()
+
+        self._wait(random.uniform(1.0, 3.0))
 
         # Step 6: Select troop + click "March"
+        if fail_point == "after_troop_select":
+            logger.info("Flow abandon after troop select (simulated - changed mind)")
+            time.sleep(random.uniform(1.5, 4.0))
+            self._press_escape()
+            self._wait(DELAY_AFTER_ESCAPE)
+            self._step_return_city(tag)
+            return False
+
         if not self._step_click_march(tag):
             return False
 
@@ -823,7 +1538,7 @@ class GemFarmFlowTest:
         self.gathered_positions.append(gem.center)
         print(f"  [{INFO}] Marked gem at {gem.center} as gathered ({len(self.gathered_positions)} total)")
 
-        self._wait(random.uniform(2.0, 5.0), 1.0)
+        self._wait(random.uniform(2.0, 5.0))
 
         # Step 7: Return to city view
         self._step_return_city(tag)
@@ -872,6 +1587,9 @@ class GemFarmFlowTest:
         self.cmd.start()
         self._wait(DELAY_AFTER_CLICK)
         print(f"  [{PASS}] ESP32: {self.port}")
+
+        self._start_capture_thread()
+        time.sleep(0.2)
 
         frame = self._grab()
         if frame is not None:
@@ -1086,7 +1804,10 @@ class GemFarmFlowTest:
                 print(f"  [{INFO}] Classifier: {label} ({clf_conf:.2f}) at {m.center}")
             result.append(m)
         self._edge_gems = edge_gems
-        return sorted(result, key=lambda m: -m.confidence)
+        noticed = [m for m in result if random.random() > 0.08]
+        if len(noticed) < len(result):
+            logger.debug("Missed %d icon(s) (simulated inattention)", len(result) - len(noticed))
+        return sorted(noticed, key=lambda m: -m.confidence)
 
     def _recenter_edge_gem(self, edge_match: Match) -> list[Match]:
         """Drag map to roughly center an edge gem, then re-scan."""
@@ -1468,9 +2189,7 @@ class GemFarmFlowTest:
         margin = 80
         cx, cy = self._center_screen()
 
-        spiral_angle = random.uniform(0, 2 * math.pi)
-        scans_per_rev = random.uniform(5, 8)
-        spiral_step = 2 * math.pi / scans_per_rev
+        wander_heading = getattr(self, '_wander_heading', random.uniform(0, 2 * math.pi))
         scan_count = 0
         scan_speed = random.uniform(3.6, 5.0)
         _speed_target = random.uniform(3.6, 7.0)
@@ -1482,8 +2201,6 @@ class GemFarmFlowTest:
         attempt = 0
         SKIP_RADIUS = 80
         clicked_positions: list[tuple[int, int, int]] = []
-        cam_offset = [0.0, 0.0]
-        visited_cells: set[tuple[int, int]] = {(0, 0)}
 
         print(f"  [{INFO}] Wander scan (margin={margin})")
 
@@ -1528,25 +2245,18 @@ class GemFarmFlowTest:
                 print(f"  [{INFO}] Mid-scan break: {dur/60:.1f} min")
                 time.sleep(dur)
 
-            dist_pct = random.uniform(2.0, 3.0)
+            turn = random.gauss(0, 0.4)
+            if random.random() < 0.15:
+                turn = random.uniform(-math.pi / 2, math.pi / 2)
+            if random.random() < 0.05:
+                turn = random.uniform(-math.pi, math.pi)
+            wander_heading += turn
 
-            angle = spiral_angle + random.gauss(0, 0.2)
-            dx_f = math.cos(angle)
-            dy_f = math.sin(angle)
+            dist_pct = random.lognormvariate(0.7, 0.3)
+            dist_pct = max(0.8, min(4.0, dist_pct))
 
-            target_cell = (round(cam_offset[0] + dx_f * dist_pct),
-                           round(cam_offset[1] + dy_f * dist_pct))
-            if target_cell in visited_cells:
-                for nudge in [0.5, -0.5, 1.0, -1.0]:
-                    alt = spiral_angle + nudge
-                    adx, ady = math.cos(alt), math.sin(alt)
-                    ac = (round(cam_offset[0] + adx * dist_pct),
-                          round(cam_offset[1] + ady * dist_pct))
-                    if ac not in visited_cells:
-                        dx_f, dy_f = adx, ady
-                        break
-
-            spiral_angle += spiral_step + random.gauss(0, 0.12)
+            dx_f = math.cos(wander_heading)
+            dy_f = math.sin(wander_heading)
 
             jx = random.randint(-45, 45)
             jy = random.randint(-35, 35)
@@ -1565,10 +2275,6 @@ class GemFarmFlowTest:
             self._human_drag(sx, sy, ex, ey, speed_factor=scan_speed, easing="in")
             time.sleep(random.uniform(0.3, 0.8))
 
-            cam_offset[0] += dx_f * dist_pct
-            cam_offset[1] += dy_f * dist_pct
-            visited_cells.add((round(cam_offset[0]), round(cam_offset[1])))
-
             if random.random() < 0.10:
                 time.sleep(random.uniform(1.0, 2.5))
 
@@ -1576,7 +2282,8 @@ class GemFarmFlowTest:
             if frame is None:
                 continue
 
-            save_screenshot(frame, f"{tag}_scan_{scan_count:02d}")
+            if random.random() < 0.3:
+                save_screenshot(frame, f"{tag}_scan_{scan_count:02d}")
 
             icons = self._find_all_icons(frame)
 
@@ -1587,7 +2294,7 @@ class GemFarmFlowTest:
             if not icons:
                 empty_streak += 1
                 print(f"  [ -- ] Scan {scan_count:2d}/{max_scans}: no icons "
-                      f"(spd={scan_speed:.1f}x, cells={len(visited_cells)}, empty={empty_streak})")
+                      f"(spd={scan_speed:.1f}x, empty={empty_streak})")
                 if empty_streak >= max_empty_streak:
                     if self._check_reconnect_popup():
                         empty_streak = 0
@@ -1619,10 +2326,12 @@ class GemFarmFlowTest:
                 tried_this_frame += 1
                 clicked_positions.append((*icon.center, SKIP_RADIUS))
                 if self._click_icon_and_verify(icon, tag, attempt, icon_frame=frame):
+                    self._wander_heading = wander_heading
                     self._record(f"{tag}_find", True, f"Gem at attempt {attempt}, scan {scan_count}")
                     return icon
                 self._return_to_icon_zoom()
 
+        self._wander_heading = wander_heading
         print(f"  [{FAIL}] No gem mine after {scan_count} scans, {attempt} icons checked")
         self._record(f"{tag}_find", False, f"{attempt} icons checked, none were gem")
         return None
@@ -1632,11 +2341,14 @@ class GemFarmFlowTest:
     def _step_click_gather(self, tag: str) -> bool:
         print(f"\n--- [{tag}] Step 5: Click Gather ---\n")
 
-        for attempt in range(5):
+        max_retries = random.randint(3, 6)
+        for attempt in range(max_retries):
             frame = self._grab()
             if frame is None:
                 self._wait(DELAY_RECHECK)
                 continue
+            if random.random() < 0.1:
+                time.sleep(random.uniform(1.0, 3.0))
 
             m_raw = self.matcher.match_single(frame, "buttons/gather_btn")
             m_conf = m_raw.confidence if m_raw else 0.0
@@ -1760,6 +2472,7 @@ class GemFarmFlowTest:
 
     def _teardown(self):
         print("\n--- Teardown ---")
+        self._stop_capture_thread()
         ss = self.session.session_stats()
         print(f"  Session: {ss['session_minutes']:.1f} min active, "
               f"{ss['action_count']} actions, "
@@ -1775,6 +2488,14 @@ class GemFarmFlowTest:
             self.conn.disconnect()
         if self.sc:
             self.sc.close()
+        if SCREENSHOT_DIR.exists():
+            cutoff = time.time() - 3600
+            for f in SCREENSHOT_DIR.glob("*.png"):
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        f.unlink()
+                except Exception:
+                    pass
 
     def _print_report(self):
         print(f"\n{'=' * 60}")
@@ -1815,6 +2536,18 @@ def main():
                         help="Disable saving screenshots (for overnight runs)")
     parser.add_argument("--zoom-scrolls", type=int, default=None,
                         help="Override ICON_ZOOM_SCROLLS (default: random 2-3)")
+    parser.add_argument("--account-id", type=str, default="default",
+                        help="Account identifier for persistent persona (default: 'default')")
+    parser.add_argument("--night-mode", action="store_true",
+                        help="Enable night-only bot mode with sleepy player behavior")
+    parser.add_argument("--bed-time", type=str, default=None,
+                        help="Earliest bot start time HH:MM (default: from profile or 01:00)")
+    parser.add_argument("--wake-time", type=str, default=None,
+                        help="Wake-up time HH:MM (default: from profile or 07:00)")
+    parser.add_argument("--stop-margin", type=int, default=None,
+                        help="Minutes before wake-up to stop (default: from profile or 30)")
+    parser.add_argument("--manual-handoff", action="store_true",
+                        help="User was playing before -- enables smooth transition")
     args = parser.parse_args()
 
     if args.no_screenshots:
@@ -1830,6 +2563,12 @@ def main():
         test = GemFarmFlowTest(
             port=args.port, count=args.count, auto_learn=args.auto_learn,
             loop=args.loop, max_marches=args.max_marches,
+            account_id=args.account_id,
+            night_mode=args.night_mode,
+            bed_time=args.bed_time,
+            wake_time=args.wake_time,
+            stop_margin=args.stop_margin,
+            manual_handoff=args.manual_handoff,
         )
         test.run()
 

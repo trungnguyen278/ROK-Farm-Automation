@@ -9,6 +9,8 @@
 #define CMD_SCROLL "SCROLL"
 #define CMD_PING   "PING"
 #define CMD_RESET  "RESET"
+#define CMD_KEY    "KEY"
+#define CMD_COMBO  "COMBO"
 
 #define RSP_ACK  "ACK"
 #define RSP_NACK "NACK"
@@ -18,7 +20,6 @@
 #define ERR_INVALID_PARAMS 2
 #define ERR_BUSY           3
 
-#define STEP_INTERVAL_MS   5
 #define MAX_PARAMS         8
 #define MAX_PARAM_LEN      16
 #define MAX_LINE_LEN       128

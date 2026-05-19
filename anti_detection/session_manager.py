@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 
 
@@ -11,6 +11,108 @@ class IdleAction(Enum):
     ZOOM_IN = "zoom_in"
     ZOOM_OUT = "zoom_out"
     CHECK_ALLIANCE = "check_alliance"
+    ALT_TAB = "alt_tab"
+    PHONE_CHECK = "phone_check"
+    DROWSY_STARE = "drowsy_stare"
+    BATHROOM_BREAK = "bathroom_break"
+
+
+class NightSchedule:
+    def __init__(self, config: dict):
+        self._bed_time_str = config.get("bed_time", "01:00")
+        self._wake_time_str = config.get("wake_time", "07:00")
+        self._stop_margin_min = config.get("stop_margin_min", 30)
+        self._jitter_start_min = config.get("jitter_start_min", 20)
+        self._jitter_stop_min = config.get("jitter_stop_min", 15)
+        self._day_variance_min = config.get("day_variance_min", 10)
+        self.transition_duration_min = config.get("transition_duration_min", 15)
+        self.wind_down_duration_min = config.get("wind_down_duration_min", 20)
+
+        self._actual_start: datetime | None = None
+        self._actual_stop: datetime | None = None
+        self._wind_down_start: datetime | None = None
+
+    def compute_tonight(self, day_drift: float = 0.0) -> dict:
+        now = datetime.now()
+        bed_h, bed_m = map(int, self._bed_time_str.split(":"))
+        wake_h, wake_m = map(int, self._wake_time_str.split(":"))
+
+        bed_base = now.replace(hour=bed_h, minute=bed_m, second=0, microsecond=0)
+        wake_base = now.replace(hour=wake_h, minute=wake_m, second=0, microsecond=0)
+
+        if bed_base > wake_base:
+            wake_base += timedelta(days=1)
+        if bed_base < now - timedelta(hours=2):
+            bed_base += timedelta(days=1)
+            wake_base += timedelta(days=1)
+
+        start_jitter = self._clamp_gauss(0, self._jitter_start_min / 2,
+                                         self._jitter_start_min)
+        stop_jitter = self._clamp_gauss(0, self._jitter_stop_min / 2,
+                                        self._jitter_stop_min)
+
+        self._actual_start = bed_base + timedelta(minutes=day_drift + start_jitter)
+        raw_stop = wake_base - timedelta(minutes=self._stop_margin_min)
+        self._actual_stop = raw_stop + timedelta(minutes=day_drift * 0.5 + stop_jitter)
+        self._wind_down_start = self._actual_stop - timedelta(
+            minutes=self.wind_down_duration_min)
+
+        if self._actual_stop <= self._actual_start:
+            self._actual_stop = self._actual_start + timedelta(hours=3)
+            self._wind_down_start = self._actual_stop - timedelta(
+                minutes=self.wind_down_duration_min)
+
+        return {
+            "actual_start": self._actual_start,
+            "actual_stop": self._actual_stop,
+            "wind_down_start": self._wind_down_start,
+        }
+
+    def is_active_now(self) -> bool:
+        if self._actual_start is None or self._actual_stop is None:
+            return False
+        now = datetime.now()
+        return self._actual_start <= now <= self._actual_stop
+
+    def is_wind_down(self) -> bool:
+        if self._wind_down_start is None or self._actual_stop is None:
+            return False
+        now = datetime.now()
+        return self._wind_down_start <= now <= self._actual_stop
+
+    def time_progress(self) -> float:
+        if self._actual_start is None or self._actual_stop is None:
+            return 0.0
+        now = datetime.now()
+        total = (self._actual_stop - self._actual_start).total_seconds()
+        if total <= 0:
+            return 0.0
+        elapsed = (now - self._actual_start).total_seconds()
+        return max(0.0, min(1.0, elapsed / total))
+
+    def minutes_until_start(self) -> float:
+        if self._actual_start is None:
+            return 0.0
+        delta = (self._actual_start - datetime.now()).total_seconds()
+        return max(0.0, delta / 60.0)
+
+    def schedule_summary(self) -> dict:
+        fmt = "%H:%M"
+        return {
+            "start": self._actual_start.strftime(fmt) if self._actual_start else "?",
+            "stop": self._actual_stop.strftime(fmt) if self._actual_stop else "?",
+            "wind_down": self._wind_down_start.strftime(fmt) if self._wind_down_start else "?",
+        }
+
+    @staticmethod
+    def update_day_drift(current_drift: float, variance: float) -> float:
+        new_drift = current_drift + random.gauss(0, variance / 3)
+        return max(-variance, min(variance, new_drift))
+
+    @staticmethod
+    def _clamp_gauss(mu: float, sigma: float, limit: float) -> float:
+        v = random.gauss(mu, sigma)
+        return max(-limit, min(limit, v))
 
 
 class SessionManager:

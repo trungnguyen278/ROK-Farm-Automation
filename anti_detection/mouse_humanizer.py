@@ -52,10 +52,13 @@ class MouseHumanizer:
         self._click_spread = m.get("click_spread", 8)
         self._hold_ms = m.get("hold_ms", [50, 150])
         self._jitter_px = m.get("jitter_px", 2)
+        self._curve_spread = m.get("curve_spread", 0.3)
         self._speed_lo = max(50, self._speed_base - self._speed_variance)
         self._speed_hi = self._speed_base + self._speed_variance
         self._speed_current = float(self._speed_base)
         self._speed_target = float(self._speed_base)
+        self._tremor_freq = random.uniform(8, 12)
+        self._tremor_amp = random.uniform(0.3, 1.5)
 
     def humanize_move(
         self, x1: int, y1: int, x2: int, y2: int,
@@ -71,18 +74,37 @@ class MouseHumanizer:
         total_ms = max(30, dist / speed * 1000)
 
         control_pts = self._make_control_points(x1, y1, x2, y2, dist)
-        num_steps = max(5, int(dist / 8))
+
+        if dist < 50:
+            num_steps = max(3, int(dist / 12))
+        elif dist < 200:
+            num_steps = max(5, int(dist / 8))
+        else:
+            num_steps = max(8, int(dist / 6))
+
+        peak_shift = random.uniform(-0.05, 0.08)
+        submovement_at = random.uniform(0.6, 0.8) if dist > 200 else None
 
         path: list[tuple[int, int, int]] = []
+        t_accum = 0.0
         for i in range(1, num_steps + 1):
             t = i / num_steps
-            ease_t = self._ease_in_out(t)
+            ease_t = self._ease_asymmetric(t, peak_shift)
+
+            if submovement_at and abs(t - submovement_at) < (1.0 / num_steps):
+                ease_t *= random.uniform(0.92, 0.98)
+
             bx, by = _bezier_point(ease_t, control_pts)
 
-            jx = _gauss(0, self._jitter_px) if self._jitter_px > 0 else 0
-            jy = _gauss(0, self._jitter_px) if self._jitter_px > 0 else 0
-
             step_ms = int(total_ms / num_steps)
+            t_accum += step_ms / 1000.0
+            tx = self._tremor_amp * math.sin(_TWOPI * self._tremor_freq * t_accum
+                                              + random.uniform(0, 0.3))
+            ty = self._tremor_amp * math.sin(_TWOPI * self._tremor_freq * 1.1 * t_accum)
+
+            jx = _gauss(0, self._jitter_px) + tx if self._jitter_px > 0 else tx
+            jy = _gauss(0, self._jitter_px) + ty if self._jitter_px > 0 else ty
+
             path.append((int(bx + jx), int(by + jy), step_ms))
 
         if self.should_overshoot():
@@ -96,7 +118,10 @@ class MouseHumanizer:
     def humanize_click(self, x: int, y: int) -> tuple[int, int, int]:
         ox = int(_gauss(0, self._click_spread))
         oy = int(_gauss(0, self._click_spread))
-        hold = random.randint(self._hold_ms[0], self._hold_ms[1])
+        if random.random() < 0.08:
+            hold = random.randint(200, 400)
+        else:
+            hold = random.randint(self._hold_ms[0], self._hold_ms[1])
         return (ox, oy, hold)
 
     def should_overshoot(self) -> bool:
@@ -110,7 +135,7 @@ class MouseHumanizer:
     ) -> list[tuple[float, float]]:
         points: list[tuple[float, float]] = [(float(x1), float(y1))]
 
-        spread = max(20, dist * 0.3)
+        spread = max(10, dist * self._curve_spread)
         num_mid = max(1, self._control_points - 1)
         for i in range(num_mid):
             frac = (i + 1) / (num_mid + 1)
@@ -123,7 +148,13 @@ class MouseHumanizer:
 
     @staticmethod
     def _ease_in_out(t: float) -> float:
-        return (1 - math.cos(t * math.pi)) / 2
+        return 6*t**5 - 15*t**4 + 10*t**3
+
+    @staticmethod
+    def _ease_asymmetric(t: float, peak_shift: float = 0.0) -> float:
+        t_adj = t + peak_shift * math.sin(t * math.pi)
+        t_adj = max(0.0, min(1.0, t_adj))
+        return 6*t_adj**5 - 15*t_adj**4 + 10*t_adj**3
 
     def _generate_overshoot(
         self, tx: int, ty: int, step_ms: int,

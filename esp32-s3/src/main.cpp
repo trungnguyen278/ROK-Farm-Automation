@@ -1,13 +1,17 @@
 #include <Arduino.h>
 #include "USB.h"
 #include "USBHIDMouse.h"
+#include "USBHIDKeyboard.h"
 #include "commands.h"
-
 USBHIDMouse Mouse;
+USBHIDKeyboard Keyboard;
 
 static char line_buf[MAX_LINE_LEN];
 static int line_pos = 0;
 static bool executing = false;
+static unsigned long last_cmd_time = 0;
+static unsigned long last_mouse_idle = 0;
+static unsigned long last_kb_idle = 0;
 
 void send_ack(int cmd_id) {
     Serial.printf("<%d,%s>\n", cmd_id, RSP_ACK);
@@ -28,7 +32,7 @@ void rel_move(int16_t dx, int16_t dy) {
         Mouse.move(sx, sy, 0);
         dx -= sx;
         dy -= sy;
-        if (dx != 0 || dy != 0) delay(1);
+        if (dx != 0 || dy != 0) delay(random(6, 10));
     }
 }
 
@@ -74,6 +78,42 @@ uint8_t map_button(char btn) {
     }
 }
 
+// --- Keyboard key mapping ---
+
+uint8_t map_key(const char* name) {
+    if (strcmp(name, "ESC") == 0)    return KEY_ESC;
+    if (strcmp(name, "TAB") == 0)    return KEY_TAB;
+    if (strcmp(name, "ENTER") == 0)  return KEY_RETURN;
+    if (strcmp(name, "SPACE") == 0)  return ' ';
+    if (strcmp(name, "BKSP") == 0)   return KEY_BACKSPACE;
+    if (strcmp(name, "UP") == 0)     return KEY_UP_ARROW;
+    if (strcmp(name, "DOWN") == 0)   return KEY_DOWN_ARROW;
+    if (strcmp(name, "LEFT") == 0)   return KEY_LEFT_ARROW;
+    if (strcmp(name, "RIGHT") == 0)  return KEY_RIGHT_ARROW;
+    if (strcmp(name, "ALT") == 0)    return KEY_LEFT_ALT;
+    if (strcmp(name, "CTRL") == 0)   return KEY_LEFT_CTRL;
+    if (strcmp(name, "SHIFT") == 0)  return KEY_LEFT_SHIFT;
+    if (strcmp(name, "F1") == 0)     return KEY_F1;
+    if (strcmp(name, "F2") == 0)     return KEY_F2;
+    if (strcmp(name, "F3") == 0)     return KEY_F3;
+    if (strcmp(name, "F4") == 0)     return KEY_F4;
+    if (strcmp(name, "F5") == 0)     return KEY_F5;
+    if (strcmp(name, "F6") == 0)     return KEY_F6;
+    if (strcmp(name, "F7") == 0)     return KEY_F7;
+    if (strcmp(name, "F8") == 0)     return KEY_F8;
+    if (strcmp(name, "F9") == 0)     return KEY_F9;
+    if (strcmp(name, "F10") == 0)    return KEY_F10;
+    if (strcmp(name, "F11") == 0)    return KEY_F11;
+    if (strcmp(name, "F12") == 0)    return KEY_F12;
+    if (strcmp(name, "DEL") == 0)    return KEY_DELETE;
+    if (strcmp(name, "HOME") == 0)   return KEY_HOME;
+    if (strcmp(name, "END") == 0)    return KEY_END;
+    if (strcmp(name, "PGUP") == 0)   return KEY_PAGE_UP;
+    if (strcmp(name, "PGDN") == 0)   return KEY_PAGE_DOWN;
+    if (strlen(name) == 1) return (uint8_t)name[0];
+    return 0;
+}
+
 // --- Command handlers ---
 
 void handle_move(const ParsedCommand& cmd) {
@@ -86,7 +126,7 @@ void handle_move(const ParsedCommand& cmd) {
     if (duration_ms <= 0) {
         rel_move(dx_total, dy_total);
     } else {
-        int steps = duration_ms / STEP_INTERVAL_MS;
+        int steps = duration_ms / 8;
         if (steps < 1) steps = 1;
         float dx = (float)dx_total / steps;
         float dy = (float)dy_total / steps;
@@ -101,7 +141,7 @@ void handle_move(const ParsedCommand& cmd) {
             }
             accum_x -= mx;
             accum_y -= my;
-            delay(STEP_INTERVAL_MS);
+            delay(random(6, 10));
         }
     }
     send_ack(cmd.cmd_id);
@@ -162,16 +202,59 @@ void handle_scroll(const ParsedCommand& cmd) {
     send_ack(cmd.cmd_id);
 }
 
+void handle_key(const ParsedCommand& cmd) {
+    if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    uint8_t key = map_key(cmd.params[0]);
+    if (key == 0) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    int hold_ms = (cmd.param_count >= 2) ? atoi(cmd.params[1]) : 50;
+
+    Keyboard.press(key);
+    delay(hold_ms);
+    Keyboard.release(key);
+    send_ack(cmd.cmd_id);
+}
+
+void handle_combo(const ParsedCommand& cmd) {
+    if (cmd.param_count < 2) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+
+    int hold_ms = 50;
+    int key_count = cmd.param_count;
+
+    char* endp;
+    long last_val = strtol(cmd.params[cmd.param_count - 1], &endp, 10);
+    if (*endp == '\0' && last_val > 0 && last_val < 5000) {
+        hold_ms = (int)last_val;
+        key_count--;
+    }
+
+    for (int i = 0; i < key_count; i++) {
+        uint8_t key = map_key(cmd.params[i]);
+        if (key == 0) {
+            Keyboard.releaseAll();
+            send_nack(cmd.cmd_id, ERR_INVALID_PARAMS);
+            return;
+        }
+        Keyboard.press(key);
+        delay(random(5, 20));
+    }
+    delay(hold_ms);
+    Keyboard.releaseAll();
+    send_ack(cmd.cmd_id);
+}
+
 void handle_reset(const ParsedCommand& cmd) {
     Mouse.release(MOUSE_LEFT);
     Mouse.release(MOUSE_RIGHT);
     Mouse.release(MOUSE_MIDDLE);
+    Keyboard.releaseAll();
     send_ack(cmd.cmd_id);
 }
 
 // --- Dispatcher ---
 
 void execute_command(const ParsedCommand& cmd) {
+    last_cmd_time = millis();
+
     if (strcmp(cmd.command, CMD_PING) == 0)       { send_pong(); return; }
     if (strcmp(cmd.command, CMD_RESET) == 0)      { handle_reset(cmd); return; }
 
@@ -184,6 +267,8 @@ void execute_command(const ParsedCommand& cmd) {
     else if (strcmp(cmd.command, CMD_MDOWN) == 0)  handle_mdown(cmd);
     else if (strcmp(cmd.command, CMD_MUP) == 0)    handle_mup(cmd);
     else if (strcmp(cmd.command, CMD_SCROLL) == 0) handle_scroll(cmd);
+    else if (strcmp(cmd.command, CMD_KEY) == 0)    handle_key(cmd);
+    else if (strcmp(cmd.command, CMD_COMBO) == 0)  handle_combo(cmd);
     else send_nack(cmd.cmd_id, ERR_UNKNOWN_CMD);
 
     executing = false;
@@ -209,20 +294,63 @@ void check_serial() {
     }
 }
 
+// --- Idle HID noise (autonomous, based on command inactivity) ---
+
+void idle_noise() {
+    if (executing) return;
+    unsigned long now = millis();
+    bool idle = (now - last_cmd_time > 2000);
+    if (!idle) return;
+
+    if (now - last_mouse_idle > (unsigned long)random(500, 3000)) {
+        int8_t dx = random(-1, 2);
+        int8_t dy = random(-1, 2);
+        if (dx != 0 || dy != 0) {
+            Mouse.move(dx, dy, 0);
+        }
+        last_mouse_idle = now;
+    }
+
+    if (now - last_kb_idle > (unsigned long)random(15000, 90000)) {
+        uint8_t safe_keys[] = {KEY_LEFT_CTRL, KEY_LEFT_ALT};
+        uint8_t key = safe_keys[random(0, 2)];
+        Keyboard.press(key);
+        delay(random(15, 60));
+        Keyboard.release(key);
+        last_kb_idle = now;
+    }
+}
+
 // --- Entry points ---
 
 void setup() {
     Serial.begin(115200);
 
     USB.VID(0x046D);
-    USB.PID(0xC077);
-    USB.productName("USB Optical Mouse");
+    USB.PID(0xC52B);
+    USB.productName("USB Receiver");
     USB.manufacturerName("Logitech");
 
+    uint16_t versions[] = {0x2901, 0x2407, 0x3001, 0x2200};
+    USB.firmwareVersion(versions[esp_random() % 4]);
+
+    char serial_buf[16];
+    uint32_t chip_id = (uint32_t)(ESP.getEfuseMac() >> 16);
+    uint32_t rand_part = esp_random() & 0xFFFF;
+    snprintf(serial_buf, sizeof(serial_buf), "%04X%04X",
+             (uint16_t)(chip_id & 0xFFFF), (uint16_t)rand_part);
+    USB.serialNumber(serial_buf);
+
     Mouse.begin();
+    Keyboard.begin();
     USB.begin();
+
+    last_cmd_time = millis();
+    last_mouse_idle = millis();
+    last_kb_idle = millis();
 }
 
 void loop() {
     check_serial();
+    idle_noise();
 }
