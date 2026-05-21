@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
 import logging
-import random
 import threading
 import time
 from collections import namedtuple
 
-import cv2
 import numpy as np
 import win32gui
 
@@ -98,57 +98,7 @@ class _WGCBackend:
 
 
 # ---------------------------------------------------------------------------
-# Backend: OBS WebSocket -- capture via OBS running instance
-# ---------------------------------------------------------------------------
-
-class _OBSBackend:
-    def __init__(self, host: str = "localhost", port: int = 4455, password: str = ""):
-        import obsws_python as obs
-        import base64
-        self._obs = obs
-        self._base64 = base64
-        self._client = obs.ReqClient(host=host, port=port, password=password)
-        self._source_name: str | None = None
-
-    def _find_game_source(self):
-        try:
-            scenes = self._client.get_scene_list()
-            for scene in scenes.scenes:
-                items = self._client.get_scene_item_list(scene["sceneName"])
-                for item in items.scene_items:
-                    name = item["sourceName"].lower()
-                    if any(k in name for k in ("rise", "rok", "game")):
-                        self._source_name = item["sourceName"]
-                        logger.info("OBS: found game source '%s'", self._source_name)
-                        return
-        except Exception as e:
-            logger.debug("OBS: failed to find game source: %s", e)
-
-    def grab(self, monitor: dict) -> np.ndarray | None:
-        if not self._source_name:
-            self._find_game_source()
-        if not self._source_name:
-            return None
-        try:
-            resp = self._client.get_source_screenshot(
-                name=self._source_name, img_format="png", width=0, height=0,
-            )
-            img_data = self._base64.b64decode(resp.image_data.split(",")[1])
-            arr = np.frombuffer(img_data, dtype=np.uint8)
-            return cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        except Exception as e:
-            logger.debug("OBS: grab failed: %s", e)
-            return None
-
-    def close(self):
-        try:
-            self._client.disconnect()
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------------------
-# ScreenCapture facade -- random backend switching for anti-detection
+# ScreenCapture facade -- WGC preferred, MSS fallback
 # ---------------------------------------------------------------------------
 
 class ScreenCapture:
@@ -158,45 +108,43 @@ class ScreenCapture:
         self._last_window_search: float = 0.0
         self._consecutive_failures: int = 0
 
-        self._backends: list[tuple[str, object]] = []
-        self._active: object | None = None
-        self._active_name: str = ""
-        self._switch_interval: float = random.uniform(300, 900)
-        self._last_switch: float = time.monotonic()
+        self._backend: object | None = None
+        self._backend_name: str = ""
 
-        self._init_backends()
+        self._init_backend()
 
-    def _init_backends(self):
-        for name, init_fn in [("wgc", self._try_wgc), ("obs", self._try_obs)]:
+    def _init_backend(self):
+        for name, init_fn in [("wgc", self._try_wgc), ("mss", self._try_mss)]:
             try:
                 backend = init_fn()
                 if backend:
-                    self._backends.append((name, backend))
-                    logger.info("Capture backend '%s' ready", name)
+                    self._backend = backend
+                    self._backend_name = name
+                    logger.info("Screen capture: %s", name)
+                    return
             except Exception as e:
                 logger.debug("Capture backend '%s' unavailable: %s", name, e)
 
-        if not self._backends:
-            logger.info("No WGC/OBS backend, falling back to mss (DXGI)")
-            self._backends.append(("mss", _MSSBackend()))
-
-        self._active_name, self._active = random.choice(self._backends)
-        available = [n for n, _ in self._backends]
-        logger.info("Screen capture: %s (available: %s)", self._active_name, available)
+        logger.error("No capture backend available")
 
     def _try_wgc(self):
         return _WGCBackend(self._title)
 
-    def _try_obs(self):
-        return _OBSBackend()
+    def _try_mss(self):
+        return _MSSBackend()
 
-    def _random_switch(self):
-        others = [(n, b) for n, b in self._backends if n != self._active_name]
-        if others:
-            self._active_name, self._active = random.choice(others)
-            self._switch_interval = random.uniform(300, 900)
-            self._last_switch = time.monotonic()
-            logger.info("Switched capture backend to: %s", self._active_name)
+    @staticmethod
+    def _get_visible_rect(hwnd) -> tuple[int, int, int, int] | None:
+        """Get visible window rect via DWM (excludes invisible shadow border)."""
+        DWMWA_EXTENDED_FRAME_BOUNDS = 9
+        rect = ctypes.wintypes.RECT()
+        hr = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+            ctypes.byref(rect), ctypes.sizeof(rect),
+        )
+        if hr == 0:
+            return rect.left, rect.top, rect.right, rect.bottom
+        return None
 
     def find_window(self) -> dict | None:
         result: dict | None = None
@@ -208,12 +156,17 @@ class ScreenCapture:
                     return
                 title = win32gui.GetWindowText(hwnd)
                 if self._title.lower() in title.lower():
-                    rect = win32gui.GetWindowRect(hwnd)
+                    vis = ScreenCapture._get_visible_rect(hwnd)
+                    if vis:
+                        left, top, right, bottom = vis
+                    else:
+                        r = win32gui.GetWindowRect(hwnd)
+                        left, top, right, bottom = r[0], r[1], r[2], r[3]
                     result = {
-                        "left": rect[0],
-                        "top": rect[1],
-                        "width": rect[2] - rect[0],
-                        "height": rect[3] - rect[1],
+                        "left": left,
+                        "top": top,
+                        "width": right - left,
+                        "height": bottom - top,
                     }
             except Exception:
                 pass
@@ -237,7 +190,14 @@ class ScreenCapture:
     def window(self) -> dict | None:
         return self._window
 
+    @property
+    def needs_window_rect(self) -> bool:
+        return self._backend_name != "wgc"
+
     def grab_full(self) -> np.ndarray | None:
+        if not self._backend:
+            return None
+
         if not self._window:
             now = time.monotonic()
             if now - self._last_window_search < WINDOW_RETRY_INTERVAL:
@@ -246,11 +206,6 @@ class ScreenCapture:
             if not self.find_window():
                 return None
 
-        if len(self._backends) > 1:
-            elapsed = time.monotonic() - self._last_switch
-            if elapsed > self._switch_interval:
-                self._random_switch()
-
         monitor = {
             "left": self._window["left"],
             "top": self._window["top"],
@@ -258,26 +213,34 @@ class ScreenCapture:
             "height": self._window["height"],
         }
 
-        frame = self._active.grab(monitor)
-        if frame is not None:
-            self._consecutive_failures = 0
-            return frame
-
-        self._consecutive_failures += 1
-        if len(self._backends) > 1:
-            self._random_switch()
-            frame = self._active.grab(monitor)
-            if frame is not None:
+        for _retry in range(6):
+            frame = self._backend.grab(monitor)
+            if frame is not None and not self._has_black_bars(frame):
                 self._consecutive_failures = 0
                 return frame
+            time.sleep(0.08)
 
+        self._consecutive_failures += 1
         if self._consecutive_failures >= 3:
-            logger.warning("Capture failed %d times, resetting backends",
+            logger.warning("Capture failed %d times, re-finding window",
                            self._consecutive_failures)
             self._window = None
             self._consecutive_failures = 0
 
         return None
+
+    @staticmethod
+    def _has_black_bars(frame: np.ndarray) -> bool:
+        gray = np.mean(frame, axis=2)
+        row_means = np.mean(gray, axis=1)
+        black_rows = row_means < 8
+        if np.sum(black_rows) > len(row_means) * 0.04:
+            return True
+        col_means = np.mean(gray, axis=0)
+        black_cols = col_means < 8
+        if np.sum(black_cols) > len(col_means) * 0.04:
+            return True
+        return False
 
     def grab_roi(self, roi: ROI) -> np.ndarray | None:
         frame = self.grab_full()
@@ -293,8 +256,8 @@ class ScreenCapture:
         return frame[y1:y2, x1:x2]
 
     def close(self):
-        for _, backend in self._backends:
+        if self._backend:
             try:
-                backend.close()
+                self._backend.close()
             except Exception:
                 pass

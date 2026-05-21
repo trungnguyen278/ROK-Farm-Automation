@@ -30,15 +30,19 @@
 
 | Command | Params | Example | Description |
 |---|---|---|---|
-| `MOVE` | x,y,duration_ms | `<12,MOVE,500,300,150>` | Move mouse to (x,y) over duration |
-| `CLICK` | button,hold_ms | `<13,CLICK,L,80>` | Click button (L/R/M) hold for ms |
-| `DCLICK` | button,gap_ms | `<14,DCLICK,L,95>` | Double click with gap between |
-| `DRAG` | x1,y1,x2,y2,dur_ms | `<15,DRAG,100,200,500,400,300>` | Drag from→to |
-| `SCROLL` | amount | `<16,SCROLL,-3>` | Scroll (negative=down) |
-| `KEY` | keycode,hold_ms | `<17,KEY,32,60>` | Press key (USB HID keycode) |
-| `COMBO` | mod,keycode | `<18,COMBO,1,4>` | Modifier+key (1=Ctrl, key=A) |
-| `PING` | — | `<0,PING>` | Heartbeat check |
-| `RESET` | — | `<1,RESET>` | Reset ESP32 state |
+| `MOVE` | dx,dy,duration_ms | `<12,MOVE,50,-30,150>` | Relative mouse move (delta px) over duration |
+| `MOVETO` | x,y | `<13,MOVETO,16383,16383>` | Absolute mouse move (0-32767 coords, maps to screen) |
+| `CLICK` | button,hold_ms | `<14,CLICK,L,80>` | Click button (L/R/M) hold for ms |
+| `DCLICK` | button,gap_ms | `<15,DCLICK,L,95>` | Double click with gap between |
+| `MDOWN` | button | `<16,MDOWN,L>` | Press mouse button (hold) |
+| `MUP` | button | `<17,MUP,L>` | Release mouse button |
+| `DRAG` | x1,y1,x2,y2,dur_ms | `<18,DRAG,5000,5000,20000,15000,300>` | Absolute drag from->to (0-32767 coords) |
+| `SCROLL` | amount | `<19,SCROLL,-3>` | Scroll (negative=down) |
+| `KEY` | name,hold_ms | `<20,KEY,ESC,60>` | Press key by name (ESC/TAB/SPACE/F1-F12/etc) |
+| `COMBO` | key1,key2,...,hold_ms | `<21,COMBO,ALT,TAB,100>` | Key combo (last numeric param = hold ms) |
+| `IDLE` | on_off | `<22,IDLE,1>` | Suppress idle HID noise (1=suppress, 0=resume) |
+| `PING` | — | `<0,PING>` | Heartbeat check (responds PONG) |
+| `RESET` | — | `<1,RESET>` | Release all buttons/keys, clear idle suppress |
 
 ## Responses
 

@@ -1,169 +1,158 @@
 # Anti-Detection Engine
 
-> **AI Note:** 4 file Python: mouse_humanizer (Bézier+jitter+overshoot), timing_engine (Gaussian delays), session_manager (farm/rest cycles + fatigue), profile_loader (JSON behavior sets). Mọi action phải qua engine trước khi gửi serial.
+> **Philosophy:** Farm fast when focused, alt-tab away between bursts. Game client cannot collect input data when window loses focus. Server only sees "player active -> player idle -> player active" — identical to millions of casual players who multitask between game and browser/Discord/YouTube.
 
-## Layer 1: Mouse Humanizer
+## Why Alt-Tab Works
+
+1. **Client-side blind spot:** When ROK window loses focus, the game client stops processing input events entirely. No mouse telemetry, no timing data, no behavioral fingerprint during idle periods.
+2. **Server sees nothing suspicious:** The server only knows "last action timestamp" vs "next action timestamp". A 3-minute gap looks identical whether the player alt-tabbed to Chrome or went to the kitchen.
+3. **Real player pattern:** Millions of ROK PC players multitask. Tab in, do some stuff quickly, tab out. This is the most common play pattern for casual farmers.
+4. **No statistical signature:** Delay-based anti-detection (Gaussian noise, fatigue curves, micro-pauses) creates detectable patterns because the noise itself has a distribution. Alt-tab creates zero data points during idle — there's nothing to analyze.
+
+## Architecture
+
+```
+[Active burst]                    [Idle - invisible to game]
+click-click-click (1-3 mines) -> ALT+TAB out -> wait 1.5-12 min -> ALT+TAB back -> repeat
+      ^                                                                    |
+      |                                                                    v
+  Fast, focused                                              Check reconnect popup
+  No artificial delays                                       Re-find game window
+  Real mouse paths (Bezier)                                  Maybe drag map (30%)
+```
+
+## Layer 1: Hardware HID (ESP32-S3)
+
+The bot sends commands via UART to an ESP32-S3 which emits real USB HID packets. The OS sees a genuine Logitech USB Receiver (VID=046D, PID=C52B). No driver hooks, no API calls — indistinguishable from a real mouse/keyboard at the OS level.
+
+```
+Python host -> UART (COM28) -> ESP32-S3 -> USB HID -> OS -> Game
+```
+
+## Layer 2: Screen Capture (WGC)
+
+Windows Graphics Capture API — the same API that Game Bar uses. Not flagged by any anti-cheat because it's a standard Windows feature. The game cannot detect that screenshots are being taken.
+
+## Layer 3: Mouse Humanizer
 
 ```python
 # anti_detection/mouse_humanizer.py
 class MouseHumanizer:
-    def __init__(self, profile: dict)
     def humanize_move(self, x1, y1, x2, y2) -> list[tuple[int,int,int]]
-        # Returns: [(x, y, duration_ms), ...] — path steps
     def humanize_click(self, x, y) -> tuple[int, int, int]
-        # Returns: (offset_x, offset_y, hold_ms)
-    def should_overshoot(self) -> bool       # ~15% chance
-    def should_misclick(self) -> bool        # ~1-2% chance
 ```
 
-### Bézier Curve Path
+Real mouse paths via Bezier curves with overshoot and jitter. Not for "looking human to a timing analyzer" — for looking human to a replay viewer. If a game master watches a session recording, the cursor should move naturally.
+
+- **Bezier curves:** 3-4 control points, ease-in-out speed profile
+- **Overshoot:** ~15% chance, 5-15px past target, then correct
+- **Click spread:** Gaussian offset +-8px from center
+- **Hold duration:** 50-150ms per click
+
+## Layer 4: Alt-Tab Burst Pattern
+
+The core anti-detection mechanism. Instead of adding artificial delays between actions, the bot works in fast bursts separated by real idle periods.
+
+### Burst Mining
 ```python
-# 3-4 control points, randomized
-P0 = (x1, y1)                          # start
-P1 = random_offset(midpoint, ±50px)    # control 1
-P2 = random_offset(midpoint, ±30px)    # control 2 (optional)
-P3 = (x2, y2)                          # end
+# Random 1-3 mines per burst, weighted
+burst_size = random.choices([1, 2, 3], weights=[60, 25, 15])[0]
 
-# Speed profile: ease-in-out
-# t: 0→1, speed = sin(t * pi) → slow at start/end, fast in middle
+# After each burst: alt-tab away
+_night_tab_away()   # ALT+TAB out, sleep 1.5-12 min
+_night_tab_back()   # ALT+TAB in, check reconnect, re-find window
 ```
 
-### Overshoot & Correction
-```python
-if should_overshoot():  # ~15%
-    overshoot_dist = gauss(10, 5)  # pixels past target
-    overshoot_angle = atan2(dy, dx) + gauss(0, 0.3)  # slight angle offset
-    # Move to overshoot point, pause 50-150ms, then correct to target
-```
-
-### Click Offset
-```python
-offset_x = gauss(0, click_spread)  # click_spread from profile, default ±8px
-offset_y = gauss(0, click_spread)
-hold_ms = uniform(50, 150)
-```
-
-## Layer 2: Timing Engine
-
-```python
-# anti_detection/timing_engine.py
-class TimingEngine:
-    def __init__(self, profile: dict)
-    def action_delay(self) -> float         # between actions (800-2000ms gaussian)
-    def micro_pause(self) -> float | None   # 2-5s, ~20% chance between action chains
-    def typing_delay(self) -> float         # between keystrokes (30-120ms)
-    def apply_fatigue(self, session_minutes: float) -> float  # multiplier 1.0→1.5
-```
-
-### Fatigue Model
-```python
-# After 20min: delays increase 10%
-# After 40min: delays increase 25%
-# After 60min: delays increase 50%
-fatigue_multiplier = 1.0 + 0.5 * min(session_minutes / 60, 1.0)
-```
-
-## Layer 3: Session Manager
-
-```python
-# anti_detection/session_manager.py
-class SessionManager:
-    def __init__(self, profile: dict)
-    def should_take_break(self) -> bool
-    def get_break_duration(self) -> float   # seconds
-    def should_stop_daily(self) -> bool
-    def get_idle_action(self) -> IdleAction | None  # random map pan, zoom
-    def session_stats(self) -> dict
-
-class IdleAction(Enum):
-    PAN_MAP = "pan_map"
-    ZOOM_IN = "zoom_in"
-    ZOOM_OUT = "zoom_out"
-    CHECK_ALLIANCE = "check_alliance"
-```
-
-### Session Patterns
-| Param | Range | Distribution |
+### Away Duration (scales with night progress)
+| Night Progress | Away Range | Avg |
 |---|---|---|
-| Farm duration | 15-40 min | Gaussian(25, 8) |
-| Break duration | 5-15 min | Gaussian(8, 3) |
-| Daily active hours | 4-10 hrs | From profile |
-| Active time window | 08:00-23:00 | From profile |
-| Idle action chance | 5-10% | Per action cycle |
+| Early (0-30%) | 90-240s | ~2.5 min |
+| Mid (30-70%) | 180-480s | ~5.5 min |
+| Late (70-100%) | 300-720s | ~8.5 min |
 
-## Layer 4: Profile System
+### Tab Back Sequence
+1. Send ALT+TAB (hold 50-120ms)
+2. Wait 1.5-3s for window focus
+3. Re-find game window handle
+4. Check for disconnect/reconnect popup (game drops connection during long idle)
+5. If popup found: dismiss, wait 2-4s for reconnection
+6. Optional: drag map slightly (30% chance) — simulates "looking around"
 
+### Focused-Play Delays (during active burst)
+All delays are minimal — simulating a player who knows exactly what they're doing:
+
+| Action | Delay | Note |
+|---|---|---|
+| After click | 0.15s | Just waiting for UI response |
+| After escape | 0.18s | Menu close animation |
+| After scroll | 0.30s | Map zoom animation |
+| Zoom in | 0.50s | Camera animation |
+| Mine click | 0.30s | Popup open |
+| Between mines | 1.0s | Quick context switch |
+| Verify template | 0.35s | Screen settle |
+
+No Gaussian noise on these — just `uniform(center * 0.8, center * 1.4)`. The variance is realistic for a focused player, not artificially inflated.
+
+## Layer 5: Night Schedule
+
+The bot runs on a night schedule with randomized start/stop times to avoid exact patterns.
+
+### Schedule Randomization
 ```python
-# anti_detection/profile_loader.py
-class ProfileLoader:
-    def __init__(self, profile_dir: str = "profiles/")
-    def load(self, name: str) -> dict
-    def load_random(self) -> dict
-    def list_profiles(self) -> list[str]
+class NightSchedule:
+    # Base times from profile (default: 01:00 - 07:00)
+    # Gaussian jitter per session: +/- 15-30 min
+    # Persistent day_drift: drifts by gauss(0, variance/3) each day, clamped
+    # Result: schedule varies 10-30 min day-to-day, never exact same time
 ```
 
-### Profile JSON Schema
+### Profile Night Mode Config
 ```json
-{
-  "name": "cautious",
-  "mouse": {
-    "bezier_control_points": 3,
-    "speed_base": 400,
-    "speed_variance": 150,
-    "overshoot_chance": 0.15,
-    "overshoot_distance": [5, 15],
-    "misclick_chance": 0.01,
-    "click_spread": 8,
-    "hold_ms": [50, 150],
-    "jitter_px": 2
-  },
-  "timing": {
-    "action_delay_mean": 1200,
-    "action_delay_std": 400,
-    "micro_pause_chance": 0.2,
-    "micro_pause_range": [2000, 5000],
-    "typing_delay": [30, 120]
-  },
-  "session": {
-    "farm_duration_mean": 25,
-    "farm_duration_std": 8,
-    "break_duration_mean": 8,
-    "break_duration_std": 3,
-    "daily_hours_max": 6,
-    "active_window": ["08:00", "23:00"],
-    "idle_action_chance": 0.08
-  }
+"night_mode": {
+    "bed_time": "01:00",
+    "wake_time": "07:00",
+    "stop_margin_min": 30,
+    "jitter_start_min": 20,
+    "jitter_stop_min": 15,
+    "day_variance_min": 10
 }
 ```
 
-### Preset Profiles
-| Profile | Style | Risk |
-|---|---|---|
-| `cautious.json` | Slow, many pauses, short sessions | Lowest |
-| `default.json` | Balanced | Medium |
-| `aggressive.json` | Fast, fewer breaks, long sessions | Higher |
+- `stop_margin_min`: Stop this many minutes before wake_time (buffer for shutdown)
+- `jitter_*_min`: Per-session random offset range
+- `day_variance_min`: Day-to-day drift range (persistent across sessions)
 
-## Integration Flow
-
+### Session Check
 ```python
-# In main decision loop:
-action = state_machine.next_action()
-if action:
-    # 1. Timing
-    delay = timing_engine.action_delay()
-    delay *= timing_engine.apply_fatigue(session.elapsed_minutes)
-    time.sleep(delay)
-    
-    # 2. Session check
-    if session_manager.should_take_break():
-        time.sleep(session_manager.get_break_duration())
-        return
-    
-    # 3. Humanize
-    if action.type == "click":
-        ox, oy, hold = humanizer.humanize_click(action.x, action.y)
-        path = humanizer.humanize_move(current_x, current_y, action.x + ox, action.y + oy)
-        for step in path:
-            serial.send("MOVE", step.x, step.y, step.duration)
-        serial.send("CLICK", "L", hold)
+def _check_session(self) -> str | None:
+    if self._night_schedule and not self._night_schedule.is_active_now():
+        return "stop_night"
+    return None
 ```
+
+When night schedule ends: ALT+TAB out and exit. No wind-down, no fake sleepiness — just stop.
+
+## What Was Removed (and Why)
+
+The original design had 4 software layers of delay-based anti-detection. These were removed because they create detectable statistical patterns rather than preventing detection:
+
+| Removed | Reason |
+|---|---|
+| Gaussian action delays (800-2000ms) | Creates detectable distribution; real focused players are faster |
+| Fatigue model (delays increase over time) | Artificial pattern; real players don't slow down linearly |
+| Session breaks (farm 25min, rest 8min) | Fixed-ratio pattern; alt-tab is more natural |
+| Daily hour limits | Unnecessary; night schedule already constrains runtime |
+| Idle actions (pan map, check alliance) | Purposeless actions are suspicious; focused play is normal |
+| Micro-pauses (2-5s random) | Detectable noise injection; real pauses are alt-tabs |
+| Typing delays | Not applicable; bot doesn't type |
+| Active time window | Replaced by night schedule |
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `anti_detection/mouse_humanizer.py` | Bezier paths, overshoot, click offset, jitter |
+| `anti_detection/timing_engine.py` | Minimal — `action_delay()`, `apply_fatigue()` kept for stats |
+| `anti_detection/session_manager.py` | `NightSchedule` (jitter+drift), `SessionManager` (stats only) |
+| `anti_detection/profile_loader.py` | Load JSON profile, deep merge defaults |
+| `profiles/*.json` | Mouse params + night_mode schedule per profile |

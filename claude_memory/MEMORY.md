@@ -1,0 +1,11 @@
+- [User Profile](user_profile.md) — Vietnamese dev building ROK automation with ESP32 HID + Python CV
+- [Project Overview](project_rok_overview.md) — Architecture, current status Phase 7, key files
+- [Gem Farm Flow](project_gem_farm_flow.md) — Full gem harvest flow, templates, thresholds, scan+verify pattern
+- [Gem Classifier](project_gem_classifier.md) — Phase 8: k-NN self-learning classifier for icon-zoom gem detection (replaces template+color for scan only)
+- [Docs-First Approach](feedback_docs_first.md) — User wants full docs before code, progress tracked via todo/plan
+- [Vibe Token Save](feedback_vibe_token_save.md) — Docs must be concise, self-contained specs optimized for LLM coding
+- [Run Tests Directly](feedback_run_tests.md) — Run test/debug commands in terminal instead of asking user
+- [Always Use Venv](feedback_venv.md) — pip/python commands must go through .venv, never global
+- [Unicode Windows](feedback_unicode_windows.md) — No Unicode arrows/em-dashes in print(), Windows cp1252 crashes
+- [No Guess Positions](feedback_no_guess_positions.md) — Never estimate UI positions from screenshots, ask user to capture
+- [No Inline Scripts](feedback_no_inline_scripts.md) — Long scripts must be written to file, not inline python -c

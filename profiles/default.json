@@ -2,14 +2,27 @@
   "name": "default",
   "mouse": {
     "bezier_control_points": 3,
-    "speed_base": 600,
-    "speed_variance": 225,
-    "overshoot_chance": 0.15,
-    "overshoot_distance": [5, 15],
-    "misclick_chance": 0.01,
-    "click_spread": 8,
-    "hold_ms": [50, 150],
-    "jitter_px": 2
+    "fitts_law": {
+      "slope": 1.11,
+      "intercept": 86.0,
+      "noise_pct": 0.18
+    },
+    "overshoot_chance": 0.18,
+    "overshoot_distance": [10, 55],
+    "misclick_chance": 0.003,
+    "click_spread": 2,
+    "hold_ms": [35, 90],
+    "jitter_px": 1,
+    "curve_spread": 0.27,
+    "micro_correction_chance": 0.47,
+    "micro_correction_steps": [2, 4],
+    "micro_correction_dist": [3, 12],
+    "trajectory_bank": "data/mouse_training/trajectory_bank.json",
+    "replay_chance": 0.85,
+    "mirror_chance": 0.12,
+    "blend_chance": 0.10,
+    "speed_sigma": 0.06,
+    "time_warp_range": [0.95, 1.05]
   },
   "timing": {
     "action_delay_mean": 1200,
@@ -33,8 +46,6 @@
     "stop_margin_min": 30,
     "jitter_start_min": 20,
     "jitter_stop_min": 15,
-    "day_variance_min": 10,
-    "transition_duration_min": 15,
-    "wind_down_duration_min": 20
+    "day_variance_min": 10
   }
 }

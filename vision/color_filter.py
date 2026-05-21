@@ -6,7 +6,8 @@ import numpy as np
 
 # --- Day/Night normalization ---
 # ROK map has a day/night cycle that shifts terrain brightness.
-# We sample terrain brightness and CLAHE-normalize when it's dark.
+# Linear V-scaling preserves pixel patterns for template matching.
+# (CLAHE distorts local contrast which breaks template matching.)
 NIGHT_BRIGHTNESS_THRESH = 90
 DAY_TARGET_BRIGHTNESS = 130
 
@@ -28,6 +29,7 @@ def normalize_frame(frame: np.ndarray) -> tuple[np.ndarray, bool]:
 
     Returns (normalized_frame, is_night).
     Day frames pass through unchanged.
+    Uses linear V-scaling (not CLAHE) to preserve template matching patterns.
     """
     brightness = estimate_terrain_brightness(frame)
     is_night = brightness < NIGHT_BRIGHTNESS_THRESH
@@ -38,13 +40,13 @@ def normalize_frame(frame: np.ndarray) -> tuple[np.ndarray, bool]:
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
 
-    scale = min(DAY_TARGET_BRIGHTNESS / max(brightness, 1.0), 2.5)
+    scale = min(DAY_TARGET_BRIGHTNESS / max(brightness, 1.0), 3.0)
     v_scaled = np.clip(v.astype(np.float32) * scale, 0, 255).astype(np.uint8)
 
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    v_eq = clahe.apply(v_scaled)
+    s_boost = min(1.0 + (1.0 - brightness / DAY_TARGET_BRIGHTNESS) * 0.4, 1.5)
+    s_scaled = np.clip(s.astype(np.float32) * s_boost, 0, 255).astype(np.uint8)
 
-    out = cv2.merge([h, s, v_eq])
+    out = cv2.merge([h, s_scaled, v_scaled])
     return cv2.cvtColor(out, cv2.COLOR_HSV2BGR), True
 
 
@@ -52,8 +54,8 @@ def normalize_frame(frame: np.ndarray) -> tuple[np.ndarray, bool]:
 # On alliance territory the map tint affects background but crystal keeps its color.
 GEM_HUE_MIN = 28
 GEM_HUE_MAX = 52
-GEM_SAT_MIN = 20
-GEM_VAL_MIN = 140
+GEM_SAT_MIN = 15
+GEM_VAL_MIN = 100
 
 # Crystal = top 60% of icon, center 60% width (excludes background edges)
 CRYSTAL_TOP_RATIO = 0.60
@@ -69,9 +71,9 @@ WHITE_SAT_MAX = 80
 
 # Fallback for red-territory gems: crystal stays bright, max hue reaches green range.
 # Wood max hue ~15, gold ~25, gem ~38 even when red-tinted.
-BRIGHT_PCT_THRESHOLD = 85.0
-BRIGHT_VAL_MIN = 160
-BRIGHT_HUE_MIN = 35
+BRIGHT_PCT_THRESHOLD = 70.0
+BRIGHT_VAL_MIN = 120
+BRIGHT_HUE_MIN = 30
 
 # Gold rejection: gold crystals have H 12-27 (yellow-orange range).
 # If gold pixels dominate over green, it's a gold mine icon, not gem.

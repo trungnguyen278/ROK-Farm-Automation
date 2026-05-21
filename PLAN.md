@@ -2,9 +2,10 @@
 
 > File này là **plan động**, cập nhật liên tục mỗi session. Docs cố định nằm trong `docs/`.
 
-## Current Phase: 8 — Gem Mine Detection Upgrade (in progress)
-**Started:** 2026-05-16  
-**Target:** k-NN self-learning classifier reduces false attempts on gem icon scan
+## Current Phase: 9 — Detection Accuracy + Popup Handling (in progress)
+**Started:** 2026-05-19  
+**Priority 1:** Improve gem icon detection accuracy (currently too many false attempts)  
+**Priority 2:** Handle unexpected popups/notifications when alt-tabbing back into game
 
 ## Progress
 
@@ -112,7 +113,7 @@
 
 ### Phase 7 — Action Execution Pipeline 🔄
 *(Ref: Dylan-Zheng/ROK-Bot, 4x-game-agent, OSROKBOT — xem plan file)*
-- [x] ESP32 firmware: `MOVETO` absolute mouse command (`USBHIDAbsoluteMouse`, coords 0-32767)
+- [x] ESP32 firmware: `MOVETO` absolute mouse command (`USBHIDAbsoluteMouse`, coords 0-32767) + `DRAG` (abs coords) + `IDLE` (suppress noise during alt-tab)
 - [x] Wire serial `CommandBuffer` from UI → Orchestrator (`main.py` + `ui/app.py`)
 - [x] `capture/screen_info.py` — screen resolution + `screen_to_hid()` coordinate mapping
 - [x] `logic/action_executor.py` — ActionExecutor thread: queue consumer + coordinate pipeline
@@ -128,7 +129,7 @@
 - [x] Handler: `_handle_heal_troops` — city → hospital → heal → Escape → city
 - [x] Handler: `_handle_gather_resource` — vision-scan approach: drag map → template match → click → gather → march → city
 - [x] Navigation helpers: `_navigate_to_city`, `_navigate_to_world_map`, `_click_at_window_relative`, `_press_escape`
-- [x] Scan helpers: `_scan_for_template` (drag map in 8 directions), `_drag_map` (MOVETO + DRAG command)
+- [x] Scan helpers: `_scan_for_template` (drag map in 8 directions), `_drag_map` (MDOWN + MOVE + MUP -- no DRAG/MOVETO in firmware)
 - [x] Template directories: `templates/buildings/`, `templates/search/`, `templates/resources/`
 - [x] Gem farming: `resource_type: "gem"` in `_handle_gather_resource` + `gem_farm` strategy
 - [x] Capture gem templates from live game: `resources/gem_mine_close.png` (conf=1.000), `resources/gem_mine.png`, `resources/gem_mine_red.png`
@@ -227,6 +228,10 @@
 | 2026-05-16 | k-NN classifier (HSV hist + HOG) for gem icon filtering | Template match + color filter not enough; all resource icons look similar at icon-zoom. k-NN learns from zoom-in verification results |
 | 2026-05-16 | Stale training data causes false rejections | 30 samples from previous session had mislabeled gems (zoom-in verify missed gem_mine_close). Must start fresh or verify patch labels before trusting classifier |
 | 2026-05-16 | Classifier confidence threshold 0.6 for rejection | Below 0.6 = uncertain, still click. Above 0.6 not_gem = skip. Cold start (<10 samples) = click everything |
+| 2026-05-19 | Anti-detection simplified: fast farm + alt-tab only | Delay-based anti-detection (Gaussian noise, fatigue, idle actions, session breaks) creates detectable statistical patterns. Alt-tab makes bot invisible to game client during idle. Server only sees normal casual-player activity gaps |
+| 2026-05-19 | Removed daytime mode, daily hour limits, active window | Single mode: burst 1-3 mines -> alt-tab away 1.5-12min -> tab back -> repeat. Night schedule with jitter/drift controls start/stop |
+| 2026-05-19 | Focused-player delays (60-70% shorter) | Real players who know what they're doing click fast. No Gaussian noise, just uniform(center*0.8, center*1.4) |
+| 2026-05-19 | Reconnect popup check on tab-back | Game disconnects during long alt-tab (>3min). _night_tab_back() checks and dismisses reconnect popup |
 
 ### Phase 8 — Gem Mine Detection Upgrade (k-NN Self-Learning Classifier)
 *(Thay the template matching + color filter o icon-zoom level -- qua nhieu false positive/negative)*
@@ -315,6 +320,59 @@ city -> world_map_city_btn -> zoom out 2x -> SCAN MAP -> click icon -> zoom veri
 - **Backward compatible** — khi classifier chua co data, flow hoat dong nhu cu
 - **Search button flow khong doi** — chi thay doi phan scan icons tren map
 - **Gather/march flow khong doi** — chi thay doi phan TRƯỚC khi click icon
+
+### Phase 8.5 — Anti-Detection Simplification ✅
+*(2026-05-19: Rewrite anti-detection from delay-based to alt-tab-based)*
+
+**Problem:** Delay-based anti-detection (Gaussian noise, fatigue curves, micro-pauses, idle actions, session breaks) creates detectable statistical patterns. Real players don't have Gaussian-distributed delays — they either act fast when focused or they're away.
+
+**Solution:** Single mode — fast focused farming + alt-tab as primary anti-detection. Game client can't collect data when window loses focus. Server only sees normal casual-player gaps.
+
+#### Changes
+- [x] Removed all artificial delays, fatigue model, micro-pauses, idle actions, session breaks
+- [x] Removed daytime mode, daily hour limits, active_window enforcement
+- [x] Simplified `_wait()` to `uniform(center * 0.8, center * 1.4)` — no noise injection
+- [x] Burst mining: 1-3 mines (weighted 60/25/15) -> alt-tab away 1.5-12min -> tab back
+- [x] Away duration scales with night progress (early: 90-240s, mid: 180-480s, late: 300-720s)
+- [x] Tab-back sequence: ALT+TAB -> re-find window -> check reconnect popup -> optional map drag
+- [x] Night schedule with jitter/drift still controls start/stop times
+- [x] Removed ~15 dead methods from `test_gem_farm_flow.py`
+- [x] Removed `apply_night_fatigue()`, `night_micro_pause()`, `should_micro_sleep()` from timing_engine
+- [x] Removed wind-down, transition, idle action enums from session_manager
+- [x] Updated `docs/anti-detection.md` to reflect new approach
+- [x] All delay constants cut 60-70% for focused-player speed
+- [x] Profiles: removed `transition_duration_min`, `wind_down_duration_min` from night_mode
+
+#### Files Changed
+| File | Change |
+|---|---|
+| `tools/test_gem_farm_flow.py` | Major simplification: single mode, burst+alt-tab, removed dead code |
+| `anti_detection/timing_engine.py` | Removed night fatigue/micro-pause/micro-sleep methods |
+| `anti_detection/session_manager.py` | Removed wind-down, transition; NightSchedule simplified |
+| `profiles/default.json` | Removed transition/wind-down from night_mode |
+| `profiles/cautious.json` | Same |
+| `profiles/aggressive.json` | Same |
+| `docs/anti-detection.md` | Complete rewrite: alt-tab approach |
+
+### Phase 9 — Detection Accuracy + Popup Handling 🔄
+*(Current focus)*
+
+**Priority 1: Improve gem icon detection**
+- k-NN classifier (Phase 8) helps but accuracy still needs improvement
+- Too many false attempts: click non-gem icon -> zoom in -> not gem -> zoom out -> repeat
+- Need more training data and/or better feature extraction
+
+**Priority 2: Handle unexpected popups on tab-back**
+- Current: only handles reconnect popup
+- Need: dismiss alliance notifications, event popups, mail alerts, system messages
+- These appear when game regains focus after long alt-tab
+
+#### Implementation Steps
+- [ ] **9.1** Catalog all popup types that appear on tab-back (screenshots from live sessions)
+- [ ] **9.2** Capture templates for each popup type (close buttons, dismiss areas)
+- [ ] **9.3** Generic popup dismissal in `_night_tab_back()`: scan for known close buttons, Escape fallback
+- [ ] **9.4** Improve gem classifier: more training samples, feature tuning, accuracy target >90%
+- [ ] **9.5** Live test: overnight run with popup handling + improved detection
 
 ---
 

@@ -4,14 +4,18 @@
 #include "USBHIDKeyboard.h"
 #include "commands.h"
 USBHIDMouse Mouse;
+USBHIDAbsoluteMouse AbsMouse;
 USBHIDKeyboard Keyboard;
 
 static char line_buf[MAX_LINE_LEN];
 static int line_pos = 0;
 static bool executing = false;
+static bool idle_suppressed = false;
 static unsigned long last_cmd_time = 0;
 static unsigned long last_mouse_idle = 0;
-static unsigned long last_kb_idle = 0;
+
+static PathPoint path_buf[MAX_PATH_POINTS];
+static int path_len = 0;
 
 void send_ack(int cmd_id) {
     Serial.printf("<%d,%s>\n", cmd_id, RSP_ACK);
@@ -242,11 +246,103 @@ void handle_combo(const ParsedCommand& cmd) {
     send_ack(cmd.cmd_id);
 }
 
+void handle_moveto(const ParsedCommand& cmd) {
+    if (cmd.param_count < 2) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    int x = atoi(cmd.params[0]);
+    int y = atoi(cmd.params[1]);
+    x = constrain(x, 0, 32767);
+    y = constrain(y, 0, 32767);
+    AbsMouse.move(x, y);
+    send_ack(cmd.cmd_id);
+}
+
+void handle_drag(const ParsedCommand& cmd) {
+    if (cmd.param_count < 4) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    int x1 = constrain(atoi(cmd.params[0]), 0, 32767);
+    int y1 = constrain(atoi(cmd.params[1]), 0, 32767);
+    int x2 = constrain(atoi(cmd.params[2]), 0, 32767);
+    int y2 = constrain(atoi(cmd.params[3]), 0, 32767);
+    int dur_ms = (cmd.param_count >= 5) ? atoi(cmd.params[4]) : 200;
+
+    AbsMouse.move(x1, y1);
+    delay(random(30, 60));
+    Mouse.press(MOUSE_LEFT);
+    delay(random(20, 50));
+
+    int steps = max(1, dur_ms / 10);
+    float dx = (float)(x2 - x1) / steps;
+    float dy = (float)(y2 - y1) / steps;
+    float cx = x1, cy = y1;
+    for (int i = 0; i < steps; i++) {
+        cx += dx;
+        cy += dy;
+        AbsMouse.move(constrain((int)cx, 0, 32767), constrain((int)cy, 0, 32767));
+        delay(random(8, 12));
+    }
+    AbsMouse.move(x2, y2);
+    delay(random(20, 50));
+    Mouse.release(MOUSE_LEFT);
+    send_ack(cmd.cmd_id);
+}
+
+void handle_idle(const ParsedCommand& cmd) {
+    if (cmd.param_count < 1) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    idle_suppressed = (atoi(cmd.params[0]) == 1);
+    send_ack(cmd.cmd_id);
+}
+
+void handle_path_clr(const ParsedCommand& cmd) {
+    path_len = 0;
+    send_ack(cmd.cmd_id);
+}
+
+void handle_path_pt(const ParsedCommand& cmd) {
+    if (cmd.param_count < 3) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    if (path_len >= MAX_PATH_POINTS) { send_nack(cmd.cmd_id, ERR_PATH_FULL); return; }
+    path_buf[path_len].x = constrain(atoi(cmd.params[0]), 0, 32767);
+    path_buf[path_len].y = constrain(atoi(cmd.params[1]), 0, 32767);
+    path_buf[path_len].delay_ms = constrain(atoi(cmd.params[2]), 0, 255);
+    path_len++;
+    send_ack(cmd.cmd_id);
+}
+
+void execute_path() {
+    for (int i = 0; i < path_len; i++) {
+        AbsMouse.move(path_buf[i].x, path_buf[i].y);
+        if (path_buf[i].delay_ms > 0) {
+            int jitter = (path_buf[i].delay_ms > 4) ? random(-2, 3) : 0;
+            delay(max(1, path_buf[i].delay_ms + jitter));
+        }
+    }
+}
+
+void handle_path_go(const ParsedCommand& cmd) {
+    if (path_len == 0) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    execute_path();
+    path_len = 0;
+    send_ack(cmd.cmd_id);
+}
+
+void handle_path_drag(const ParsedCommand& cmd) {
+    if (path_len == 0) { send_nack(cmd.cmd_id, ERR_INVALID_PARAMS); return; }
+    // Move to first point, press, execute path, release
+    AbsMouse.move(path_buf[0].x, path_buf[0].y);
+    delay(random(20, 40));
+    Mouse.press(MOUSE_LEFT);
+    delay(random(10, 25));
+    execute_path();
+    delay(random(10, 25));
+    Mouse.release(MOUSE_LEFT);
+    path_len = 0;
+    send_ack(cmd.cmd_id);
+}
+
 void handle_reset(const ParsedCommand& cmd) {
     Mouse.release(MOUSE_LEFT);
     Mouse.release(MOUSE_RIGHT);
     Mouse.release(MOUSE_MIDDLE);
     Keyboard.releaseAll();
+    idle_suppressed = false;
     send_ack(cmd.cmd_id);
 }
 
@@ -257,18 +353,25 @@ void execute_command(const ParsedCommand& cmd) {
 
     if (strcmp(cmd.command, CMD_PING) == 0)       { send_pong(); return; }
     if (strcmp(cmd.command, CMD_RESET) == 0)      { handle_reset(cmd); return; }
+    if (strcmp(cmd.command, CMD_IDLE) == 0)       { handle_idle(cmd); return; }
+    if (strcmp(cmd.command, CMD_PATH_CLR) == 0)   { handle_path_clr(cmd); return; }
+    if (strcmp(cmd.command, CMD_PATH_PT) == 0)    { handle_path_pt(cmd); return; }
 
     if (executing) { send_nack(cmd.cmd_id, ERR_BUSY); return; }
     executing = true;
 
-    if      (strcmp(cmd.command, CMD_MOVE) == 0)   handle_move(cmd);
-    else if (strcmp(cmd.command, CMD_CLICK) == 0)  handle_click(cmd);
-    else if (strcmp(cmd.command, CMD_DCLICK) == 0) handle_dclick(cmd);
-    else if (strcmp(cmd.command, CMD_MDOWN) == 0)  handle_mdown(cmd);
-    else if (strcmp(cmd.command, CMD_MUP) == 0)    handle_mup(cmd);
-    else if (strcmp(cmd.command, CMD_SCROLL) == 0) handle_scroll(cmd);
-    else if (strcmp(cmd.command, CMD_KEY) == 0)    handle_key(cmd);
-    else if (strcmp(cmd.command, CMD_COMBO) == 0)  handle_combo(cmd);
+    if      (strcmp(cmd.command, CMD_MOVE) == 0)       handle_move(cmd);
+    else if (strcmp(cmd.command, CMD_MOVETO) == 0)     handle_moveto(cmd);
+    else if (strcmp(cmd.command, CMD_CLICK) == 0)      handle_click(cmd);
+    else if (strcmp(cmd.command, CMD_DCLICK) == 0)     handle_dclick(cmd);
+    else if (strcmp(cmd.command, CMD_DRAG) == 0)       handle_drag(cmd);
+    else if (strcmp(cmd.command, CMD_MDOWN) == 0)      handle_mdown(cmd);
+    else if (strcmp(cmd.command, CMD_MUP) == 0)        handle_mup(cmd);
+    else if (strcmp(cmd.command, CMD_SCROLL) == 0)     handle_scroll(cmd);
+    else if (strcmp(cmd.command, CMD_KEY) == 0)        handle_key(cmd);
+    else if (strcmp(cmd.command, CMD_COMBO) == 0)      handle_combo(cmd);
+    else if (strcmp(cmd.command, CMD_PATH_GO) == 0)    handle_path_go(cmd);
+    else if (strcmp(cmd.command, CMD_PATH_DRAG) == 0)  handle_path_drag(cmd);
     else send_nack(cmd.cmd_id, ERR_UNKNOWN_CMD);
 
     executing = false;
@@ -297,7 +400,7 @@ void check_serial() {
 // --- Idle HID noise (autonomous, based on command inactivity) ---
 
 void idle_noise() {
-    if (executing) return;
+    if (executing || idle_suppressed) return;
     unsigned long now = millis();
     bool idle = (now - last_cmd_time > 2000);
     if (!idle) return;
@@ -309,15 +412,6 @@ void idle_noise() {
             Mouse.move(dx, dy, 0);
         }
         last_mouse_idle = now;
-    }
-
-    if (now - last_kb_idle > (unsigned long)random(15000, 90000)) {
-        uint8_t safe_keys[] = {KEY_LEFT_CTRL, KEY_LEFT_ALT};
-        uint8_t key = safe_keys[random(0, 2)];
-        Keyboard.press(key);
-        delay(random(15, 60));
-        Keyboard.release(key);
-        last_kb_idle = now;
     }
 }
 
@@ -342,12 +436,12 @@ void setup() {
     USB.serialNumber(serial_buf);
 
     Mouse.begin();
+    AbsMouse.begin();
     Keyboard.begin();
     USB.begin();
 
     last_cmd_time = millis();
     last_mouse_idle = millis();
-    last_kb_idle = millis();
 }
 
 void loop() {

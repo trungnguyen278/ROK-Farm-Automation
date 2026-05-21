@@ -11,6 +11,13 @@
 #define CMD_RESET  "RESET"
 #define CMD_KEY    "KEY"
 #define CMD_COMBO  "COMBO"
+#define CMD_IDLE   "IDLE"
+#define CMD_MOVETO "MOVETO"
+#define CMD_DRAG   "DRAG"
+#define CMD_PATH_CLR  "PCLR"
+#define CMD_PATH_PT   "PPT"
+#define CMD_PATH_GO   "PGO"
+#define CMD_PATH_DRAG "PDRAG"
 
 #define RSP_ACK  "ACK"
 #define RSP_NACK "NACK"
@@ -19,10 +26,19 @@
 #define ERR_UNKNOWN_CMD    1
 #define ERR_INVALID_PARAMS 2
 #define ERR_BUSY           3
+#define ERR_PATH_FULL      4
 
 #define MAX_PARAMS         8
 #define MAX_PARAM_LEN      16
 #define MAX_LINE_LEN       128
+
+#define MAX_PATH_POINTS    128
+
+struct PathPoint {
+    int16_t x;
+    int16_t y;
+    uint8_t delay_ms;
+};
 
 #define BTN_LEFT   'L'
 #define BTN_RIGHT  'R'

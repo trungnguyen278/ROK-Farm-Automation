@@ -12,9 +12,6 @@ class IdleAction(Enum):
     ZOOM_OUT = "zoom_out"
     CHECK_ALLIANCE = "check_alliance"
     ALT_TAB = "alt_tab"
-    PHONE_CHECK = "phone_check"
-    DROWSY_STARE = "drowsy_stare"
-    BATHROOM_BREAK = "bathroom_break"
 
 
 class NightSchedule:
@@ -25,12 +22,9 @@ class NightSchedule:
         self._jitter_start_min = config.get("jitter_start_min", 20)
         self._jitter_stop_min = config.get("jitter_stop_min", 15)
         self._day_variance_min = config.get("day_variance_min", 10)
-        self.transition_duration_min = config.get("transition_duration_min", 15)
-        self.wind_down_duration_min = config.get("wind_down_duration_min", 20)
 
         self._actual_start: datetime | None = None
         self._actual_stop: datetime | None = None
-        self._wind_down_start: datetime | None = None
 
     def compute_tonight(self, day_drift: float = 0.0) -> dict:
         now = datetime.now()
@@ -54,18 +48,13 @@ class NightSchedule:
         self._actual_start = bed_base + timedelta(minutes=day_drift + start_jitter)
         raw_stop = wake_base - timedelta(minutes=self._stop_margin_min)
         self._actual_stop = raw_stop + timedelta(minutes=day_drift * 0.5 + stop_jitter)
-        self._wind_down_start = self._actual_stop - timedelta(
-            minutes=self.wind_down_duration_min)
 
         if self._actual_stop <= self._actual_start:
             self._actual_stop = self._actual_start + timedelta(hours=3)
-            self._wind_down_start = self._actual_stop - timedelta(
-                minutes=self.wind_down_duration_min)
 
         return {
             "actual_start": self._actual_start,
             "actual_stop": self._actual_stop,
-            "wind_down_start": self._wind_down_start,
         }
 
     def is_active_now(self) -> bool:
@@ -73,12 +62,6 @@ class NightSchedule:
             return False
         now = datetime.now()
         return self._actual_start <= now <= self._actual_stop
-
-    def is_wind_down(self) -> bool:
-        if self._wind_down_start is None or self._actual_stop is None:
-            return False
-        now = datetime.now()
-        return self._wind_down_start <= now <= self._actual_stop
 
     def time_progress(self) -> float:
         if self._actual_start is None or self._actual_stop is None:
@@ -101,7 +84,6 @@ class NightSchedule:
         return {
             "start": self._actual_start.strftime(fmt) if self._actual_start else "?",
             "stop": self._actual_stop.strftime(fmt) if self._actual_stop else "?",
-            "wind_down": self._wind_down_start.strftime(fmt) if self._wind_down_start else "?",
         }
 
     @staticmethod
@@ -163,10 +145,15 @@ class SessionManager:
             return True
         return not self._in_active_window()
 
+    _DAY_IDLE_ACTIONS = [
+        IdleAction.PAN_MAP, IdleAction.ZOOM_IN, IdleAction.ZOOM_OUT,
+        IdleAction.CHECK_ALLIANCE, IdleAction.ALT_TAB,
+    ]
+
     def get_idle_action(self) -> IdleAction | None:
         if random.random() >= self._idle_chance:
             return None
-        return random.choice(list(IdleAction))
+        return random.choice(self._DAY_IDLE_ACTIONS)
 
     def record_action(self):
         self._action_count += 1

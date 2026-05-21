@@ -30,11 +30,14 @@ esp32-s3/.vscode/
 config.yaml
 profiles/*.json
 !profiles/default.json
-templates/*.png
 logs/
 
-# Claude
+# Claude (local session data, not memory)
 .claude/
 
+# Large/debug files - skip for git
+screenshots/
 tools/screenshots/
-data/gem_patches/
+
+# Template images tracked via git LFS or directly
+# (subdirectories like templates/buttons/, templates/ui/ are tracked)

@@ -56,6 +56,22 @@ class CommandBuffer:
         except Exception:
             logger.warning("Command queue full, dropping: %s", cmd)
 
+    def send_path(self, waypoints: list[tuple[int, int, int]],
+                  drag: bool = False, timeout: float = 15.0) -> bool:
+        """Send a trajectory to ESP32 for hardware-timed execution.
+
+        waypoints: list of (hid_x, hid_y, delay_ms) in absolute HID coords.
+        drag: if True, ESP32 does MDOWN before path and MUP after.
+        Returns True if all commands succeeded.
+        """
+        if not self.send("PCLR"):
+            return False
+        for hx, hy, ms in waypoints:
+            if not self.send("PPT", hx, hy, min(ms, 255)):
+                return False
+        cmd = "PDRAG" if drag else "PGO"
+        return self.send(cmd, timeout=timeout)
+
     def _worker_loop(self):
         while self._running.is_set():
             try:

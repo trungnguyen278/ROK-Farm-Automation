@@ -6,6 +6,7 @@
 3. **Task phát sinh:** Thêm vào bảng Ad-hoc Tasks trong `PLAN.md`
 4. **Khi code:** Chỉ cần đọc doc liên quan đến module đang code (xem Docs Index bên dưới), không đọc hết
 5. **Ngôn ngữ:** Giao tiếp tiếng Việt, code + comments tiếng Anh
+6. **UI positions:** KHÔNG estimate tọa độ nút bấm từ screenshot. Nếu cần template/position cho bất kỳ nút nào → yêu cầu user chụp screenshot và cung cấp
 
 ## What is this
 Automation tool for Rise of Kingdoms (PC). Python host does screen capture + OpenCV vision + decision logic, sends commands via Serial to ESP32-S3 which emits real USB HID (mouse/keyboard). OS sees a real input device → undetectable at driver level.
@@ -86,6 +87,18 @@ Baud: 115200 | Heartbeat: PING every 2s
 - Comms: All serial commands are text-based, newline-terminated
 - Threading: queue.Queue for inter-thread, threading.Event for signals
 - Error: Auto-reconnect serial, retry 3x with backoff, idle on unknown state
+
+## Template Images (templates/)
+UI action code uses `cv2.matchTemplate` on these. If adding a new action that clicks a game UI element, ask user to capture the template.
+```
+buttons/city_btn.png               — world map city button
+ui/mail_tab_personal.png           — mail tab "CA NHAN"
+ui/mail_tab_reports.png            — mail tab "BAO CAO"
+ui/mail_tab_alliance.png           — mail tab "LIEN MINH"
+ui/mail_tab_system.png             — mail tab "HE THONG"
+ui/mail_read_all_btn.png           — "Doc va nhan tat" button
+ui/mail_close_btn.png              — mail panel X close button
+```
 
 ## Docs Index
 - [docs/architecture.md](docs/architecture.md) — system design, threads, module map
