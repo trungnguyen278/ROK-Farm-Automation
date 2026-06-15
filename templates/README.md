@@ -1,21 +1,18 @@
 # Templates
 
-Place game screenshot templates here. PNG format, BGR color.
+OpenCV templates used by `tools/test_gem_farm_flow.py`.
 
 ## Directory Structure
 
-```
+```text
 templates/
-├── buttons/       # ok.png, cancel.png, attack.png, ...
-├── popups/        # march_confirm.png, scout_report.png, ...
-├── states/        # city_view.png, world_map.png, ...
-└── resources/     # food_icon.png, wood_icon.png, ...
+buttons/    # gather, march, city/world-map buttons
+resources/  # gem icon and gem mine templates
+states/     # city/world-map state hints
+ui/         # close/reconnect/mail/alliance templates used by popup handling
 ```
 
-## How to Capture
+## Capture
 
-1. Open ROK on PC
-2. Navigate to target screen/state
-3. Use Snipping Tool or similar to crop the unique UI element
-4. Save as PNG in the appropriate subdirectory
-5. Name should match the template_name used in code (e.g., `states/city_view.png`)
+Use `tools/capture_templates.py` when you need to recapture a stable UI element.
+Template names are referenced without `.png`, for example `buttons/gather_btn`.

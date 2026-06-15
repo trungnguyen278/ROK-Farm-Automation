@@ -27,6 +27,7 @@ class CommandBuffer:
         self._queue: Queue[PendingCommand] = Queue(maxsize=QUEUE_MAX)
         self._worker: threading.Thread | None = None
         self._running = threading.Event()
+        self._pending_path_ms = 0
 
     def start(self):
         if self._worker and self._worker.is_alive():
@@ -66,11 +67,18 @@ class CommandBuffer:
         """
         if not self.send("PCLR"):
             return False
+        total_ms = 0
         for hx, hy, ms in waypoints:
-            if not self.send("PPT", hx, hy, min(ms, 255)):
+            clamped = min(ms, 255)
+            if not self.send("PPT", hx, hy, clamped):
                 return False
+            total_ms += clamped
         cmd = "PDRAG" if drag else "PGO"
-        return self.send(cmd, timeout=timeout)
+        # Store total path duration so _ack_timeout_for can use it
+        self._pending_path_ms = total_ms
+        result = self.send(cmd, timeout=timeout)
+        self._pending_path_ms = 0
+        return result
 
     def _worker_loop(self):
         while self._running.is_set():
@@ -83,15 +91,18 @@ class CommandBuffer:
             pending.result.set()
 
     def _ack_timeout_for(self, cmd: str, params: tuple) -> float:
-        """Dynamic ACK timeout: DRAG/MOVE with duration need longer waits."""
+        """Dynamic ACK timeout: DRAG/MOVE with duration need longer waits.
+        PGO/PDRAG block ESP32 for entire path duration before ACK."""
         base = ACK_TIMEOUT
         if cmd == "MOVE":
-            # Last numeric param is often duration_ms
             try:
                 duration_ms = int(params[-1]) if params else 0
-                base += duration_ms / 1000.0 + 0.2  # duration + margin
+                base += duration_ms / 1000.0 + 0.2
             except (ValueError, IndexError):
                 base += 1.0
+        elif cmd in ("PGO", "PDRAG"):
+            path_ms = getattr(self, "_pending_path_ms", 0)
+            base += path_ms / 1000.0 + 1.0
         return base
 
     def _execute_with_retry(self, pending: PendingCommand):

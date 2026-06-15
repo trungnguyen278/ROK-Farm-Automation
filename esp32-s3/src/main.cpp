@@ -307,12 +307,41 @@ void handle_path_pt(const ParsedCommand& cmd) {
 }
 
 void execute_path() {
-    for (int i = 0; i < path_len; i++) {
-        AbsMouse.move(path_buf[i].x, path_buf[i].y);
-        if (path_buf[i].delay_ms > 0) {
-            int jitter = (path_buf[i].delay_ms > 4) ? random(-2, 3) : 0;
-            delay(max(1, path_buf[i].delay_ms + jitter));
+    if (path_len == 0) return;
+
+    // Anchor at the first waypoint (it sits very close to the true start
+    // because the host's velocity profile ramps up slowly).
+    AbsMouse.move(path_buf[0].x, path_buf[0].y);
+    int prev_x = path_buf[0].x;
+    int prev_y = path_buf[0].y;
+    if (path_buf[0].delay_ms > 0) delay(path_buf[0].delay_ms);
+
+    // For each waypoint, interpolate sub-steps at ~PATH_STEP_MS cadence over
+    // its travel time. The host already spaced the waypoints along a smooth
+    // acceleration profile (sparse in the fast middle, dense at the ends), so
+    // linear sub-steps here reproduce that velocity envelope as continuous
+    // motion -- no teleport, no per-waypoint pause.
+    for (int i = 1; i < path_len; i++) {
+        int tx = path_buf[i].x;
+        int ty = path_buf[i].y;
+        int travel = path_buf[i].delay_ms;
+
+        if (tx == prev_x && ty == prev_y) {
+            // Same position => intentional dwell (mid-pause / overshoot hold)
+            if (travel > 0) delay(travel);
+            continue;
         }
+
+        int n = travel / PATH_STEP_MS;
+        if (n < 1) n = 1;
+        for (int k = 1; k <= n; k++) {
+            int ix = prev_x + (int)(((long)(tx - prev_x) * k) / n);
+            int iy = prev_y + (int)(((long)(ty - prev_y) * k) / n);
+            AbsMouse.move(constrain(ix, 0, 32767), constrain(iy, 0, 32767));
+            delay(max(1, PATH_STEP_MS + (int)random(-1, 2)));
+        }
+        prev_x = tx;
+        prev_y = ty;
     }
 }
 

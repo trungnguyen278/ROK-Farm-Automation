@@ -1,4 +1,4 @@
-"""
+r"""
 Gem Farm Flow -- E2E Test via ESP32 HID
 
 Flow per mine:
@@ -175,6 +175,7 @@ class GemFarmFlowTest:
         self._night_logged = False
         self._raw_frame: np.ndarray | None = None
         self._has_moveto = False
+        self._mouse_scale = 1.0
 
         loader = ProfileLoader()
         self._profile = loader.load_random() if loader.list_profiles() else DEFAULT_PROFILE.copy()
@@ -527,13 +528,16 @@ class GemFarmFlowTest:
         return False
 
     def _attempt_recovery(self):
-        """Try to recover from stuck state by dismissing popups."""
-        self._press_escape()
+        """Try to recover from stuck state by dismissing popups.
+        Click empty map area instead of ESC (ESC opens profile when nothing is open)."""
+        rx = random.uniform(0.82, 0.92)
+        ry = random.uniform(0.35, 0.55)
+        self._click_pct(rx, ry, jitter_px=8)
         time.sleep(random.uniform(0.5, 1.0))
         cx, cy = self._center_screen()
         self._click(cx, cy)
         time.sleep(random.uniform(0.5, 1.0))
-        self._press_escape()
+        self._click_pct(random.uniform(0.82, 0.92), random.uniform(0.35, 0.55), jitter_px=8)
         time.sleep(random.uniform(1.0, 2.0))
         if self._check_reconnect_popup():
             print(f"  [{WARN}] Recovery: dismissed reconnect popup")
@@ -601,17 +605,46 @@ class GemFarmFlowTest:
                            cx, cy, target_sx, target_sy, err)
         return ok
 
+    def _calibrate_mouse_scale(self) -> float:
+        """Measure Windows mouse acceleration by sending known MOVE deltas."""
+        scales = []
+        for test_dx in [80, -80, 120, -120]:
+            time.sleep(0.15)
+            bx, _ = get_cursor_pos()
+            self.cmd.send("MOVE", test_dx, 0, 50)
+            time.sleep(0.15)
+            ax, _ = get_cursor_pos()
+            actual = ax - bx
+            if abs(test_dx) > 5 and abs(actual) > 5:
+                scales.append(actual / test_dx)
+        for test_dy in [80, -80]:
+            time.sleep(0.15)
+            _, by = get_cursor_pos()
+            self.cmd.send("MOVE", 0, test_dy, 50)
+            time.sleep(0.15)
+            _, ay = get_cursor_pos()
+            actual = ay - by
+            if abs(test_dy) > 5 and abs(actual) > 5:
+                scales.append(actual / test_dy)
+        if scales:
+            avg = sum(abs(s) for s in scales) / len(scales)
+            return max(0.5, min(3.0, avg))
+        return 1.0
+
     def _restore_cursor_to_window(self):
         """Move cursor back to game window center using relative MOVE with correction."""
         tx = self.win["left"] + self.win["width"] // 2
         ty = self.win["top"] + self.win["height"] // 2
+        sc = self._mouse_scale
         for _ in range(5):
             cx, cy = get_cursor_pos()
             dx, dy = tx - cx, ty - cy
             if abs(dx) <= 5 and abs(dy) <= 5:
                 break
-            dur = max(abs(dx), abs(dy)) * 2
-            self.cmd.send("MOVE", dx, dy, max(dur, 50))
+            send_dx = int(dx / sc) if sc != 1.0 else dx
+            send_dy = int(dy / sc) if sc != 1.0 else dy
+            dur = max(abs(send_dx), abs(send_dy)) * 2
+            self.cmd.send("MOVE", send_dx, send_dy, max(dur, 50))
             time.sleep(0.15)
 
     def _path_to_hid(self, path: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
@@ -649,30 +682,36 @@ class GemFarmFlowTest:
         if abs(dx) < 3 and abs(dy) < 3:
             return True
 
+        # The humanizer already shapes the velocity envelope (accel -> cruise
+        # -> decel); don't re-time the path here or it distorts that profile.
         path = self.humanizer.humanize_move(cur_x, cur_y, sx, sy)
-        path = self._apply_easing(path, "in_out")
 
         if self._has_moveto:
-            waypoints = self._path_to_hid(path)
+            waypoints = self._path_to_hid([(cur_x, cur_y, 0), *path])
             self._send_path(waypoints)
             hx, hy = screen_to_hid(sx, sy)
             self.cmd.send("MOVETO", hx, hy)
         else:
+            sc = self._mouse_scale
             for px, py, step_ms in path:
                 ax, ay = get_cursor_pos()
-                mdx = int(px - ax)
-                mdy = int(py - ay)
-                if abs(mdx) > 0 or abs(mdy) > 0:
-                    dur = max(step_ms, max(abs(mdx), abs(mdy)))
-                    self.cmd.send("MOVE", mdx, mdy, dur)
+                mdx = px - ax
+                mdy = py - ay
+                send_dx = int(mdx / sc) if sc != 1.0 else int(mdx)
+                send_dy = int(mdy / sc) if sc != 1.0 else int(mdy)
+                if abs(send_dx) > 0 or abs(send_dy) > 0:
+                    dur = max(step_ms, max(abs(send_dx), abs(send_dy)))
+                    self.cmd.send("MOVE", send_dx, send_dy, dur)
             for _ in range(4):
                 time.sleep(0.03)
                 ax, ay = get_cursor_pos()
                 err_x, err_y = sx - ax, sy - ay
                 if abs(err_x) <= 3 and abs(err_y) <= 3:
                     break
-                dur = max(abs(err_x), abs(err_y)) * 2
-                self.cmd.send("MOVE", err_x, err_y, max(dur, 30))
+                send_ex = int(err_x / sc) if sc != 1.0 else err_x
+                send_ey = int(err_y / sc) if sc != 1.0 else err_y
+                dur = max(abs(send_ex), abs(send_ey)) * 2
+                self.cmd.send("MOVE", send_ex, send_ey, max(dur, 30))
         return True
 
     _NO_CLICK_ZONES = [
@@ -732,6 +771,9 @@ class GemFarmFlowTest:
     def _human_drag(self, sx: int, sy: int, ex: int, ey: int,
                     button: str = "L", speed_factor: float = 1.0,
                     easing: str = "in_out"):
+        # `easing` is accepted for call-site compatibility but ignored: the
+        # humanizer now owns the acceleration profile. `speed_factor` still
+        # scales the overall duration (e.g. fast camera pans).
         sx, sy = self._clamp_to_window(sx, sy)
         ex, ey = self._clamp_to_window(ex, ey)
         self._moveto(sx, sy)
@@ -740,37 +782,26 @@ class GemFarmFlowTest:
         path = self.humanizer.humanize_move(sx, sy, ex, ey)
         if speed_factor != 1.0:
             path = [(x, y, max(3, int(ms / speed_factor))) for x, y, ms in path]
-        path = self._apply_easing(path, easing)
 
         if self._has_moveto:
-            waypoints = self._path_to_hid(path)
+            waypoints = self._path_to_hid([(sx, sy, 0), *path])
             self._send_path(waypoints, drag=True)
         else:
+            sc = self._mouse_scale
             self.cmd.send("MDOWN", button)
             time.sleep(random.uniform(0.01, 0.03))
             prev_x, prev_y = float(sx), float(sy)
             for px, py, step_ms in path:
                 cx, cy = self._clamp_to_window(int(px), int(py))
-                mdx = int(cx - prev_x)
-                mdy = int(cy - prev_y)
-                if abs(mdx) > 0 or abs(mdy) > 0:
-                    self.cmd.send("MOVE", mdx, mdy, step_ms)
+                mdx = cx - prev_x
+                mdy = cy - prev_y
+                send_dx = int(mdx / sc) if sc != 1.0 else int(mdx)
+                send_dy = int(mdy / sc) if sc != 1.0 else int(mdy)
+                if abs(send_dx) > 0 or abs(send_dy) > 0:
+                    self.cmd.send("MOVE", send_dx, send_dy, step_ms)
                 prev_x, prev_y = float(cx), float(cy)
             time.sleep(random.uniform(0.01, 0.03))
             self.cmd.send("MUP", button)
-
-    def _apply_easing(self, path: list[tuple[int, int, int]],
-                      mode: str = "in_out") -> list[tuple[int, int, int]]:
-        n = len(path)
-        result = []
-        for i, (x, y, ms) in enumerate(path):
-            t = i / max(n - 1, 1)
-            if mode == "in":
-                factor = 1.6 - t * 1.0
-            else:
-                factor = 0.6 + 0.8 * abs(2 * t - 1)
-            result.append((x, y, max(3, int(ms * factor))))
-        return result
 
     def _scroll_at_center(self, amount: int, count: int = 1):
         cx, cy = self._center_screen()
@@ -803,19 +834,14 @@ class GemFarmFlowTest:
                     time.sleep(random.uniform(0.04, 0.12))
 
     def _press_escape(self):
-        if random.random() < 0.5:
-            hold = random.randint(30, 80)
-            self.cmd.send("KEY", "ESC", hold)
-            logger.debug("press_escape: KEY ESC hold=%dms", hold)
-        else:
-            rx = random.uniform(0.20, 0.80)
-            ry = random.uniform(0.22, 0.40)
-            sx = self.win["left"] + int(self.win["width"] * rx)
-            sy = self.win["top"] + int(self.win["height"] * ry)
-            self._moveto(sx, sy)
-            time.sleep(random.uniform(0.03, 0.12))
-            self.cmd.send("CLICK", "L", random.randint(30, 80))
-            logger.debug("press_escape: click empty area (%.2f, %.2f)", rx, ry)
+        rx = random.uniform(0.82, 0.92)
+        ry = random.uniform(0.35, 0.55)
+        sx = self.win["left"] + int(self.win["width"] * rx)
+        sy = self.win["top"] + int(self.win["height"] * ry)
+        self._moveto(sx, sy)
+        time.sleep(random.uniform(0.03, 0.12))
+        self.cmd.send("CLICK", "L", random.randint(30, 80))
+        logger.debug("dismiss_panel: click empty area (%.2f, %.2f)", rx, ry)
 
     # --- Template helpers ---
 
@@ -1066,12 +1092,13 @@ class GemFarmFlowTest:
         self.detector = StateDetector(self.matcher, min_confidence=0.80)
 
         key_templates = [
-            "resources/gem_icon", "buttons/gather_btn",
+            "resources/gem_icon", "resources/gem_mine_close",
+            "buttons/gather_btn", "buttons/world_map_city_btn",
             "buttons/new_troop_btn", "buttons/march_btn_orange",
             "buttons/march_btn", "buttons/city_btn",
-            "ui/btn_mail", "ui/btn_alliance", "ui/btn_x_close",
+            "ui/btn_mail", "ui/btn_alliance",
             "ui/btn_x_close_mail", "ui/btn_x_close_alliance", "ui/btn_x_close_bag",
-            "resources/city_food", "resources/city_wood",
+            "ui/city_food", "ui/city_wood",
         ]
         for t in key_templates:
             img = self.cache.get(t)
@@ -1100,7 +1127,8 @@ class GemFarmFlowTest:
         if self._has_moveto:
             print(f"  [{PASS}] ESP32: {self.port} (MOVETO verified)")
         else:
-            print(f"  [{WARN}] ESP32: {self.port} (MOVETO unavailable, using relative MOVE)")
+            self._mouse_scale = self._calibrate_mouse_scale()
+            print(f"  [{WARN}] ESP32: {self.port} (MOVETO unavailable, using relative MOVE, scale={self._mouse_scale:.2f}x)")
 
         self._start_capture_thread()
         time.sleep(0.2)

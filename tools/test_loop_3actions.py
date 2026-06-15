@@ -50,6 +50,32 @@ def main():
     cmd.start()
     print("ESP32: %s" % port)
 
+    # Calibrate mouse acceleration
+    _cal_scales = []
+    for _tdx in [80, -80, 120, -120]:
+        time.sleep(0.15)
+        _bx, _ = get_cursor_pos()
+        cmd.send("MOVE", _tdx, 0, 50)
+        time.sleep(0.15)
+        _ax, _ = get_cursor_pos()
+        _actual = _ax - _bx
+        if abs(_tdx) > 5 and abs(_actual) > 5:
+            _cal_scales.append(_actual / _tdx)
+    for _tdy in [80, -80]:
+        time.sleep(0.15)
+        _, _by = get_cursor_pos()
+        cmd.send("MOVE", 0, _tdy, 50)
+        time.sleep(0.15)
+        _, _ay = get_cursor_pos()
+        _actual = _ay - _by
+        if abs(_tdy) > 5 and abs(_actual) > 5:
+            _cal_scales.append(_actual / _tdy)
+    if _cal_scales:
+        mouse_scale = max(0.5, min(3.0, sum(abs(s) for s in _cal_scales) / len(_cal_scales)))
+    else:
+        mouse_scale = 1.0
+    print("Mouse scale: %.2fx" % mouse_scale)
+
     loader = ProfileLoader()
     profile = loader.load_random() if loader.list_profiles() else DEFAULT_PROFILE.copy()
     humanizer = MouseHumanizer(profile)
@@ -82,13 +108,16 @@ def main():
             cur_x, cur_y = get_cursor_pos()
             if abs(sx - cur_x) < 3 and abs(sy - cur_y) < 3:
                 return True
+            sc = mouse_scale
             path = humanizer.humanize_move(cur_x, cur_y, sx, sy)
             for px, py, step_ms in path:
                 ax, ay = get_cursor_pos()
-                mdx, mdy = int(px - ax), int(py - ay)
-                if abs(mdx) > 0 or abs(mdy) > 0:
-                    dur = max(step_ms, max(abs(mdx), abs(mdy)))
-                    cmd.send("MOVE", mdx, mdy, dur)
+                mdx, mdy = px - ax, py - ay
+                send_dx = int(mdx / sc) if sc != 1.0 else int(mdx)
+                send_dy = int(mdy / sc) if sc != 1.0 else int(mdy)
+                if abs(send_dx) > 0 or abs(send_dy) > 0:
+                    dur = max(step_ms, max(abs(send_dx), abs(send_dy)))
+                    cmd.send("MOVE", send_dx, send_dy, dur)
             return True
 
         def _click(self, sx, sy, hold_ms=0):
@@ -114,13 +143,16 @@ def main():
             path = humanizer.humanize_move(sx, sy, ex, ey)
             if speed_factor != 1.0:
                 path = [(x, y, max(3, int(ms / speed_factor))) for x, y, ms in path]
+            sc = mouse_scale
             cmd.send("MDOWN", button)
             time.sleep(random.uniform(0.01, 0.03))
             prev_x, prev_y = float(sx), float(sy)
             for px, py, step_ms in path:
-                mdx, mdy = int(px - prev_x), int(py - prev_y)
-                if abs(mdx) > 0 or abs(mdy) > 0:
-                    cmd.send("MOVE", mdx, mdy, step_ms)
+                mdx, mdy = px - prev_x, py - prev_y
+                send_dx = int(mdx / sc) if sc != 1.0 else int(mdx)
+                send_dy = int(mdy / sc) if sc != 1.0 else int(mdy)
+                if abs(send_dx) > 0 or abs(send_dy) > 0:
+                    cmd.send("MOVE", send_dx, send_dy, step_ms)
                 prev_x, prev_y = float(px), float(py)
             time.sleep(random.uniform(0.01, 0.03))
             cmd.send("MUP", button)

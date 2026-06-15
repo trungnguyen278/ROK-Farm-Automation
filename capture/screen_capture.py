@@ -12,6 +12,14 @@ import win32gui
 
 logger = logging.getLogger(__name__)
 
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 ROI = namedtuple("ROI", ["x", "y", "w", "h", "name"])
 
 WINDOW_RETRY_INTERVAL = 30.0
@@ -162,11 +170,18 @@ class ScreenCapture:
                     else:
                         r = win32gui.GetWindowRect(hwnd)
                         left, top, right, bottom = r[0], r[1], r[2], r[3]
+                    pt = win32gui.ClientToScreen(hwnd, (0, 0))
+                    cl = win32gui.GetClientRect(hwnd)
+                    client_w = cl[2] - cl[0]
+                    client_h = cl[3] - cl[1]
                     result = {
-                        "left": left,
-                        "top": top,
-                        "width": right - left,
-                        "height": bottom - top,
+                        "left": pt[0],
+                        "top": pt[1],
+                        "width": client_w,
+                        "height": client_h,
+                        "full_top": top,
+                        "full_height": bottom - top,
+                        "titlebar_h": pt[1] - top,
                     }
             except Exception:
                 pass
@@ -213,9 +228,17 @@ class ScreenCapture:
             "height": self._window["height"],
         }
 
+        cw = monitor["width"]
+        ch = monitor["height"]
+
         for _retry in range(6):
             frame = self._backend.grab(monitor)
             if frame is not None and not self._has_black_bars(frame):
+                fh, fw = frame.shape[:2]
+                if fw > cw or fh > ch:
+                    x_off = (fw - cw) // 2
+                    y_off = fh - ch
+                    frame = frame[y_off:y_off + ch, x_off:x_off + cw]
                 self._consecutive_failures = 0
                 return frame
             time.sleep(0.08)

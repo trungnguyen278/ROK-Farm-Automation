@@ -1,4 +1,4 @@
-"""
+r"""
 Bootstrap gem classifier from saved patch images.
 
 Reads labeled patches from data/gem_patches/{gem,not_gem}/ (saved during

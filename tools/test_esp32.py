@@ -1,5 +1,5 @@
 """
-Phase 6 — ESP32 Hardware Test Suite
+ESP32 Hardware Test Suite
 Interactive test for real ESP32-S3 connection: PING/PONG, MOVE, CLICK, SCROLL, KEY.
 Run: python -m tools.test_esp32 [COM_PORT]
 
@@ -52,7 +52,7 @@ class ESP32TestSuite:
 
     def run_all(self):
         print("=" * 60)
-        print("  ESP32-S3 Hardware Test Suite — Phase 6")
+        print("  ESP32-S3 Hardware Test Suite")
         print("=" * 60)
 
         self.test_port_detection()

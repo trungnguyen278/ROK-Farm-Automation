@@ -31,13 +31,15 @@ config.yaml
 profiles/*.json
 !profiles/default.json
 logs/
+tools/screenshots/
+screenshots/
+_captures/
+_screenshot.png
+data/training_sessions/
+data/patches/
 
 # Claude (local session data, not memory)
 .claude/
-
-# Large/debug files - skip for git
-screenshots/
-tools/screenshots/
 
 # Template images tracked via git LFS or directly
 # (subdirectories like templates/buttons/, templates/ui/ are tracked)

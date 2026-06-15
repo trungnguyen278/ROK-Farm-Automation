@@ -96,7 +96,18 @@ X_CLOSE_POS = {
 }
 
 DELAY_AFTER_ESCAPE = (0.18, 0.07)
+DELAY_AFTER_DISMISS = (0.4, 0.15)
+TITLE_BAR_H = 40
 _DEBUG_BADGES = False
+
+
+def _dismiss_panel(ctx):
+    """Close any open panel by clicking an empty area of the game map.
+    Never use ESC -- it opens the profile panel when nothing is open."""
+    rx = random.uniform(0.82, 0.92)
+    ry = random.uniform(0.35, 0.55)
+    ctx._click_pct(rx, ry, jitter_px=8)
+    ctx._wait(DELAY_AFTER_DISMISS)
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
 _tmpl_cache: dict[str, np.ndarray | None] = {}
@@ -177,8 +188,7 @@ def act_mail(ctx: PlayerActionCtx):
     frame = _grab_chat_frame(ctx)
     if frame is None:
         print("    no frame, aborting mail")
-        ctx._press_escape()
-        ctx._wait(DELAY_AFTER_ESCAPE)
+        _dismiss_panel(ctx)
         return
 
     if _DEBUG_BADGES:
@@ -193,18 +203,35 @@ def act_mail(ctx: PlayerActionCtx):
         _close_mail(ctx)
         return
 
+    active_x = _detect_active_mail_tab_x(frame)
+    if active_x is not None:
+        print(f"    active tab at x={active_x:.3f}")
+
     for bx, by in badge_tabs:
-        print(f"    -> click tab at badge pct({bx:.3f},{by:.3f})")
-        ctx._click_pct(bx, by + 0.02, jitter_px=5)
-        time.sleep(random.uniform(1.5, 3.0))
+        if active_x is not None and abs(bx - active_x) < 0.08:
+            print(f"    tab pct({bx:.3f}) is active, reading without re-click")
+        else:
+            print(f"    -> click tab at badge pct({bx:.3f},{by:.3f})")
+            ctx._click_pct(bx - 0.01, by + 0.02, jitter_px=3)
+            time.sleep(random.uniform(1.5, 3.0))
 
         frame2 = _grab_chat_frame(ctx)
         if frame2 is not None:
-            read_btn = _find_mail_read_all(frame2)
-            if read_btn:
-                print(f"    -> read & collect all")
-                ctx._click_pct(read_btn[0], read_btn[1], jitter_px=5)
-                time.sleep(random.uniform(1.0, 2.0))
+            still_has_badge = any(
+                abs(b2x - bx) < 0.08 for b2x, _ in _find_mail_tab_badges(frame2)
+            )
+            if not still_has_badge:
+                print(f"    tab pct({bx:.3f}) badge cleared after switch, skip read")
+            else:
+                read_btn = _find_mail_read_all(frame2)
+                if read_btn:
+                    rx, ry = read_btn[0], read_btn[1]
+                    print(f"    -> read & collect all at pct({rx:.3f},{ry:.3f})")
+                    ctx._click_pct(rx, ry, jitter_px=3)
+                    time.sleep(random.uniform(1.5, 3.0))
+                    _dismiss_reward_popup(ctx)
+
+        active_x = bx
 
     _close_mail(ctx)
 
@@ -230,6 +257,36 @@ def _mail_btn_has_badge(frame) -> bool:
     if _DEBUG_BADGES:
         print(f"      mail btn badge ({x1},{y1})-({x2},{y2}) red_px={red_px}")
     return red_px > 30
+
+
+def _detect_active_mail_tab_x(frame) -> float | None:
+    """Detect the active mail tab by blue channel brightness in the tab row.
+
+    Active tab is light blue (high blue value), inactive are darker.
+    Uses blue channel to ignore red badge dots.
+    Returns pct_x of the active tab center, or None.
+    """
+    if frame is None:
+        return None
+    fh, fw = frame.shape[:2]
+    y1 = int(fh * 0.05)
+    y2 = int(fh * 0.12)
+    x1 = int(fw * 0.10)
+    x2 = int(fw * 0.55)
+    strip = frame[y1:y2, x1:x2]
+    if strip.size == 0:
+        return None
+    blue = strip[:, :, 0].astype(np.float32)
+    col_blue = blue.mean(axis=0)
+    kernel = np.ones(30) / 30
+    if len(col_blue) > 30:
+        col_blue = np.convolve(col_blue, kernel, mode="same")
+    peak_local_x = int(col_blue.argmax())
+    peak_val = col_blue[peak_local_x]
+    avg_val = col_blue.mean()
+    if peak_val < avg_val + 10:
+        return None
+    return (x1 + peak_local_x) / fw
 
 
 def _find_mail_tab_badges(frame) -> list[tuple[float, float]]:
@@ -291,24 +348,210 @@ def _find_mail_read_all(frame):
                            scales=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 
 
+def _dismiss_reward_popup(ctx: PlayerActionCtx):
+    """After reading mail, a reward popup may appear. Click XAC NHAN to dismiss."""
+    frame = _grab_chat_frame(ctx)
+    if frame is None:
+        return
+    m = _match_on_frame(frame, "ui/btn_confirm_reward", threshold=0.65,
+                        roi=(0.4, 0.8),
+                        scales=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+    if m:
+        print(f"    -> reward popup, clicking confirm")
+        ctx._click_pct(m[0], m[1], jitter_px=5)
+        time.sleep(random.uniform(0.8, 1.5))
+
+
 def _close_mail(ctx: PlayerActionCtx):
-    """Close mail panel via Escape."""
-    ctx._press_escape()
-    ctx._wait(DELAY_AFTER_ESCAPE)
+    """Close mail panel by clicking X button."""
+    frame = _grab_chat_frame(ctx)
+    if frame is not None:
+        m = _match_on_frame(frame, "ui/btn_x_close_mail", threshold=0.60,
+                            roi=(0.0, 0.15),
+                            scales=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        if m:
+            print(f"    -> close mail X at pct({m[0]:.3f},{m[1]:.3f})")
+            ctx._click_pct(m[0], m[1], jitter_px=3)
+            ctx._wait(DELAY_AFTER_DISMISS)
+            return
+    _dismiss_panel(ctx)
 
 
 def act_alliance(ctx: PlayerActionCtx):
-    print(f"  [{INFO}] Distraction: browsing alliance")
+    print(f"  [{INFO}] Distraction: checking alliance gifts")
+
     ctx._click_pct(*BTN_POS["alliance"])
-    time.sleep(random.uniform(2.0, 5.0))
-    if random.random() < 0.3:
-        items = PANEL_ITEMS.get("alliance", [])
-        if items:
-            item = random.choice(items)
-            ctx._click_pct(*item, jitter_px=5)
-            time.sleep(random.uniform(1.5, 3.5))
-    ctx._close_panel("alliance")
-    time.sleep(random.uniform(0.3, 0.8))
+    time.sleep(random.uniform(2.0, 4.0))
+
+    frame = _grab_chat_frame(ctx)
+    if frame is None:
+        print("    no frame, aborting")
+        _dismiss_panel(ctx)
+        return
+
+    gift = _match_on_frame(frame, "ui/btn_alliance_gift", threshold=0.55,
+                           roi=(0.35, 0.90),
+                           scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1])
+    if not gift:
+        print("    gift icon not found in alliance panel, skipping")
+        _close_alliance(ctx)
+        return
+
+    has_badge = _check_red_badge_near(frame, gift[0], gift[1])
+    if not has_badge:
+        print(f"    gift icon found but no badge, skipping")
+        _close_alliance(ctx)
+        return
+
+    print(f"    -> gift icon at pct({gift[0]:.3f},{gift[1]:.3f}) conf={gift[2]:.2f}")
+    ctx._click_pct(gift[0], gift[1], jitter_px=5)
+    time.sleep(random.uniform(1.5, 3.0))
+
+    frame = _grab_chat_frame(ctx)
+    if frame is None:
+        _close_alliance_gift(ctx)
+        _close_alliance(ctx)
+        return
+
+    _alliance_claim_tab(ctx, frame)
+
+    frame = _grab_chat_frame(ctx)
+    if frame is not None:
+        tab_badges = _find_red_badges_in_region(frame, x_range=(0.20, 0.55), y_range=(0.25, 0.40))
+        if tab_badges:
+            tx, ty = tab_badges[0]
+            print(f"    -> remaining tab badge at pct({tx:.3f},{ty:.3f}), switching")
+            ctx._click_pct(tx, ty + 0.01, jitter_px=3)
+            time.sleep(random.uniform(1.0, 2.0))
+            frame2 = _grab_chat_frame(ctx)
+            if frame2 is not None:
+                _alliance_claim_tab(ctx, frame2)
+
+    _close_alliance_gift(ctx)
+    _close_alliance(ctx)
+
+
+def _alliance_claim_tab(ctx, frame) -> bool:
+    """Find and click NHAN TAT CA on the currently visible gift tab."""
+    claim_btn = _match_on_frame(frame, "ui/btn_claim_all", threshold=0.45,
+                                roi=(0.25, 0.45),
+                                scales=[0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 0.9, 1.0])
+    if claim_btn:
+        print(f"    -> claim all at pct({claim_btn[0]:.3f},{claim_btn[1]:.3f}) conf={claim_btn[2]:.2f}")
+        ctx._click_pct(claim_btn[0], claim_btn[1], jitter_px=3)
+        time.sleep(random.uniform(1.5, 3.0))
+        _dismiss_alliance_reward(ctx)
+        return True
+    print("    claim all button not found on this tab")
+    return False
+
+
+def _find_red_badges_in_region(frame, x_range=(0.0, 1.0), y_range=(0.0, 1.0),
+                               min_area=15, min_circ=0.25) -> list[tuple[float, float]]:
+    """Find red badge circles in a specified region of the frame.
+
+    Returns list of (pct_x, pct_y) sorted left-to-right.
+    """
+    if frame is None:
+        return []
+    fh, fw = frame.shape[:2]
+    x1 = int(x_range[0] * fw)
+    x2 = int(x_range[1] * fw)
+    y1 = int(y_range[0] * fh)
+    y2 = int(y_range[1] * fh)
+    strip = frame[y1:y2, x1:x2]
+    if strip.size == 0:
+        return []
+
+    red_mask = ((strip[:, :, 2] > 150)
+                & (strip[:, :, 1] < 100)
+                & (strip[:, :, 0] < 100))
+    mask_u8 = red_mask.astype(np.uint8) * 255
+    contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+
+    badges = []
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < min_area:
+            continue
+        x, y, w, h = cv2.boundingRect(c)
+        aspect = min(w, h) / max(w, h) if max(w, h) > 0 else 0
+        if aspect < 0.4:
+            continue
+        perimeter = cv2.arcLength(c, True)
+        circ = (4 * np.pi * area / (perimeter ** 2)) if perimeter > 0 else 0
+        if circ < min_circ:
+            continue
+        cx_px = x1 + x + w // 2
+        cy_px = y1 + y + h // 2
+        badges.append((cx_px / fw, cy_px / fh))
+
+    badges.sort(key=lambda b: b[0])
+    return badges
+
+
+def _check_red_badge_near(frame, pct_x: float, pct_y: float) -> bool:
+    """Check if there's a red badge circle near a button position."""
+    if frame is None:
+        return False
+    fh, fw = frame.shape[:2]
+    cx, cy = int(pct_x * fw), int(pct_y * fh)
+    x1 = max(0, cx - 40)
+    x2 = min(fw, cx + 40)
+    y1 = max(0, cy - 40)
+    y2 = min(fh, cy + 10)
+    region = frame[y1:y2, x1:x2]
+    if region.size == 0:
+        return False
+    red_px = int(((region[:, :, 2] > 150)
+                  & (region[:, :, 1] < 100)
+                  & (region[:, :, 0] < 100)).sum())
+    return red_px > 15
+
+
+def _dismiss_alliance_reward(ctx: PlayerActionCtx):
+    """After claiming alliance gifts, dismiss reward summary popup."""
+    frame = _grab_chat_frame(ctx)
+    if frame is None:
+        return
+    m = _match_on_frame(frame, "ui/btn_confirm_alliance", threshold=0.60,
+                        roi=(0.4, 0.8),
+                        scales=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+    if m:
+        print(f"    -> reward summary, clicking confirm")
+        ctx._click_pct(m[0], m[1], jitter_px=5)
+        time.sleep(random.uniform(1.0, 2.0))
+
+
+def _close_alliance_gift(ctx: PlayerActionCtx):
+    """Close alliance gift popup by clicking X button."""
+    frame = _grab_chat_frame(ctx)
+    if frame is not None:
+        m = _match_on_frame(frame, "ui/btn_x_close_alliance_gift", threshold=0.55,
+                            roi=(0.10, 0.30),
+                            scales=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        if m and m[0] < 0.85:
+            print(f"    -> close gift popup X at pct({m[0]:.3f},{m[1]:.3f})")
+            ctx._click_pct(m[0], m[1], jitter_px=3)
+            ctx._wait(DELAY_AFTER_DISMISS)
+            return
+    _dismiss_panel(ctx)
+
+
+def _close_alliance(ctx: PlayerActionCtx):
+    """Close alliance panel by clicking X button."""
+    frame = _grab_chat_frame(ctx)
+    if frame is not None:
+        m = _match_on_frame(frame, "ui/btn_x_close_alliance", threshold=0.55,
+                            roi=(0.0, 0.15),
+                            scales=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        if m and m[0] < 0.90:
+            print(f"    -> close alliance X at pct({m[0]:.3f},{m[1]:.3f})")
+            ctx._click_pct(m[0], m[1], jitter_px=3)
+            ctx._wait(DELAY_AFTER_DISMISS)
+            return
+    _dismiss_panel(ctx)
 
 
 def act_bag(ctx: PlayerActionCtx):
@@ -386,31 +629,49 @@ def _click_empty(ctx: PlayerActionCtx):
     ctx._click(sx, sy)
 
 
-CHAT_CHANNELS = [
-    {"center": (0.09, 0.12), "badge_y": (0.06, 0.15)},
-    {"center": (0.09, 0.21), "badge_y": (0.17, 0.25)},
-    {"center": (0.09, 0.30), "badge_y": (0.26, 0.34)},
+CHAT_OPEN_POS = (0.15, 0.92)
+
+CHAT_CH_TMPLS = [
+    {"name": "world",
+     "active": "ui/chat_ch_world_active",
+     "inactive": "ui/chat_ch_world_inactive"},
+    {"name": "kingdom",
+     "active": "ui/chat_ch_kingdom_active",
+     "inactive": "ui/chat_ch_kingdom_inactive"},
+    {"name": "alliance",
+     "active": "ui/chat_ch_alliance_active",
+     "inactive": "ui/chat_ch_alliance_inactive"},
 ]
-BADGE_X_RANGE = (0.02, 0.07)
-CHAT_CLOSE_BTN = (0.51, 0.53)
+CHAT_ICON_SCALES = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
 
 
 def act_chat(ctx: PlayerActionCtx):
-    ww, wh = ctx.win["width"], ctx.win["height"]
     print(f"  [{INFO}] Distraction: glancing at chat")
-    # Click first channel tab to open chat -- never click message content area
-    ctx._click_pct(*CHAT_CHANNELS[0]["center"], jitter_px=5)
+
+    ctx._click_pct(*CHAT_OPEN_POS, jitter_px=15)
     time.sleep(random.uniform(1.5, 3.0))
 
     frame = _grab_chat_frame(ctx)
-    badges = _detect_badges(ctx, frame, debug_scan=_DEBUG_BADGES)
+    channels = _find_chat_channels(frame)
 
-    if sum(badges) == 0:
+    if not channels:
         toggled = _try_expand_sidebar(ctx, frame)
         if toggled:
             time.sleep(random.uniform(0.8, 1.5))
             frame = _grab_chat_frame(ctx)
-            badges = _detect_badges(ctx, frame, debug_scan=_DEBUG_BADGES)
+            channels = _find_chat_channels(frame)
+
+    if not channels:
+        print("    no chat channels found, closing")
+        _close_chat_panel(ctx)
+        return
+
+    for ch in channels:
+        ch["badge"] = _detect_channel_badge(frame, ch, debug=_DEBUG_BADGES)
+
+    for ch in channels:
+        tag = " (active)" if ch["is_active"] else ""
+        print(f"    {ch['name']}: badge={ch['badge']}{tag}")
 
     max_visits = random.choices([1, 2], weights=[65, 35])[0]
 
@@ -418,32 +679,25 @@ def act_chat(ctx: PlayerActionCtx):
         if visit > 0:
             time.sleep(random.uniform(0.8, 1.5))
             frame = _grab_chat_frame(ctx)
-            badges = _detect_badges(ctx, frame, debug_scan=_DEBUG_BADGES)
+            channels = _find_chat_channels(frame)
+            for ch in channels:
+                ch["badge"] = _detect_channel_badge(frame, ch)
 
-        active = _detect_active_channel(ctx, frame)
-        has_new = [i for i, b in enumerate(badges) if b > 0 and i != active]
-
-        ch_names = ["ch1", "ch2", "ch3"]
-        for i, b in enumerate(badges):
-            tag = " (active)" if i == active else ""
-            print(f"    {ch_names[i]}: {b}{tag}")
-
+        has_new = [ch for ch in channels if ch["badge"] > 0 and not ch["is_active"]]
         if not has_new:
             break
 
-        idx = max(has_new, key=lambda i: badges[i])
-        n = badges[idx]
-        print(f"    -> click {ch_names[idx]} ({n})")
-        ctx._click_pct(*CHAT_CHANNELS[idx]["center"], jitter_px=6)
+        target = max(has_new, key=lambda c: c["badge"])
+        print(f"    -> click {target['name']} ({target['badge']})")
+        ctx._click_pct(target["pct_x"], target["pct_y"], jitter_px=6)
         time.sleep(random.uniform(2.0, 5.0))
-        scrolls = max(0, n - 5) // 5
+        scrolls = max(0, target["badge"] - 5) // 5
         if scrolls >= 1:
             actual = random.randint(max(1, scrolls - 1), scrolls + 1)
             _chat_scroll(ctx, scrolls=actual)
         time.sleep(random.uniform(1.0, 3.0))
 
-    ctx._click_pct(*CHAT_CLOSE_BTN, jitter_px=8)
-    ctx._wait(DELAY_AFTER_ESCAPE)
+    _close_chat_panel(ctx)
 
 
 def _grab_chat_frame(ctx: PlayerActionCtx):
@@ -457,96 +711,153 @@ def _grab_chat_frame(ctx: PlayerActionCtx):
         return None
 
 
-def _detect_active_channel(ctx: PlayerActionCtx, frame) -> int:
-    if frame is None:
-        return -1
-    try:
-        ww, wh = ctx.win["width"], ctx.win["height"]
-        best_idx = -1
-        best_brightness = 0
-        for i, ch in enumerate(CHAT_CHANNELS):
-            px, py = ch["center"]
-            sx = int(px * ww)
-            sy = int(py * wh)
-            x1, y1 = max(0, sx - 30), max(0, sy - 10)
-            x2, y2 = min(frame.shape[1], sx + 30), min(frame.shape[0], sy + 10)
-            patch = frame[y1:y2, x1:x2]
-            if patch.size == 0:
-                continue
-            brightness = float(patch.mean())
-            if brightness > best_brightness:
-                best_brightness = brightness
-                best_idx = i
-        return best_idx
-    except Exception:
-        return -1
+CHAT_SIDEBAR_X_MAX = 0.15
+CHAT_SIDEBAR_Y_MAX = 0.55
 
 
-def _detect_badges(ctx: PlayerActionCtx, frame, debug_scan: bool = False) -> list[int]:
-    """Detect red notification badges and read the unread count per channel.
+def _find_chat_channels(frame) -> list[dict]:
+    """Find channel icons in chat sidebar via template matching.
 
-    Returns actual badge number per channel (0 = no badge).
-    Uses red circle isolation + digit shape classification.
+    Returns list of {name, pct_x, pct_y, is_active, tmpl_w, tmpl_h}.
+    Only the channel with highest active-template confidence is marked active.
+    Matches outside the sidebar region are rejected.
     """
-    result = [0, 0, 0]
     if frame is None:
-        return result
+        return []
+    results = []
+    for ch in CHAT_CH_TMPLS:
+        best = None
+        best_conf = 0.0
+        active_conf = 0.0
+        is_active = False
+        for state, tmpl_name in [("active", ch["active"]),
+                                  ("inactive", ch["inactive"])]:
+            m = _match_on_frame(frame, tmpl_name, threshold=0.50,
+                                roi=(0.0, CHAT_SIDEBAR_Y_MAX),
+                                scales=CHAT_ICON_SCALES)
+            if m and m[0] > CHAT_SIDEBAR_X_MAX:
+                continue
+            if m and m[2] > best_conf:
+                best = m
+                best_conf = m[2]
+                is_active = (state == "active")
+            if state == "active" and m and m[0] <= CHAT_SIDEBAR_X_MAX:
+                active_conf = m[2]
+        if best:
+            if _DEBUG_BADGES:
+                print(f"    ch-dbg {ch['name']}: conf={best_conf:.3f} "
+                      f"pos=({best[0]:.3f},{best[1]:.3f}) "
+                      f"active={'Y' if is_active else 'N'}")
+            results.append({
+                "name": ch["name"],
+                "pct_x": best[0],
+                "pct_y": best[1],
+                "is_active": is_active,
+                "active_conf": active_conf,
+                "tmpl_w": best[3],
+                "tmpl_h": best[4],
+            })
+
+    active_chs = [ch for ch in results if ch["is_active"]]
+    if len(active_chs) > 1:
+        best_active = max(active_chs, key=lambda c: c["active_conf"])
+        for ch in results:
+            ch["is_active"] = (ch is best_active)
+
+    return results
+
+
+def _detect_channel_badge(frame, ch_info, debug=False) -> int:
+    """Detect red badge at top-right corner of a channel icon.
+
+    Searches only the top-right quadrant to avoid picking up
+    red pixels from the icon itself (e.g. alliance shield).
+    Returns badge number (0 = no badge).
+    """
+    if frame is None:
+        return 0
     try:
         fh, fw = frame.shape[:2]
+        cx = int(ch_info["pct_x"] * fw)
+        cy = int(ch_info["pct_y"] * fh)
+        tw = ch_info["tmpl_w"]
+        th = ch_info["tmpl_h"]
 
-        if debug_scan:
-            print(f"    badge: frame={frame.shape}")
-            _scan_red_pixels(frame)
+        half_w = max(tw, 35)
+        half_h = max(th, 45)
+        x1 = max(0, cx - half_w)
+        x2 = min(fw, cx + half_w)
+        y1 = max(0, cy - half_h)
+        y2 = min(fh, cy)
 
-        bx1 = int(BADGE_X_RANGE[0] * fw)
-        bx2 = int(BADGE_X_RANGE[1] * fw)
+        region = frame[y1:y2, x1:x2]
+        if region.size == 0:
+            return 0
 
-        for i, ch in enumerate(CHAT_CHANNELS):
-            by_lo, by_hi = ch["badge_y"]
-            y1 = int(by_lo * fh)
-            y2 = int(by_hi * fh)
-            band = frame[y1:y2, bx1:bx2]
-            if band.size == 0:
-                continue
-            r_ch = band[:, :, 2].astype(np.float32)
-            g_ch = band[:, :, 1].astype(np.float32)
-            b_ch = band[:, :, 0].astype(np.float32)
-            red_mask = (r_ch > 150) & (g_ch < 100) & (b_ch < 100)
-            red_px = int(red_mask.sum())
-            if red_px < 15:
-                continue
+        r_ch = region[:, :, 2].astype(np.float32)
+        g_ch = region[:, :, 1].astype(np.float32)
+        b_ch = region[:, :, 0].astype(np.float32)
+        red_mask = (r_ch > 150) & (g_ch < 100) & (b_ch < 100)
+        red_px = int(red_mask.sum())
+        if debug:
+            name = ch_info.get("name", "?")
+            print(f"    badge-dbg {name}: icon@({cx},{cy}) tw={tw} th={th}"
+                  f" region=({x1},{y1})-({x2},{y2}) red_px={red_px}")
+        if red_px < 15:
+            return 0
 
-            circle = _find_badge_circle(red_mask)
-            if circle is None:
-                result[i] = 5
-                continue
+        circle = _find_badge_circle(red_mask, min_circularity=0.40)
+        if circle is None:
+            if debug:
+                print(f"    badge-dbg {ch_info.get('name','?')}: no circular blob")
+            return 0
+        bx, by, bw, bh, area = circle
+        aspect = min(bw, bh) / max(bw, bh) if max(bw, bh) > 0 else 0
+        if debug:
+            print(f"    badge-dbg {ch_info.get('name','?')}: "
+                  f"circle area={area} size={bw}x{bh} aspect={aspect:.2f}")
+        if area > 450 or aspect < 0.5 or max(bw, bh) > 28:
+            return 0
 
-            cx, cy, cw, c_h = circle[:4]
-            pad = 3
-            cx1 = max(0, cx - pad)
-            cy1 = max(0, cy - pad)
-            cx2 = min(band.shape[1], cx + cw + pad)
-            cy2 = min(band.shape[0], cy + c_h + pad)
-            badge_crop = band[cy1:cy2, cx1:cx2]
-            red_mask_crop = red_mask[cy1:cy2, cx1:cx2]
+        pad_b = 3
+        bx1 = max(0, bx - pad_b)
+        by1 = max(0, by - pad_b)
+        bx2 = min(region.shape[1], bx + bw + pad_b)
+        by2 = min(region.shape[0], by + bh + pad_b)
+        badge_crop = region[by1:by2, bx1:bx2]
+        red_mask_crop = red_mask[by1:by2, bx1:bx2]
 
-            digits = _extract_badge_digits(badge_crop, red_mask_crop)
-            if not digits:
-                result[i] = 5
-                continue
+        digits = _extract_badge_digits(badge_crop, red_mask_crop)
+        if not digits:
+            return 5
 
-            number = 0
-            for dimg, dbbox, darea in digits:
-                number = number * 10 + _classify_badge_digit(dimg, dbbox)
-            result[i] = max(1, number)
-        return result
+        number = 0
+        for dimg, dbbox, darea in digits:
+            number = number * 10 + _classify_badge_digit(dimg, dbbox)
+        return min(max(1, number), 99)
     except Exception:
-        return result
+        return 0
 
 
-def _find_badge_circle(red_mask):
+def _close_chat_panel(ctx: PlayerActionCtx):
+    """Close chat panel by template-matching the '<' close button,
+    fallback to clicking game area outside the panel."""
+    frame = _grab_chat_frame(ctx)
+    if frame is not None:
+        m = _match_on_frame(frame, "ui/chat_close_btn", threshold=0.50,
+                            scales=[0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2])
+        if m and m[0] < 0.40:
+            ctx._click_pct(m[0], m[1], jitter_px=5)
+            ctx._wait(DELAY_AFTER_ESCAPE)
+            return
+    _dismiss_panel(ctx)
+
+
+def _find_badge_circle(red_mask, min_circularity=0.0):
     """Find the most circular red blob — that's the notification badge."""
     mask_u8 = red_mask.astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, kernel)
     contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     best = None
     best_score = -1
@@ -557,6 +868,8 @@ def _find_badge_circle(red_mask):
         x, y, w, h = cv2.boundingRect(c)
         perimeter = cv2.arcLength(c, True)
         circularity = (4 * np.pi * area / (perimeter ** 2)) if perimeter > 0 else 0
+        if circularity < min_circularity:
+            continue
         aspect = min(w, h) / max(w, h) if max(w, h) > 0 else 0
         score = circularity * 2 + aspect
         if score > best_score:
@@ -752,8 +1065,8 @@ def _try_expand_sidebar(ctx: PlayerActionCtx, frame) -> bool:
 
 def _chat_scroll(ctx: PlayerActionCtx, scrolls: int = 3):
     ww, wh = ctx.win["width"], ctx.win["height"]
-    scroll_x = ctx.win["left"] + int(ww * random.uniform(0.25, 0.45))
-    scroll_y = ctx.win["top"] + int(wh * random.uniform(0.35, 0.60))
+    scroll_x = ctx.win["left"] + int(ww * random.uniform(0.12, 0.28))
+    scroll_y = ctx.win["top"] + int(wh * random.uniform(0.25, 0.70))
     ctx._moveto(scroll_x, scroll_y)
     time.sleep(random.uniform(0.3, 0.6))
     for _ in range(scrolls):
@@ -995,6 +1308,37 @@ class PlayerActions:
 # CLI test runner
 # ---------------------------------------------------------------------------
 
+def _try_resize_game(sc, target_w):
+    """Try to resize game window to target content width, keeping aspect ratio."""
+    import ctypes
+    import sys
+    win = sc._window
+    aspect = win["height"] / win["width"] if win["width"] > 0 else 0.56
+    target_h = round(target_w * aspect)
+
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "resize_window.py")
+    python = sys.executable
+    args = f'"{script}" {target_w} {target_h} --batch'
+
+    try:
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        is_admin = False
+
+    if is_admin:
+        os.system(f'"{python}" {args}')
+    else:
+        print(f"  Requesting admin to resize -> {target_w}x{target_h}")
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", python, args, None, 0)
+        for _ in range(20):
+            time.sleep(0.5)
+            sc._window = None
+            _w = sc.find_window()
+            if _w and abs(_w["width"] - target_w) < 5:
+                break
+
+
 def _cli_main():
     import argparse
     import sys
@@ -1002,7 +1346,10 @@ def _cli_main():
     import ctypes
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    ctypes.windll.user32.SetProcessDPIAware()
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        ctypes.windll.user32.SetProcessDPIAware()
 
     parser = argparse.ArgumentParser(description="Test player actions via ESP32")
     parser.add_argument("--port", type=str, help="Serial port (e.g. COM27)")
@@ -1043,23 +1390,23 @@ def _cli_main():
     from serial_comm.connection import SerialConnection
     from serial_comm.command_buffer import CommandBuffer
 
-    # Find game window
-    def find_game_window(title="Rise of Kingdoms"):
-        result = {}
-        def cb(hwnd, _):
-            if win32gui.IsWindowVisible(hwnd):
-                t = win32gui.GetWindowText(hwnd)
-                if title.lower() in t.lower():
-                    r = win32gui.GetWindowRect(hwnd)
-                    result.update(left=r[0], top=r[1],
-                                  width=r[2]-r[0], height=r[3]-r[1])
-        win32gui.EnumWindows(cb, None)
-        return result if result else None
+    TARGET_CONTENT_W = 1533
 
-    win = find_game_window()
+    sc = ScreenCapture()
+    win = sc.find_window()
     if not win:
         print("Game window not found")
         return
+
+    if win["width"] != TARGET_CONTENT_W:
+        print(f"Game: {win['width']}x{win['height']} -> resizing to w={TARGET_CONTENT_W}")
+        _try_resize_game(sc, TARGET_CONTENT_W)
+        time.sleep(0.3)
+        sc._window = None
+        win = sc.find_window()
+        if not win:
+            print("Game window lost after resize")
+            return
 
     print(f"Game: {win['width']}x{win['height']} at ({win['left']},{win['top']})")
 
@@ -1072,15 +1419,39 @@ def _cli_main():
     cmd.start()
     print(f"ESP32: {args.port} connected")
 
+    # Calibrate mouse acceleration
+    print("Calibrating mouse acceleration...")
+    _cal_scales = []
+    for _tdx in [80, -80, 120, -120]:
+        time.sleep(0.15)
+        _bx, _ = get_cursor_pos()
+        cmd.send("MOVE", _tdx, 0, 50)
+        time.sleep(0.15)
+        _ax, _ = get_cursor_pos()
+        _actual = _ax - _bx
+        if abs(_tdx) > 5 and abs(_actual) > 5:
+            _cal_scales.append(_actual / _tdx)
+    for _tdy in [80, -80]:
+        time.sleep(0.15)
+        _, _by = get_cursor_pos()
+        cmd.send("MOVE", 0, _tdy, 50)
+        time.sleep(0.15)
+        _, _ay = get_cursor_pos()
+        _actual = _ay - _by
+        if abs(_tdy) > 5 and abs(_actual) > 5:
+            _cal_scales.append(_actual / _tdy)
+    if _cal_scales:
+        mouse_scale = max(0.5, min(3.0, sum(abs(s) for s in _cal_scales) / len(_cal_scales)))
+    else:
+        mouse_scale = 1.0
+    print(f"Mouse scale: {mouse_scale:.2f}x")
+
     # Set up vision
     loader = ProfileLoader()
     profile = loader.load_random() if loader.list_profiles() else DEFAULT_PROFILE.copy()
     humanizer = MouseHumanizer(profile)
     cache = TemplateCache()
     matcher = TemplateMatcher(cache)
-    sc = ScreenCapture()
-
-    TITLE_BAR_H = 40
 
     class TestCtx:
         """Lightweight context for testing individual actions."""
@@ -1110,13 +1481,16 @@ def _cli_main():
             cur_x, cur_y = get_cursor_pos()
             if abs(sx - cur_x) < 3 and abs(sy - cur_y) < 3:
                 return True
+            sc = mouse_scale
             path = humanizer.humanize_move(cur_x, cur_y, sx, sy)
             for px, py, step_ms in path:
                 ax, ay = get_cursor_pos()
-                mdx, mdy = int(px - ax), int(py - ay)
-                if abs(mdx) > 0 or abs(mdy) > 0:
-                    dur = max(step_ms, max(abs(mdx), abs(mdy)))
-                    cmd.send("MOVE", mdx, mdy, dur)
+                mdx, mdy = px - ax, py - ay
+                send_dx = int(mdx / sc) if sc != 1.0 else int(mdx)
+                send_dy = int(mdy / sc) if sc != 1.0 else int(mdy)
+                if abs(send_dx) > 0 or abs(send_dy) > 0:
+                    dur = max(step_ms, max(abs(send_dx), abs(send_dy)))
+                    cmd.send("MOVE", send_dx, send_dy, dur)
             return True
 
         def _click(self, sx, sy, hold_ms=0):
@@ -1142,14 +1516,17 @@ def _cli_main():
             path = humanizer.humanize_move(sx, sy, ex, ey)
             if speed_factor != 1.0:
                 path = [(x, y, max(3, int(ms / speed_factor))) for x, y, ms in path]
+            sc = mouse_scale
             cmd.send("MDOWN", button)
             time.sleep(random.uniform(0.01, 0.03))
             prev_x, prev_y = float(sx), float(sy)
             for px, py, step_ms in path:
-                mdx = int(px - prev_x)
-                mdy = int(py - prev_y)
-                if abs(mdx) > 0 or abs(mdy) > 0:
-                    cmd.send("MOVE", mdx, mdy, step_ms)
+                mdx = px - prev_x
+                mdy = py - prev_y
+                send_dx = int(mdx / sc) if sc != 1.0 else int(mdx)
+                send_dy = int(mdy / sc) if sc != 1.0 else int(mdy)
+                if abs(send_dx) > 0 or abs(send_dy) > 0:
+                    cmd.send("MOVE", send_dx, send_dy, step_ms)
                 prev_x, prev_y = float(px), float(py)
             time.sleep(random.uniform(0.01, 0.03))
             cmd.send("MUP", button)
@@ -1194,7 +1571,7 @@ def _cli_main():
             return None
 
         def _close_panel(self, panel):
-            self._press_escape()
+            _dismiss_panel(self)
             time.sleep(random.uniform(0.2, 0.5))
 
     ctx = TestCtx()

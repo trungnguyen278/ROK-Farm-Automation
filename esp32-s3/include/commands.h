@@ -34,10 +34,15 @@
 
 #define MAX_PATH_POINTS    128
 
+// Sub-step cadence (ms) for interpolating between path waypoints. Matches a
+// real ~125 Hz HID report rate so the cursor advances in small continuous
+// deltas instead of teleporting between waypoints.
+#define PATH_STEP_MS       8
+
 struct PathPoint {
     int16_t x;
     int16_t y;
-    uint8_t delay_ms;
+    uint8_t delay_ms;   // travel time from the previous waypoint to this one
 };
 
 #define BTN_LEFT   'L'
