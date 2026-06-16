@@ -58,7 +58,8 @@ from anti_detection.profile_loader import ProfileLoader, DEFAULT_PROFILE
 from anti_detection.timing_engine import TimingEngine
 from anti_detection.session_manager import SessionManager
 from anti_detection.mouse_humanizer import MouseHumanizer
-from anti_detection.player_actions import PlayerActions
+from anti_detection.player_actions import PlayerActions, _try_resize_game
+from anti_detection.notification_watcher import NotificationWatcher
 
 SCREENSHOT_DIR = Path("tools/screenshots/gem_farm_test")
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -77,6 +78,9 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("gem_farm_test")
+# asyncio logs "Using proactor: IocpProactor" on every event loop -- the
+# notification poll spins one each cycle, which spams the wait phase. Quiet it.
+logging.getLogger("asyncio").setLevel(logging.WARNING)
 
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
@@ -98,6 +102,29 @@ DRAG_OVERLAP = 0.20
 MARCH_TEMPLATES = ["buttons/march_btn_orange", "buttons/march_btn"]
 GEM_MINE_TEMPLATES = ["resources/gem_mine_close", "resources/gem_mine"]
 
+# "Hanh quan" (March) button -- fixed spot in the deploy panel (measured from
+# screenshots at client frac (0.656, 0.763)). Clicked directly: template match
+# kept locking onto look-alikes elsewhere and mis-clicking.
+MARCH_BTN_PCT = (0.656, 0.763)
+
+# After clicking a gem icon the game auto-centers on the mine, so the mine
+# structure (~0.52,0.45) and its gather popup land in the middle. The post-click
+# verify matches this region FIRST (much faster than the whole 1533x862 frame
+# for big templates), then falls back to a full-frame match if the ROI misses --
+# so an off-center mine (click drift, or a mine near the map edge that can't
+# fully center) is still found, just a touch slower that once. Margin is wide.
+VERIFY_ROI = (0.18, 0.18, 0.82, 0.75)  # x1, y1, x2, y2 in frame pct
+
+# Longest a single gem-farm march (out + gather + back) realistically takes.
+# Used as the cap when waiting alt-tabbed for the "troops returned" toast.
+MAX_MARCH_MINUTES = 15
+
+# Target game client width; the window is resized to this at startup (same as
+# `python -m anti_detection.player_actions`) so template scales stay consistent.
+TARGET_CONTENT_W = 1533
+# Seconds counted down at startup so the user can get ready before the bot acts.
+COUNTDOWN_SECONDS = 5
+
 # --- Window layout ---
 TITLE_BAR_H = 40
 
@@ -106,8 +133,13 @@ DELAY_AFTER_CLICK = (0.15, 0.06)
 DELAY_AFTER_ESCAPE = (0.18, 0.07)
 DELAY_AFTER_SCROLL = (0.30, 0.10)
 DELAY_ZOOM_IN = (1.5, 0.3)
+# Poll step while waiting for the mine to zoom in (see _click_icon_and_verify):
+# we re-check up to ZOOM_POLL_MAX times so a fast zoom proceeds immediately
+# instead of always paying the full DELAY_ZOOM_IN sleep.
+DELAY_ZOOM_IN_POLL = (0.45, 0.12)
+ZOOM_POLL_MAX = 3
 DELAY_MINE_CLICK = (0.30, 0.10)
-DELAY_RECHECK = (0.25, 0.08)
+DELAY_RECHECK = (0.15, 0.05)
 DELAY_VERIFY = (0.35, 0.12)
 DELAY_DRAG_SETTLE = (0.40, 0.12)
 DELAY_WORLD_MAP = (1.5, 0.5)
@@ -150,15 +182,19 @@ class GemFarmFlowTest:
     def __init__(self, port: str, count: int = 1, auto_learn: bool = False,
                  loop: bool = False, max_marches: int = 5,
                  account_id: str = "default",
-                 actions_override: list[str] | None = None):
+                 actions_override: list[str] | None = None,
+                 recalibrate: bool = False,
+                 skip_mail_alliance: bool = False,
+                 initial_alttab: bool = True):
         self.port = port
         self.count = count
         self.auto_learn = auto_learn
         self.loop = loop
         self.max_marches = max_marches
         self._account_id = account_id
-        self._burst_counter: int = random.choices(
-            [3, 4, 5, 6, 7, 8], weights=[10, 20, 30, 20, 12, 8])[0]
+        self._recalibrate = recalibrate
+        self._skip_mail_alliance = skip_mail_alliance
+        self._initial_alttab = initial_alttab
         self.sc: ScreenCapture | None = None
         self.cache: TemplateCache | None = None
         self.matcher: TemplateMatcher | None = None
@@ -189,6 +225,7 @@ class GemFarmFlowTest:
         self._actions = PlayerActions(self, self._persona)
         if actions_override:
             self._actions._preferred = list(actions_override)
+        self._notif = NotificationWatcher()
 
         self._scroll_overshoot_chance = self._jitter(
             self._persona["scroll_overshoot"], 0.08)
@@ -247,6 +284,13 @@ class GemFarmFlowTest:
             logger.warning("Failed to save persona: %s", e)
         return persona
 
+    def _save_persona(self):
+        try:
+            with open(self._persona_path(), "w") as f:
+                json.dump(self._persona, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save persona: %s", e)
+
     @staticmethod
     def _jitter(value: float, pct: float = 0.06) -> float:
         return value * random.uniform(1 - pct, 1 + pct)
@@ -278,14 +322,19 @@ class GemFarmFlowTest:
         time.sleep(actual)
         return actual
 
+    def _tab_out(self):
+        """Alt-tab out of the game and stop the HID idle-jitter. No fixed wait --
+        caller decides how long to stay out (e.g. wait for a return toast)."""
+        self.cmd.send("IDLE", "1")
+        hold = random.randint(50, 120)
+        self.cmd.send("COMBO", "ALT", "TAB", hold)
+
     def _tab_away(self):
         raw = random.lognormvariate(3.8, 0.7)
         away = max(5.0, min(600.0, raw))
         logger.info("tab away %.0fs", away)
         print(f"  [{INFO}] Alt-tab away {away:.0f}s")
-        self.cmd.send("IDLE", "1")
-        hold = random.randint(50, 120)
-        self.cmd.send("COMBO", "ALT", "TAB", hold)
+        self._tab_out()
         time.sleep(away)
 
     def _tab_back(self):
@@ -385,72 +434,161 @@ class GemFarmFlowTest:
                 self._close_panel(panel)
                 return
 
-    def _idle_while_queue_full(self):
-        if not hasattr(self, '_queue_wait_start'):
-            self._queue_wait_start = time.time()
+    def _phase_full_cycle(self):
+        """All march slots are full. Behave like a real player between bursts:
+        drop back to the city, do light city tasks (mail/alliance only if they
+        actually have a red badge), then alt-tab out and wait for the Windows
+        'troops returned to city' toast before the next burst."""
+        self._phase_city_idle()
+        self._phase_wait_return()
+        self._queue_wait_start = time.time()
 
-        waited_min = (time.time() - self._queue_wait_start) / 60.0
-        if waited_min > 20:
-            self.mines_completed = max(0, self.mines_completed - 1)
-            self._queue_wait_start = time.time()
-            print(f"  [{INFO}] Waited {waited_min:.0f}min, assuming 1 slot freed")
+    def _phase_city_idle(self):
+        """Phase 2: back in city while troops are out marching. Quick glance at
+        mail / alliance gifts (the actions self-skip when there is no badge),
+        plus an occasional light idle. No map distractions here -- we're in city."""
+        print(f"\n  [{INFO}] Phase: back to city, light tasks while troops march")
+        self._step_return_city("city_idle")
+        self._wait(random.uniform(1.0, 2.5))
 
-        self._tab_away()
+        if self._skip_mail_alliance:
+            print(f"  [{INFO}] Mail/alliance check disabled (--no-mail-alliance)")
+        else:
+            if random.random() < 0.7:
+                self._actions.do("mail")
+            if random.random() < 0.5:
+                self._actions.do("alliance")
+        if random.random() < 0.3:
+            self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
+
+    def _phase_wait_return(self):
+        """Phase 3: alt-tab out and wait for the 'troops returned' toast.
+
+        The toast only fires while ROK is in the background, so we genuinely tab
+        away and read it from the OS (no screen capture). Cap at MAX_MARCH_MINUTES;
+        if nothing arrives we tab back and let the OCR queue check sort it out."""
+        print(f"  [{INFO}] Phase: alt-tab away, waiting for troops to return "
+              f"(cap {MAX_MARCH_MINUTES}min)")
+        self._notif.snapshot_baseline()
+        # Stop grabbing the screen while we're tabbed out -- we only read OS
+        # notifications during the wait. Resume before tabbing back so the frame
+        # buffer is fresh for the queue check.
+        self._capture_paused = True
+        self._tab_out()
+
+        start = time.time()
+        cap = MAX_MARCH_MINUTES * 60
+        returned = 0
+        try:
+            while time.time() - start < cap:
+                time.sleep(random.uniform(4.0, 8.0))
+                if self._notif.available:
+                    n = self._notif.check_returned()
+                    if n > 0:
+                        returned += n
+                        elapsed = (time.time() - start) / 60.0
+                        print(f"  [{INFO}] Toast: {returned} troop(s) returned after {elapsed:.1f}min")
+                        # human reaction: notice the toast, then tab back
+                        time.sleep(random.uniform(3.0, 20.0))
+                        break
+        finally:
+            self._capture_paused = False
+
+        if returned == 0:
+            mins = (time.time() - start) / 60.0
+            print(f"  [{WARN}] No return toast in {mins:.0f}min "
+                  f"(notif {'on' if self._notif.available else 'OFF'}), "
+                  f"tabbing back to check queue")
+
         self._tab_back()
+
+        # Reconcile free slots so the next burst can start. OCR is authoritative;
+        # without it, estimate from the toast count (>=1) so we never deadlock on
+        # the full-queue branch.
+        queue = self._detect_march_queue() if self.loop else None
+        if queue:
+            used, total = queue
+            self.mines_completed = used
+            print(f"  [{INFO}] After return: queue {used}/{total}")
+        else:
+            freed = returned if returned > 0 else 1
+            self.mines_completed = max(0, self.mines_completed - freed)
+            print(f"  [{INFO}] After return: no OCR read, assuming {freed} slot(s) "
+                  f"freed -> counter {self.mines_completed}")
 
     def _check_session(self) -> str | None:
         if self.session.should_take_break():
             return "break"
         return None
 
-    def _detect_march_queue(self) -> tuple[int, int] | None:
-        """Read march queue (e.g. '1/5') from city view via OCR. Returns (used, total) or None."""
+    def _detect_march_queue(self, retries: int = 3) -> tuple[int, int] | None:
+        """Read march queue (e.g. '1/5') via OCR. Returns (used, total) or None.
+
+        A single OCR pass misses often (frame timing, faint text), which made the
+        turn-1 'is the queue already full' check unreliable. Retry across a few
+        fresh frames; on total failure save the ROI crop so the region can be
+        verified against the actual queue indicator.
+        """
         if _OCR_BACKEND is None:
             return None
-        frame = self._grab()
-        if frame is None:
-            return None
-        fh, fw = frame.shape[:2]
-        x1 = int(fw * 0.93)
-        y1 = int(fh * 0.15)
-        x2 = fw
-        y2 = int(fh * 0.26)
-        roi = frame[y1:y2, x1:x2]
 
-        if not hasattr(self, '_queue_roi_saved') or not self._queue_roi_saved:
-            save_screenshot(roi, "queue_roi_debug")
-            self._queue_roi_saved = True
+        last_roi = None
+        last_text = ""
+        for attempt in range(max(1, retries)):
+            if attempt > 0:
+                time.sleep(random.uniform(0.25, 0.45))
+            frame = self._grab()
+            if frame is None:
+                continue
+            # Queue "x/5" counter sits at client ~(0.97, 0.15); box measured at
+            # x[0.948,0.997] y[0.137,0.168]. Hug it (the old y 0.15-0.26 started
+            # below the digits and ran down into terrain -> intermittent misses).
+            fh, fw = frame.shape[:2]
+            x1 = int(fw * 0.92)
+            y1 = int(fh * 0.10)
+            x2 = fw
+            y2 = int(fh * 0.21)
+            roi = frame[y1:y2, x1:x2]
+            last_roi = roi
 
-        try:
-            texts = []
-            if _OCR_BACKEND == "rapidocr":
-                result, _ = _ocr_engine(roi)
-                if result:
-                    sorted_r = sorted(result, key=lambda r: r[0][0][0])
-                    texts = [''.join(r[1] for r in sorted_r)]
-            else:
-                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-                binary = cv2.resize(binary, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-                raw = pytesseract.image_to_string(
-                    binary, config='--psm 7 -c tessedit_char_whitelist=0123456789/')
-                texts = [raw.strip()]
+            try:
+                texts = []
+                if _OCR_BACKEND == "rapidocr":
+                    result, _ = _ocr_engine(roi)
+                    if result:
+                        sorted_r = sorted(result, key=lambda r: r[0][0][0])
+                        texts = [''.join(r[1] for r in sorted_r)]
+                else:
+                    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                    _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+                    binary = cv2.resize(binary, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+                    raw = pytesseract.image_to_string(
+                        binary, config='--psm 7 -c tessedit_char_whitelist=0123456789/')
+                    texts = [raw.strip()]
 
-            for text in texts:
-                logger.debug("Queue OCR: '%s'", text)
-                m = re.search(r'(\d)\s*/\s*(\d)', text)
-                if m:
-                    used, total = int(m.group(1)), int(m.group(2))
-                    if 0 <= used <= total <= 9:
-                        return used, total
-        except Exception as e:
-            logger.debug("Queue OCR error: %s", e)
+                for text in texts:
+                    last_text = text
+                    logger.debug("Queue OCR (try %d/%d): '%s'", attempt + 1, retries, text)
+                    m = re.search(r'(\d)\s*/\s*(\d)', text)
+                    if m:
+                        used, total = int(m.group(1)), int(m.group(2))
+                        if 0 <= used <= total <= 9:
+                            return used, total
+            except Exception as e:
+                logger.debug("Queue OCR error: %s", e)
+
+        # All retries failed -- save the ROI so the crop position can be verified.
+        if last_roi is not None and last_roi.size > 0:
+            path = save_screenshot(last_roi, "queue_roi_miss")
+            logger.debug("Queue OCR failed after %d tries (last text='%s'); saved %s",
+                         retries, last_text, path)
         return None
 
     # --- Frame capture with day/night normalization ---
 
     def _start_capture_thread(self):
         self._capture_running = True
+        self._capture_paused = False
         self._frame_lock = threading.Lock()
         self._bg_frame = None
         self._bg_back = None
@@ -466,6 +604,12 @@ class GemFarmFlowTest:
         win_refresh_interval = 10.0
         last_win_refresh = time.monotonic()
         while self._capture_running:
+            # While alt-tabbed away (Phase 3) we only read OS notifications, so
+            # don't grab the screen -- it's wasted work and a needless capture of
+            # a backgrounded window. Resume the moment we tab back in.
+            if self._capture_paused:
+                time.sleep(0.2)
+                continue
             frame = self.sc.grab_full()
             if frame is not None:
                 with self._frame_lock:
@@ -527,18 +671,46 @@ class GemFarmFlowTest:
             return True
         return False
 
+    def _on_clean_view(self) -> bool:
+        """True if on a clean city/world view with no panel open.
+
+        An open panel covers the bottom-right toggle button, so seeing that
+        button (city_btn on the world map, world_map_city_btn in the city) means
+        we have fully backed out -- and another ESC here would open the profile.
+        City resource icons are a fallback signal for the city view.
+        """
+        frame = self._grab()
+        if frame is None:
+            return False
+        if self._find_city_btn(frame, threshold=0.70):
+            return True
+        if self._find_on_frame(frame, "buttons/world_map_city_btn",
+                               threshold=WORLD_MAP_BTN_THRESHOLD):
+            return True
+        if (self._find_on_frame(frame, "ui/city_food", threshold=0.72)
+                or self._find_on_frame(frame, "ui/city_wood", threshold=0.72)):
+            return True
+        return False
+
     def _attempt_recovery(self):
-        """Try to recover from stuck state by dismissing popups.
-        Click empty map area instead of ESC (ESC opens profile when nothing is open)."""
-        rx = random.uniform(0.82, 0.92)
-        ry = random.uniform(0.35, 0.55)
-        self._click_pct(rx, ry, jitter_px=8)
-        time.sleep(random.uniform(0.5, 1.0))
-        cx, cy = self._center_screen()
-        self._click(cx, cy)
-        time.sleep(random.uniform(0.5, 1.0))
-        self._click_pct(random.uniform(0.82, 0.92), random.uniform(0.35, 0.55), jitter_px=8)
-        time.sleep(random.uniform(1.0, 2.0))
+        """Recover from repeated failures by backing out with the ESC key ONLY.
+
+        Never click randomly or in sequence -- a stray click could march troops
+        or open junk. ESC closes one panel per press; stop the moment we reach a
+        clean city/world view, because pressing ESC with nothing open would open
+        the profile panel. (We check 'clean' BEFORE each press, so we only ever
+        press ESC while something is actually open; if a press accidentally opens
+        the profile, the next press closes it and then we stop.)
+        """
+        print(f"  [{WARN}] Recovery: ESC back-out (no clicking)")
+        for attempt in range(4):
+            if self._on_clean_view():
+                print(f"  [{INFO}] Recovery: clean view reached after {attempt} ESC press(es)")
+                break
+            self.cmd.send("KEY", "ESC", random.randint(40, 90))
+            self._wait(random.uniform(0.6, 1.2))
+        # A network disconnect popup needs its confirm button, not ESC -- handle
+        # it with a targeted (not random) click.
         if self._check_reconnect_popup():
             print(f"  [{WARN}] Recovery: dismissed reconnect popup")
             time.sleep(random.uniform(3.0, 6.0))
@@ -755,6 +927,13 @@ class GemFarmFlowTest:
             hold_ms = h
             if random.random() < 0.08:
                 hold_ms = random.randint(200, 400)
+        # Log where the click actually lands vs. the target -- the cursor's real
+        # position IS the click point, so `err` exposes relative-MOVE drift.
+        acx, acy = get_cursor_pos()
+        err = max(abs(acx - sx), abs(acy - sy))
+        tag = "" if err <= 8 else f"  [{WARN}] OFF by {err}px"
+        logger.debug("click target=(%d,%d) cursor=(%d,%d) err=%dpx%s",
+                     sx, sy, acx, acy, err, tag)
         ok = self.cmd.send("CLICK", "L", hold_ms)
         self.session.record_action()
         self._wait(DELAY_AFTER_CLICK)
@@ -860,6 +1039,78 @@ class GemFarmFlowTest:
             return m
         return None
 
+    def _match_verify(self, frame, template: str, matcher, min_conf: float,
+                      roi=VERIFY_ROI) -> Match | None:
+        """Match in the center ROI first (fast); fall back to a full-frame match
+        if the ROI gives nothing strong enough. The mine/gather auto-center after
+        zoom-in so the ROI normally hits; the fallback covers off-center cases
+        (click drift, or a mine near the map edge that can't fully center).
+        Returns a Match in full-frame coords."""
+        fh, fw = frame.shape[:2]
+        rx1, ry1, rx2, ry2 = roi
+        x1, y1 = int(fw * rx1), int(fh * ry1)
+        x2, y2 = int(fw * rx2), int(fh * ry2)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size:
+            m = matcher.match_single(crop, template)
+            if m is not None and m.confidence >= min_conf:
+                ax, ay = m.x + x1, m.y + y1
+                return Match(m.name, ax, ay, m.w, m.h, m.confidence,
+                             (ax + m.w // 2, ay + m.h // 2))
+        # ROI weak/empty -> search the whole frame.
+        return matcher.match_single(frame, template)
+
+    # Real city/world toggle button lives in the bottom-right corner. A rare
+    # event icon at the TOP-right looks like city_btn and was matching as the
+    # best result, fooling the "are we on the world map" check -> nav fails.
+    _CITY_BTN_REGION = (0.82, 0.78, 1.0, 1.0)  # x1, y1, x2, y2 in frame pct
+
+    def _find_city_btn(self, frame=None, threshold: float = 0.70) -> Match | None:
+        """Match city_btn only in the bottom-right corner, ignoring look-alikes
+        (e.g. a top-right event icon)."""
+        if frame is None:
+            frame = self._grab()
+        if frame is None:
+            return None
+        fh, fw = frame.shape[:2]
+        rx1, ry1, rx2, ry2 = self._CITY_BTN_REGION
+        x1, y1 = int(fw * rx1), int(fh * ry1)
+        x2, y2 = int(fw * rx2), int(fh * ry2)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        m = self.matcher.match_single(crop, "buttons/city_btn")
+        if m and m.confidence >= threshold:
+            ax, ay = m.x + x1, m.y + y1
+            return Match(m.name, ax, ay, m.w, m.h, m.confidence,
+                         (ax + m.w // 2, ay + m.h // 2))
+        return None
+
+    # The "Quan moi" (New Troop) button sits on the RIGHT, next to the army /
+    # troop-count list -- NOT bottom-center. Searching the whole frame matched a
+    # look-alike mid-map (clicked the wrong spot), so restrict to the right side.
+    _NEW_TROOP_REGION = (0.70, 0.12, 1.0, 0.60)  # x1, y1, x2, y2 in frame pct
+
+    def _find_new_troop_btn(self, frame=None, threshold: float = BUTTON_THRESHOLD) -> Match | None:
+        """Match new_troop_btn only in the right-side troop panel region."""
+        if frame is None:
+            frame = self._grab()
+        if frame is None:
+            return None
+        fh, fw = frame.shape[:2]
+        rx1, ry1, rx2, ry2 = self._NEW_TROOP_REGION
+        x1, y1 = int(fw * rx1), int(fh * ry1)
+        x2, y2 = int(fw * rx2), int(fh * ry2)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        m = self.matcher.match_single(crop, "buttons/new_troop_btn")
+        if m and m.confidence >= threshold:
+            ax, ay = m.x + x1, m.y + y1
+            return Match(m.name, ax, ay, m.w, m.h, m.confidence,
+                         (ax + m.w // 2, ay + m.h // 2))
+        return None
+
     def _find_all_gems(self, frame) -> list[Match]:
         matches = self.matcher.match_all(frame, "resources/gem_icon", overlap_thresh=0.3)
         result = []
@@ -891,6 +1142,20 @@ class GemFarmFlowTest:
 
     # --- Main flow ---
 
+    def _initial_prepare(self):
+        """Countdown so the user can get ready, then (optionally) alt-tab to the
+        game. Launched from a terminal, the terminal is the foreground window, so
+        the first clicks would land on it -- one ALT+TAB brings the game forward."""
+        for n in range(COUNTDOWN_SECONDS, 0, -1):
+            print(f"  [{INFO}] Starting in {n}...")
+            time.sleep(1.0)
+
+        if self._initial_alttab:
+            print(f"  [{INFO}] Alt-tab to game window")
+            self.cmd.send("COMBO", "ALT", "TAB", random.randint(50, 120))
+            time.sleep(random.uniform(1.0, 2.0))
+            self._refresh_window()
+
     def run(self):
         for f in SCREENSHOT_DIR.glob("*.png"):
             f.unlink()
@@ -910,6 +1175,8 @@ class GemFarmFlowTest:
             if not self._setup():
                 return
 
+            self._initial_prepare()
+
             i = 1
             consecutive_fails = 0
             while True:
@@ -921,15 +1188,15 @@ class GemFarmFlowTest:
                     if queue:
                         used, total = queue
                         if used >= total:
-                            print(f"\n  [{INFO}] Queue full ({used}/{total}), waiting...")
-                            self._idle_while_queue_full()
+                            print(f"\n  [{INFO}] Queue full ({used}/{total}) -- burst done, city + wait for return")
                             self.mines_completed = used
+                            self._phase_full_cycle()
                             continue
                         self.mines_completed = used
                         print(f"  [{INFO}] Queue: {used}/{total}, {total - used} slot(s) free")
                     elif self.mines_completed >= self.max_marches:
-                        print(f"\n  [{INFO}] Queue likely full ({self.mines_completed}/{self.max_marches} by counter), waiting...")
-                        self._idle_while_queue_full()
+                        print(f"\n  [{INFO}] Queue likely full ({self.mines_completed}/{self.max_marches} by counter) -- burst done, city + wait for return")
+                        self._phase_full_cycle()
                         continue
 
                 status = self._check_session()
@@ -969,14 +1236,9 @@ class GemFarmFlowTest:
                 self._queue_wait_start = time.time()
                 print(f"\n  Mine {i} DONE (total: {self.mines_completed})")
 
-                self._burst_counter -= 1
-                if self._burst_counter <= 0:
-                    self._tab_away()
-                    self._tab_back()
-                    self._burst_counter = random.choices(
-                        [3, 4, 5, 6, 7, 8], weights=[10, 20, 30, 20, 12, 8])[0]
-                else:
-                    self._wait(DELAY_BETWEEN_MINES)
+                # Burst: move straight to the next march. The full-queue handler
+                # at the top of the loop owns the city + alt-tab-wait pause.
+                self._wait(DELAY_BETWEEN_MINES)
 
                 i += 1
 
@@ -992,28 +1254,19 @@ class GemFarmFlowTest:
     def _mine_flow(self, idx: int) -> bool:
         tag = f"m{idx}"
 
-        self._actions.maybe_distract("before_next")
-
         # Step 1: Get to world map at icon-zoom level
         # If already on world map (from previous mine), skip city detour
         if not self._step_to_world_map(tag):
             return False
 
-        self._actions.maybe_distract("after_world")
-
         # Step 2+3+4: Wander scan, clicking each icon to verify gem type
         gem = self._step_scan_and_verify_gem(tag)
         if gem is None:
-            # Failed to find gem -- only return city if needed for queue check
-            if self.loop and random.random() < 0.6:
-                self._step_return_city(tag)
             return False
 
         # Step 5: Click "Thu Thap" (gather)
         if not self._step_click_gather(tag):
             return False
-
-        self._actions.maybe_distract("after_gather")
 
         # Step 6: Select troop + click "March"
         if not self._step_click_march(tag):
@@ -1022,18 +1275,17 @@ class GemFarmFlowTest:
         self.gathered_positions.append(gem.center)
         print(f"  [{INFO}] Marked gem at {gem.center} as gathered ({len(self.gathered_positions)} total)")
 
-        self._actions.maybe_distract("after_march")
-
-        # Step 7: Stay on world map, zoom back to icon level for next mine
-        # Only return to city occasionally (queue check, or like a real player)
-        if not hasattr(self, '_city_return_interval'):
-            self._city_return_interval = random.randint(2, 4)
-        need_city = self.loop and (self.mines_completed + 1) % self._city_return_interval == 0
-        if need_city:
-            self._city_return_interval = random.randint(2, 4)
-            self._step_return_city(tag)
-        else:
-            self._step_stay_and_rezoom(tag)
+        # Step 7: prep for the next march by re-zooming to icon level on the
+        # world map -- but only if a slot is still free. If this march just
+        # filled the queue, the next loop iteration heads back to the city, so
+        # re-zooming/panning here would be wasted motion.
+        if self.loop:
+            queue = self._detect_march_queue()
+            if queue and queue[0] >= queue[1]:
+                print(f"  [{INFO}] Queue full ({queue[0]}/{queue[1]}) after march -- "
+                      f"skip re-zoom, heading to city next")
+                return True
+        self._step_stay_and_rezoom(tag)
         return True
 
     def _step_stay_and_rezoom(self, tag: str):
@@ -1048,7 +1300,7 @@ class GemFarmFlowTest:
         self._wait(DELAY_AFTER_ESCAPE)
 
         # Verify still on world map
-        city_btn = self._find("buttons/city_btn", threshold=0.70)
+        city_btn = self._find_city_btn(threshold=0.70)
         if not city_btn:
             print(f"  [{WARN}] Not on world map after march, falling back to city")
             self._step_return_city(tag)
@@ -1087,8 +1339,30 @@ class GemFarmFlowTest:
             return False
         print(f"  [{PASS}] Window: {self.win['width']}x{self.win['height']}")
 
+        # Resize the game window to the target content width (same as
+        # `python -m anti_detection.player_actions`) so template scales match.
+        if self.win["width"] != TARGET_CONTENT_W:
+            print(f"  [{INFO}] Resizing game {self.win['width']}x{self.win['height']} "
+                  f"-> w={TARGET_CONTENT_W}")
+            try:
+                _try_resize_game(self.sc, TARGET_CONTENT_W)
+            except Exception as e:
+                print(f"  [{WARN}] Resize failed: {e}")
+            time.sleep(0.3)
+            self.sc._window = None
+            w = self.sc.find_window()
+            if w:
+                self.win = w
+            print(f"  [{INFO}] Window now: {self.win['width']}x{self.win['height']}")
+
         self.cache = TemplateCache("templates")
         self.matcher = TemplateMatcher(self.cache, threshold=0.50)
+        # Faster matcher for the zoom-settle poll. Must still span the full scale
+        # range (the gather/mine sit off 1.0), just with fewer samples than the
+        # 7-scale default -- a too-narrow set missed the gather button (conf 0.56).
+        # The decisive gather checks below still use the full self.matcher.
+        self.fast_matcher = TemplateMatcher(self.cache, threshold=0.50,
+                                            scales=[0.7, 0.85, 1.0, 1.15, 1.3])
         self.detector = StateDetector(self.matcher, min_confidence=0.80)
 
         key_templates = [
@@ -1123,12 +1397,31 @@ class GemFarmFlowTest:
         self.cmd = CommandBuffer(self.conn)
         self.cmd.start()
         self._wait(DELAY_AFTER_CLICK)
-        self._has_moveto = self._probe_moveto()
-        if self._has_moveto:
-            print(f"  [{PASS}] ESP32: {self.port} (MOVETO verified)")
+
+        # Mouse calibration is the visible "cursor jerks up/down/left/right" at
+        # startup. It only depends on the machine (MOVETO support + pointer
+        # speed), so measure it once and cache it in the persona -- subsequent
+        # runs reuse it and skip the jerk. Use --recalibrate to force a refresh.
+        cached = self._persona.get("has_moveto")
+        if cached is not None and not self._recalibrate:
+            self._has_moveto = cached
+            if not cached:
+                self._mouse_scale = self._persona.get("mouse_scale", 1.0)
+            src = "cached"
         else:
-            self._mouse_scale = self._calibrate_mouse_scale()
-            print(f"  [{WARN}] ESP32: {self.port} (MOVETO unavailable, using relative MOVE, scale={self._mouse_scale:.2f}x)")
+            self._has_moveto = self._probe_moveto()
+            if not self._has_moveto:
+                self._mouse_scale = self._calibrate_mouse_scale()
+            self._persona["has_moveto"] = self._has_moveto
+            self._persona["mouse_scale"] = self._mouse_scale
+            self._save_persona()
+            src = "measured"
+
+        if self._has_moveto:
+            print(f"  [{PASS}] ESP32: {self.port} (MOVETO verified, {src})")
+        else:
+            print(f"  [{WARN}] ESP32: {self.port} (relative MOVE, "
+                  f"scale={self._mouse_scale:.2f}x, {src})")
 
         self._start_capture_thread()
         time.sleep(0.2)
@@ -1165,6 +1458,13 @@ class GemFarmFlowTest:
                 print(f"  [{INFO}] Queue detection: internal counter (no OCR)")
             print(f"  [{INFO}] Max marches: {self.max_marches}")
 
+            if self._notif.setup():
+                print(f"  [{PASS}] Return detection: Windows toast "
+                      f"('troops returned', name-independent)")
+            else:
+                print(f"  [{WARN}] Return detection: toast listener unavailable, "
+                      f"falling back to {MAX_MARCH_MINUTES}min timer + queue OCR")
+
         self._record("setup", True, "OK")
         return True
 
@@ -1179,7 +1479,7 @@ class GemFarmFlowTest:
         # Check if already on world map at icon zoom
         frame = self._grab()
         if frame is not None:
-            city_btn = self._find_on_frame(frame, "buttons/city_btn", threshold=0.70)
+            city_btn = self._find_city_btn(frame, threshold=0.70)
             if city_btn:
                 gems = self._find_all_gems(frame)
                 if gems:
@@ -1216,7 +1516,7 @@ class GemFarmFlowTest:
         # Verify we're on world map (retry — transition animation takes time)
         city_btn = None
         for retry in range(4):
-            city_btn = self._find("buttons/city_btn", threshold=0.70)
+            city_btn = self._find_city_btn(threshold=0.70)
             if city_btn:
                 break
             time.sleep(1.0)
@@ -1227,7 +1527,7 @@ class GemFarmFlowTest:
                 print(f"  [{WARN}] Toggled wrong, clicking Space again...")
                 self._click_match(m2)
                 self._wait(DELAY_WORLD_MAP)
-                city_btn = self._find("buttons/city_btn", threshold=0.70)
+                city_btn = self._find_city_btn(threshold=0.70)
         if not city_btn:
             print(f"  [{FAIL}] Not on world map after clicking")
             frame = self._grab()
@@ -1239,43 +1539,12 @@ class GemFarmFlowTest:
         zs = self._zoom_scrolls()
         print(f"  [{PASS}] On world map, zooming out {zs}x...")
 
-        cx, cy = self._center_screen()
-        if random.random() < 0.3:
-            pdx = random.randint(-80, 80)
-            pdy = random.randint(-50, 50)
-            self._human_drag(cx + pdx, cy + pdy, cx - pdx, cy - pdy)
-            self._wait(random.uniform(0.5, 1.5))
+        # Keep it simple: _scroll_at_center already moves the cursor to a random
+        # spot in the play area before scrolling, so the city->world transition
+        # is just "move cursor somewhere + zoom out". No extra map panning here;
+        # the wander scan handles exploring to a fresh area.
         self._scroll_at_center(-1, zs)
         self._wait(DELAY_AFTER_SCROLL)
-
-        # After previous mine: 2-3 smaller drags to move camera away naturally
-        if self.mines_completed > 0:
-            ww = self.win["width"]
-            wh = self.win["height"]
-            margin = 80
-            base_angle = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1),
-                                        (1, 1), (-1, -1), (1, -1), (-1, 1)])
-            num_drags = random.randint(2, 3)
-            for drag_i in range(num_drags):
-                if drag_i == 0:
-                    dx_u, dy_u = base_angle
-                else:
-                    dx_u = base_angle[0] + random.choice([-1, 0, 0, 1])
-                    dy_u = base_angle[1] + random.choice([-1, 0, 0, 1])
-                    dx_u = max(-1, min(1, dx_u))
-                    dy_u = max(-1, min(1, dy_u))
-                    if dx_u == 0 and dy_u == 0:
-                        dx_u, dy_u = base_angle
-                dp = random.uniform(0.35, 0.7)
-                sx = cx + int(dx_u * (ww // 2 - margin) * dp) + random.randint(-30, 30)
-                ex = cx - int(dx_u * (ww // 2 - margin) * dp) + random.randint(-30, 30)
-                s_y = cy + int(dy_u * (wh // 2 - margin) * dp) + random.randint(-30, 30)
-                e_y = cy - int(dy_u * (wh // 2 - margin) * dp) + random.randint(-30, 30)
-                sx, s_y = self._clamp_to_play_area(sx, s_y)
-                ex, e_y = self._clamp_to_play_area(ex, e_y)
-                self._human_drag(sx, s_y, ex, e_y)
-                self._wait(random.uniform(1.5, 3.5), 0.8)
-            print(f"  [{INFO}] Shifted camera ({num_drags} drags, base dir={base_angle})")
 
         frame = self._grab()
         if frame is not None:
@@ -1639,22 +1908,36 @@ class GemFarmFlowTest:
             icon_patch = None
 
         self._click(sx, sy)
-        self._wait(DELAY_ZOOM_IN)
 
-        frame = self._grab()
+        # Adaptive zoom-in wait: the game zooms into the mine after the icon
+        # click. Poll for the mine structure (or an already-open gather popup)
+        # instead of a fixed sleep, so a fast zoom continues immediately and a
+        # slow one still gets up to ZOOM_POLL_MAX tries before giving up.
+        frame = None
+        mine = None
+        g_raw = None
+        for _poll in range(ZOOM_POLL_MAX):
+            self._wait(DELAY_ZOOM_IN_POLL)
+            frame = self._grab()
+            if frame is None:
+                continue
+            mine = None
+            for tpl in GEM_MINE_TEMPLATES:
+                m = self._match_verify(frame, tpl, self.fast_matcher, GEM_MINE_THRESHOLD)
+                if (m and m.confidence >= GEM_MINE_THRESHOLD
+                        and (mine is None or m.confidence > mine.confidence)):
+                    mine = m
+            g_raw = self._match_verify(frame, "buttons/gather_btn", self.fast_matcher,
+                                       GATHER_BTN_THRESHOLD)
+            g_early = g_raw.confidence if g_raw else 0.0
+            if mine is not None or g_early >= GATHER_BTN_THRESHOLD:
+                break
+
         if frame is None:
             return False
         save_screenshot(frame, f"{tag}_attempt_{attempt:02d}")
 
-        # Find best mine structure match (reuse for gem check + occupation check)
-        mine = None
-        for tpl in GEM_MINE_TEMPLATES:
-            m = self._find_on_frame(frame, tpl, threshold=GEM_MINE_THRESHOLD)
-            if m and (mine is None or m.confidence > mine.confidence):
-                mine = m
-
         is_gem = mine is not None
-        g_raw = self.matcher.match_single(frame, "buttons/gather_btn")
         g_conf = g_raw.confidence if g_raw else 0.0
         g = g_raw if g_conf >= GATHER_BTN_THRESHOLD else None
         print(f"  [{INFO}] [{attempt}] gather_btn conf={g_conf:.3f} (threshold={GATHER_BTN_THRESHOLD}, pass={g is not None})")
@@ -1702,7 +1985,8 @@ class GemFarmFlowTest:
             frame_recheck = self._grab()
             if frame_recheck is not None:
                 save_screenshot(frame_recheck, f"{tag}_recheck_{attempt:02d}")
-                g_re_raw = self.matcher.match_single(frame_recheck, "buttons/gather_btn")
+                g_re_raw = self._match_verify(frame_recheck, "buttons/gather_btn",
+                                              self.matcher, GATHER_BTN_THRESHOLD)
                 g_re_conf = g_re_raw.confidence if g_re_raw else 0.0
                 print(f"  [{INFO}] [{attempt}] re-check gather_btn conf={g_re_conf:.3f}")
                 if g_re_conf >= GATHER_BTN_THRESHOLD:
@@ -1718,7 +2002,8 @@ class GemFarmFlowTest:
             frame2 = self._grab()
             if frame2 is not None:
                 save_screenshot(frame2, f"{tag}_after_mine_click_{attempt:02d}")
-                g2_raw = self.matcher.match_single(frame2, "buttons/gather_btn")
+                g2_raw = self._match_verify(frame2, "buttons/gather_btn",
+                                            self.matcher, GATHER_BTN_THRESHOLD)
                 g2_conf = g2_raw.confidence if g2_raw else 0.0
                 print(f"  [{INFO}] [{attempt}] after mine click gather_btn conf={g2_conf:.3f}")
                 if g2_conf >= GATHER_BTN_THRESHOLD:
@@ -1756,8 +2041,6 @@ class GemFarmFlowTest:
         attempt = 0
         SKIP_RADIUS = 80
         clicked_positions: list[tuple[int, int, int]] = []
-
-        distraction_interval = random.randint(8, 15)
 
         print(f"  [{INFO}] Wander scan (margin={margin})")
 
@@ -1800,9 +2083,6 @@ class GemFarmFlowTest:
             if self._check_session() == "break":
                 return None
 
-            if scan_count > 1 and scan_count % distraction_interval == 0:
-                self._actions.maybe_distract("during_scan")
-
             turn = random.gauss(0, 0.4)
             if random.random() < 0.15:
                 turn = random.uniform(-math.pi / 2, math.pi / 2)
@@ -1817,13 +2097,18 @@ class GemFarmFlowTest:
                 _speed_target = random.uniform(3.6, 7.0)
             scan_speed += (_speed_target - scan_speed) * random.uniform(0.08, 0.15)
 
-            num_swipes = 2
+            # Pan a CONTROLLED total distance per scan step, split across 1-2
+            # swipes. The total is a fraction of the half-screen reach (not
+            # per-swipe), so 1 vs 2 swipes covers the same ground -- consecutive
+            # scans then overlap instead of jumping too far and skipping gems.
+            num_swipes = random.choices([1, 2], weights=[45, 55])[0]
+            total_pct = random.uniform(0.50, 0.75)
+            per_pct = total_pct / num_swipes
+            half_x = int((ww // 2 - margin) * per_pct)
+            half_y = int((wh // 2 - margin) * per_pct)
             for _sw in range(num_swipes):
-                dist_pct = random.uniform(0.20, 0.30)
                 jx = random.randint(-25, 25)
                 jy = random.randint(-20, 20)
-                half_x = int((ww // 2 - margin) * dist_pct)
-                half_y = int((wh // 2 - margin) * dist_pct)
                 sx = cx + int(dx_f * half_x) + jx
                 sy = cy + int(dy_f * half_y) + jy
                 ex = cx - int(dx_f * half_x) + jx
@@ -1831,12 +2116,18 @@ class GemFarmFlowTest:
                 sx, sy = self._clamp_to_play_area(sx, sy)
                 ex, ey = self._clamp_to_play_area(ex, ey)
                 self._human_drag(sx, sy, ex, ey, speed_factor=scan_speed, easing="in")
-                time.sleep(random.uniform(0.25, 0.55))
-                turn_adj = random.gauss(0, 0.15)
-                wander_heading += turn_adj
+                if _sw < num_swipes - 1:
+                    # mid-sequence: barely pause -- we haven't arrived yet, so
+                    # there's nothing new to load; no big delay needed.
+                    time.sleep(random.uniform(0.05, 0.15))
+                    wander_heading += random.gauss(0, 0.15)
+                    dx_f = math.cos(wander_heading)
+                    dy_f = math.sin(wander_heading)
 
-            if random.random() < 0.10:
-                time.sleep(random.uniform(1.0, 2.5))
+            # Let the map settle once so the captured frame isn't mid-pan.
+            self._wait(DELAY_DRAG_SETTLE)
+            if random.random() < 0.08:
+                time.sleep(random.uniform(0.8, 1.8))
 
             frame = self._grab()
             if frame is None:
@@ -1947,7 +2238,7 @@ class GemFarmFlowTest:
 
     def _is_troop_panel_open(self, frame) -> bool:
         """Check if troop selection panel is still visible."""
-        m = self._find_on_frame(frame, "buttons/new_troop_btn", threshold=0.85)
+        m = self._find_new_troop_btn(frame, threshold=0.85)
         return m is not None
 
     def _step_click_march(self, tag: str) -> bool:
@@ -1961,39 +2252,38 @@ class GemFarmFlowTest:
                 self._wait(DELAY_RECHECK)
                 continue
 
-            # Try "New Troop" button first (troop selection panel)
+            # Try "New Troop" button first (troop selection panel, right side)
             if not selected_new_troop:
-                m = self._find_on_frame(frame, "buttons/new_troop_btn", threshold=BUTTON_THRESHOLD)
+                m = self._find_new_troop_btn(frame, threshold=BUTTON_THRESHOLD)
                 if m:
-                    print(f"  [{PASS}] new_troop_btn: conf={m.confidence:.3f}")
+                    print(f"  [{PASS}] new_troop_btn: conf={m.confidence:.3f} at {m.center}")
                     if self._click_match(m):
                         selected_new_troop = True
                         print(f"  [{PASS}] New troop selected")
                         self._wait(DELAY_VERIFY)
                         continue
 
-            # Try template matching for march button
-            march = self._find_march_btn(frame)
-            if march:
-                print(f"  [{INFO}] March btn found: {march.name} conf={march.confidence:.3f} at {march.center}")
-                sx, sy = self._screen_xy(*march.center)
-                self._click(sx, sy)
-            else:
-                sx = self.win["left"] + int(self.win["width"] * 0.66)
-                sy = self.win["top"] + int(self.win["height"] * 0.76)
-                print(f"  [{INFO}] March btn not found, fallback click ({sx},{sy}) (attempt {attempt+1}/6)")
-                self._click(sx, sy)
+            # "Hanh quan" (March) is at a fixed spot in the deploy panel -- click
+            # it directly. Template matching here kept mis-firing onto look-alikes
+            # elsewhere on the frame, marching nothing while reporting success.
+            print(f"  [{INFO}] Clicking March (Hanh quan) at fixed pct{MARCH_BTN_PCT} (attempt {attempt+1}/6)")
+            self._click_pct(*MARCH_BTN_PCT, jitter_px=6)
 
-            self._wait(DELAY_VERIFY[0] * 2)
-
+            # Marching kicks off a short zoom/animation before returning to the
+            # world map, so give it a moment before checking we're back.
+            self._wait(random.uniform(1.2, 2.0))
             frame2 = self._grab()
             if frame2 is not None:
                 save_screenshot(frame2, f"{tag}_after_march_{attempt:02d}")
-                if not self._is_troop_panel_open(frame2):
-                    print(f"  [{PASS}] March clicked! (troop panel gone)")
+                # March succeeded only when we're back on the world map. The
+                # commander deploy panel has no new_troop_btn, so its absence is
+                # NOT proof of success -- check the world-map toggle (city_btn)
+                # is visible (the panel covers that corner while open).
+                if self._find_city_btn(frame2, threshold=0.70):
+                    print(f"  [{PASS}] March clicked! (back on world map)")
                     self._record(f"{tag}_march", True, f"attempt={attempt+1}")
                     return True
-                print(f"  [{WARN}] Troop panel still open (attempt {attempt+1}/6)")
+                print(f"  [{WARN}] Still in deploy panel, not on world map (attempt {attempt+1}/6)")
 
             self._wait(DELAY_RECHECK)
 
@@ -2004,10 +2294,10 @@ class GemFarmFlowTest:
     # --- Step 7: Return to city view ---
 
     def _step_return_city(self, tag: str):
-        print(f"\n--- [{tag}] Step 7: Return to city ---\n")
+        print(f"\n--- [{tag}] Return to city ---\n")
 
         # Try city_btn first (visible on world map)
-        m = self._find("buttons/city_btn", threshold=0.75)
+        m = self._find_city_btn(threshold=0.75)
         if m:
             print(f"  [{INFO}] Clicking city_btn...")
             self._click_match(m)
@@ -2099,6 +2389,14 @@ def main():
                         help="Account identifier for persistent persona (default: 'default')")
     parser.add_argument("--actions", type=str, default=None,
                         help="Override distraction action pool (comma-separated, e.g. alt_tab,chat,mail)")
+    parser.add_argument("--recalibrate", action="store_true",
+                        help="Force re-measuring mouse MOVETO/scale (the startup cursor jerk); "
+                             "otherwise the cached value from the persona is reused")
+    parser.add_argument("--no-mail-alliance", action="store_true",
+                        help="Disable the mail + alliance gift check in the city phase")
+    parser.add_argument("--no-initial-alttab", action="store_true",
+                        help="Skip the startup alt-tab into the game (on by default; "
+                             "needed because the terminal is foreground when launched)")
     args = parser.parse_args()
 
     if args.no_screenshots:
@@ -2117,6 +2415,9 @@ def main():
             loop=args.loop, max_marches=args.max_marches,
             account_id=args.account_id,
             actions_override=actions_list,
+            recalibrate=args.recalibrate,
+            skip_mail_alliance=args.no_mail_alliance,
+            initial_alttab=not args.no_initial_alttab,
         )
         test.run()
 

@@ -236,27 +236,47 @@ def act_mail(ctx: PlayerActionCtx):
     _close_mail(ctx)
 
 
-def _mail_btn_has_badge(frame) -> bool:
-    """Check if the mail button on the bottom bar has a red notification badge."""
-    if frame is None:
+def _btn_has_badge(frame, btn_key: str) -> bool:
+    """Check if a bottom-bar button (mail/alliance/...) has a red notification badge.
+
+    Uses a circular-blob test, NOT a raw red-pixel count: a button whose own
+    icon contains red -- e.g. the alliance flag -- would always trip a pixel
+    count. A real badge is a small round red dot at the top-right corner, so we
+    require a compact, roughly-circular red blob.
+    """
+    if frame is None or btn_key not in BTN_POS:
         return False
     fh, fw = frame.shape[:2]
-    mx, my = BTN_POS["mail"]
-    x1 = int((mx - 0.025) * fw)
-    x2 = int((mx + 0.025) * fw)
-    y1 = int((my - 0.035) * fh)
-    y2 = int((my + 0.010) * fh)
+    mx, my = BTN_POS[btn_key]
+    x1 = int((mx - 0.030) * fw)
+    x2 = int((mx + 0.030) * fw)
+    y1 = int((my - 0.048) * fh)
+    y2 = int((my + 0.004) * fh)
     x1, x2 = max(0, x1), min(fw, x2)
     y1, y2 = max(0, y1), min(fh, y2)
     region = frame[y1:y2, x1:x2]
     if region.size == 0:
         return False
-    red_px = int(((region[:, :, 2] > 150)
-                  & (region[:, :, 1] < 100)
-                  & (region[:, :, 0] < 100)).sum())
+    red_mask = ((region[:, :, 2] > 150)
+                & (region[:, :, 1] < 100)
+                & (region[:, :, 0] < 100))
+    red_px = int(red_mask.sum())
+
+    circle = _find_badge_circle(red_mask, min_circularity=0.40)
+    has = False
+    if circle is not None:
+        bx, by, bw, bh, area = circle
+        aspect = min(bw, bh) / max(bw, bh) if max(bw, bh) > 0 else 0
+        has = aspect >= 0.45 and max(bw, bh) <= 38
+    logger.debug("badge[%s] red_px=%d circle=%s -> %s", btn_key, red_px, circle, has)
     if _DEBUG_BADGES:
-        print(f"      mail btn badge ({x1},{y1})-({x2},{y2}) red_px={red_px}")
-    return red_px > 30
+        print(f"      {btn_key} btn badge red_px={red_px} circle={circle} -> {has}")
+    return has
+
+
+def _mail_btn_has_badge(frame) -> bool:
+    """Check if the mail button on the bottom bar has a red notification badge."""
+    return _btn_has_badge(frame, "mail")
 
 
 def _detect_active_mail_tab_x(frame) -> float | None:
@@ -379,6 +399,11 @@ def _close_mail(ctx: PlayerActionCtx):
 
 def act_alliance(ctx: PlayerActionCtx):
     print(f"  [{INFO}] Distraction: checking alliance gifts")
+
+    frame = _grab_chat_frame(ctx)
+    if not _btn_has_badge(frame, "alliance"):
+        print("    alliance icon has no badge, skipping")
+        return
 
     ctx._click_pct(*BTN_POS["alliance"])
     time.sleep(random.uniform(2.0, 4.0))
@@ -1257,7 +1282,12 @@ class PlayerActions:
         return self.do(action_name)
 
     def do(self, action_name: str) -> bool:
-        on_world = self._ctx._find("buttons/city_btn", threshold=0.70) is not None
+        # Prefer the bottom-right-restricted finder when the host provides it, so
+        # a top-right event icon that resembles city_btn doesn't fake "on world".
+        if hasattr(self._ctx, "_find_city_btn"):
+            on_world = self._ctx._find_city_btn(threshold=0.70) is not None
+        else:
+            on_world = self._ctx._find("buttons/city_btn", threshold=0.70) is not None
 
         if on_world and action_name in CITY_ONLY:
             action_name = random.choice(WORLD_FALLBACKS)
