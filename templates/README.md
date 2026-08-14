@@ -1,6 +1,6 @@
 # Templates
 
-OpenCV templates used by `tools/test_gem_farm_flow.py`.
+OpenCV templates used by `run_farm.py`.
 
 ## Directory Structure
 
