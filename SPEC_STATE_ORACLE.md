@@ -332,34 +332,43 @@ headless including browser start, `view=world_map overlay=none covers_hud=false`
 | Grounding | answers, but not click-accurate (below) | `box_2d`, purpose-built |
 | Failure mode | CAPTCHA, DOM changes | quota errors |
 
-### Grounding, measured (2026-08-14)
+### Grounding, measured over five runs (2026-08-14/15)
 
-Same frame each time -- the city with the research panel open, its X at (777,125)
-in a 1024x576 shot:
+Same frame every time -- the city with the research panel open, its X at
+(777,125) in a 1024x576 shot. That frame has **two** X buttons in the top-right:
+the panel's, and a smaller one on the banner strip above it.
 
-| Provider / model | Answer | Error | Time |
-|---|---|---|---|
-| `google/gemini-2.5-flash-lite`, run 1 | (768, 118) | 0.9% / 1.2% | 1.7 s |
-| `google/gemini-2.5-flash-lite`, run 2 | (690, 120) | 8.5% / 0.9% | 2.2 s |
-| `qwen/qwen3.7-flash` | nothing | -- | 4.8 s |
-| `openai/gpt-5-nano` | nothing | -- | 2.1 s |
-| Google AI Mode | (758, 214) | 1.9% / 15.5% | 6.1 s |
+| Run | Provider / model | Answer | Error | Time |
+|---|---|---|---|---|
+| 1 | Google AI Mode | (758, 214) | 1.9% / **15.5%** | 6.1 s |
+| 2 | `gemini-2.5-flash-lite` | (768, 118) | 0.9% / 1.2% | 1.7 s |
+| 3 | `gemini-2.5-flash-lite` | (690, 120) | **8.5%** / 0.9% | 2.2 s |
+| 4 | `gemini-2.5-flash-lite` | (687, 119) | **8.8%** / 1.0% | 2.0 s |
+| 5 | Google AI Mode | (775, 122) | **0.2% / 0.5%** | 29.7 s |
+| -- | `qwen3.7-flash`, `gpt-5-nano` | nothing at all | -- | 2-5 s |
 
-Two things follow, and both are load-bearing:
+**Neither provider is reliable at this.** An earlier version of this document
+claimed gemini was accurate to ~1% and AI Mode was not; that was one sample
+each. With five, gemini picked the wrong X twice out of three, and AI Mode --
+the one previously written off -- produced the single best answer. The variance
+is not noise around a target, it is a choice between two genuinely valid
+answers to an ambiguous question.
 
-1. **Grounding runs only on a model that can do it.** The cheap text-shaped
-   models returned nothing at all for the same request, so `GROUNDING_MODELS` is
-   a separate list from the state models.
-2. **Post-click verification is mandatory, not a nicety.** Run 2 was not a
-   hallucination -- it landed on a *different real* X, the one belonging to the
-   banner strip above the panel, because that frame has two close buttons in the
-   top-right. Clicking it would have closed the banner and left the panel up. A
-   system that trusted the coordinate would have believed it succeeded; one that
-   re-reads the dim ratio sees the panel is still there, stops, and does not
-   learn the wrong button.
+So:
 
-Run-to-run variance on an identical image is the point: this is a probabilistic
-answer being turned into a physical click, so it is checked by result.
+1. **Grounding still runs on a model that can do it at all.** The cheap
+   text-shaped models return nothing for the same request, so `GROUNDING_MODELS`
+   stays a separate list. The API path is preferred over `ai_mode_web` on
+   latency (2 s vs 30 s), not on accuracy.
+2. **Post-click verification is what makes this safe, not the model.** Clicking
+   the banner's X closes the banner and leaves the panel up. A system that
+   trusted the coordinate would report success; one that re-reads the dim ratio
+   sees the panel still there, stops after one attempt, and does not learn the
+   wrong button.
+
+The reassuring half: on a night frame with **no** panel at all, both providers
+answered `found: false`. Inventing coordinates where there is nothing to close
+is the more dangerous failure, and neither did it.
 
 ### Grounding on `ai_mode_web`: answers, but do not click it
 

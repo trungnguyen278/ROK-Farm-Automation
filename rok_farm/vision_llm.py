@@ -83,12 +83,20 @@ VIEWS = set(STATE_SCHEMA["schema"]["properties"]["view"]["enum"])
 OVERLAYS = set(STATE_SCHEMA["schema"]["properties"]["overlay"]["enum"])
 
 # --- Locating the dismiss control -------------------------------------------
-# Only ever used to CLOSE something. Measured on a real frame (panel X at
-# 777,125 in a 1024x576 shot): gemini-2.5-flash-lite answered (768,118) in 1.7s
-# -- 0.9% / 1.2% of the frame, comfortably inside the button. qwen3.7-flash and
-# gpt-5-nano both returned nothing, and Google Search AI Mode was 15.5% out
-# vertically, landing on a research node. So grounding runs on a model known to
-# do it, and the guardrails in dismiss.py apply regardless.
+# Only ever used to CLOSE something, and NEVER trusted on its own. Five runs on
+# one identical frame whose panel X sits at (777,125) in a 1024x576 shot -- a
+# frame that also has a second, smaller X on the banner above the panel:
+#
+#   gemini-2.5-flash-lite  (768,118) 0.9%  |  (690,120) 8.5%  |  (687,119) 8.8%
+#   Google AI Mode         (758,214) 15.5% |  (775,122) 0.2%
+#   qwen3.7-flash, gpt-5-nano: no answer at all
+#
+# Neither provider is dependable: gemini picked the wrong X twice out of three.
+# The API path leads on LATENCY (2s vs 30s), not accuracy. What makes clicking
+# this safe is the verification in dismiss.py, not the model.
+#
+# The good news from the same runs: on a frame with no panel, both answered
+# found=false rather than inventing a target.
 
 DISMISS_PROMPT = (
     "This is a screenshot of the game Rise of Kingdoms. A panel or popup is "
@@ -358,7 +366,12 @@ class AiModeWebProvider:
     """
 
     name = "ai_mode_web"
-    supports_grounding = False   # it answers, but not accurately enough to click
+    # Grounding is allowed here too. It was first written off after one bad
+    # sample, but over five runs it proved no worse than the API path (best
+    # single answer of the lot, 0.2%), and what makes a located click safe is
+    # the verification in dismiss.py rather than the provider. The API still
+    # goes first when a key exists -- 2s against 30s.
+    supports_grounding = True
 
     URL = "https://www.google.com/search?udm=50"
     PASTE_JS = """
@@ -385,6 +398,11 @@ class AiModeWebProvider:
     def available(self) -> bool:
         import importlib.util
         return importlib.util.find_spec("playwright") is not None
+
+    def ask_grounding(self, jpeg: bytes, prompt: str,
+                      schema: dict | None = None) -> str | None:
+        """One model here, so grounding is the same call as anything else."""
+        return self.ask(jpeg, prompt, schema)
 
     def ask(self, jpeg: bytes, prompt: str, schema: dict | None = None) -> str | None:
         from playwright.sync_api import sync_playwright

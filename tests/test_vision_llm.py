@@ -193,6 +193,35 @@ def test_openrouter_builds_a_valid_request(monkeypatch):
     assert parse_state(reply, "openrouter").view == "city"
 
 
+def test_both_real_providers_offer_grounding():
+    """Measured over five runs, neither is more accurate than the other, so the
+    no-key path gets the feature too. Safety comes from dismiss.py, not here."""
+    from rok_farm.vision_llm import AiModeWebProvider
+
+    assert OpenRouterProvider(api_key="sk-test").supports_grounding is True
+    assert AiModeWebProvider().supports_grounding is True
+    assert hasattr(AiModeWebProvider(), "ask_grounding")
+
+
+def test_grounding_uses_its_own_model_list(monkeypatch):
+    """The state models are text-shaped and answered nothing when asked to
+    locate; grounding must not fall back to them."""
+    used = []
+
+    def fake_post(self, model, data_url, prompt, schema):
+        used.append(model)
+        return '{"found":true,"x":500,"y":100}'
+
+    monkeypatch.setattr(OpenRouterProvider, "_post", fake_post)
+    provider = OpenRouterProvider(api_key="sk-test", models=["state/model"],
+                                  grounding_models=["ground/model"])
+    provider.ask_grounding(b"\xff\xd8fake", "locate it")
+    assert used == ["ground/model"]
+
+    provider.ask(b"\xff\xd8fake", "what is this")
+    assert used == ["ground/model", "state/model"], "the lists must not leak"
+
+
 def test_openrouter_tries_the_next_model_on_failure(monkeypatch):
     tried = []
 
