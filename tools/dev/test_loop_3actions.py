@@ -1,6 +1,6 @@
 """Loop test: only alt_tab, mail, chat. Ctrl+C to stop."""
 import sys, os, random, time, ctypes
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ctypes.windll.user32.SetProcessDPIAware()
 
 import win32gui

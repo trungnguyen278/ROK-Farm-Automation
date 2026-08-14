@@ -1,7 +1,7 @@
 """
 ESP32 Hardware Test Suite
 Interactive test for real ESP32-S3 connection: PING/PONG, MOVE, CLICK, SCROLL, KEY.
-Run: python -m tools.test_esp32 [COM_PORT]
+Run: python tools/dev/test_esp32.py [COM_PORT]
 
 Tests performed:
   1. Port detection & listing
@@ -21,7 +21,7 @@ import time
 import statistics
 import logging
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from serial_comm.connection import SerialConnection
 from serial_comm.command_buffer import CommandBuffer

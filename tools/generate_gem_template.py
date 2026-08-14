@@ -6,7 +6,7 @@ Approaches:
 3. Crop crystal-only region (exclude pedestal/number common to all resource types)
 
 Usage:
-    python -m tools.generate_gem_template [--method best|average|crystal]
+    python tools/generate_gem_template.py [--method best|average|crystal]
 """
 
 import argparse
@@ -189,7 +189,7 @@ def main():
 
         print("\nNext steps:")
         print("  1. Pick the best template and rename to gem_icon.png")
-        print("  2. Test with: python -m tools.test_gem_farm_flow --count 1 --find-only")
+        print("  2. Test with: python run_farm.py --count 1 --find-only")
         print("  3. Compare false-positive rate on wood/stone/gold nodes")
 
 

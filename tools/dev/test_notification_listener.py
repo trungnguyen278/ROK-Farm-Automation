@@ -2,7 +2,7 @@ r"""Quick test: read Windows toast notifications via UserNotificationListener.
 
 Verifies winsdk can request access and read ROK "troops returned" toasts.
 
-Run: .venv\Scripts\python -m tools.test_notification_listener
+Run: .venv\Scripts\python tools/dev/test_notification_listener.py
 """
 
 import asyncio

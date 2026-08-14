@@ -1,7 +1,8 @@
 """Read cursor position after delay. Di chuot vao nut X truoc khi het thoi gian."""
 import time
 import sys
-sys.path.insert(0, ".")
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from capture.screen_info import get_cursor_pos
 from capture.screen_capture import ScreenCapture
 

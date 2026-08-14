@@ -1347,7 +1347,7 @@ def _try_resize_game(sc, target_w):
     target_h = round(target_w * aspect)
 
     script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "resize_window.py")
+                          "tools", "resize_window.py")
     python = sys.executable
     args = f'"{script}" {target_w} {target_h} --batch'
 

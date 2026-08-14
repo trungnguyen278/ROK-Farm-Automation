@@ -10,7 +10,7 @@ Flow per mine:
   6. Select "New Troop" if troop panel appears, then click "March"
   7. Return to city view for next mine
 
-Run: .venv\Scripts\python -m tools.test_gem_farm_flow --port COM27 --count 2
+Run: .venv\Scripts\python run_farm.py --port COM27 --count 2
 """
 
 import sys
@@ -42,7 +42,8 @@ except ImportError:
     except ImportError:
         _OCR_BACKEND = None
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 import ctypes
 ctypes.windll.user32.SetProcessDPIAware()
@@ -61,9 +62,10 @@ from anti_detection.mouse_humanizer import MouseHumanizer
 from anti_detection.player_actions import PlayerActions, _try_resize_game
 from anti_detection.notification_watcher import NotificationWatcher
 
-SCREENSHOT_DIR = Path("tools/screenshots/gem_farm_test")
+TEMPLATE_DIR = str(PROJECT_ROOT / "templates")
+SCREENSHOT_DIR = PROJECT_ROOT / "screenshots" / "gem_farm_test"
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-LOG_DIR = Path("logs")
+LOG_DIR = PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
@@ -1355,7 +1357,7 @@ class GemFarmFlowTest:
                 self.win = w
             print(f"  [{INFO}] Window now: {self.win['width']}x{self.win['height']}")
 
-        self.cache = TemplateCache("templates")
+        self.cache = TemplateCache(TEMPLATE_DIR)
         self.matcher = TemplateMatcher(self.cache, threshold=0.50)
         # Faster matcher for the zoom-settle poll. Must still span the full scale
         # range (the gather/mine sit off 1.0), just with fewer samples than the
@@ -2424,7 +2426,7 @@ def _run_find_only():
         return
     print(f"  [{PASS}] Window: {win['width']}x{win['height']}")
 
-    cache = TemplateCache("templates")
+    cache = TemplateCache(TEMPLATE_DIR)
     matcher = TemplateMatcher(cache, threshold=0.50)
 
     tpl = cache.get("resources/gem_icon")
