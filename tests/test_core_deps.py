@@ -56,6 +56,6 @@ def test_gem_classifier_model_loads():
 
 
 def test_gem_runner_imports():
-    import tools.test_gem_farm_flow as flow
+    import run_farm as flow
 
     assert hasattr(flow, "GemFarmFlowTest")
