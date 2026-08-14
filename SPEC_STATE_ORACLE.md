@@ -366,9 +366,49 @@ So:
    sees the panel still there, stops after one attempt, and does not learn the
    wrong button.
 
-The reassuring half: on a night frame with **no** panel at all, both providers
-answered `found: false`. Inventing coordinates where there is nothing to close
-is the more dangerous failure, and neither did it.
+On a night frame with **no** panel at all, the answer was `found: false` three
+times out of four -- and once a point came back anyway. Declining when there is
+nothing to close is a tendency, not a guarantee. What makes that harmless is the
+precondition: `dismiss.py` never asks unless the dim ratio already says
+something is covering the game.
+
+### Coarse then fine: two calls beat one, repetition does not
+
+The single-shot spread above is not noise around a target, it is a systematic
+preference for the wrong X. Five calls on the same frame:
+
+```
+(690,119) banner  (680,119) banner  (686,118) banner  (690,118) banner  (735,118) panel
+median -> banner, i.e. WRONG, and confidently so
+```
+
+So **consensus is the wrong fix** -- averaging a biased estimator just produces
+a tighter wrong answer. Cropping around the coarse point and asking again is the
+right one, because the crop spans both candidates and the zoom makes the
+difference legible:
+
+| Coarse (all on the banner X) | After refine | Error vs truth (777,125) |
+|---|---|---|
+| (690,119) | (777,124) | **1 px** |
+| (680,119) | (779,121) | 4 px |
+| (686,118) | (774,123) | 4 px |
+
+Through the real oracle, three further runs gave (773,121), (778,124),
+(773,120) -- 1 to 6 px, all accepted by the guardrails. Cost is two calls
+(~3.5 s) instead of one.
+
+`GROUNDING_CROP_PCT = 0.15` is deliberately wide: the crop has to contain the
+real target even when the coarse answer lands on a neighbour, which is exactly
+the case being corrected.
+
+### The guardrail that was too greedy
+
+The first `DISMISS_DANGER_MARGIN` of 0.10 refused the single most accurate
+answer grounding has produced. A correctly located close button at
+(0.759, 0.215) sits 0.093 / 0.079 from `NEW_TROOP_BTN_PCT`, inside a cordon
+that fenced off a 306x172 px box around a button perhaps a third that size.
+Now 0.05, with a test pinning both halves: the real close button is accepted,
+and points on the deploy button itself are still refused.
 
 ### Grounding on `ai_mode_web`: answers, but do not click it
 

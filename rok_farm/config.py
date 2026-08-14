@@ -223,8 +223,26 @@ AI_MODE_TIMEOUT_S = 90.0
 # frame; Google Search AI Mode was 15.5% out and would have hit a research node.
 LEARNED_CLOSE_DIR = PROJECT_ROOT / "templates" / "ui" / "learned"
 DISMISS_CROP_PCT = 0.02      # half-size of the crop saved when a button works
+
+# Coarse-then-fine grounding. One call is measurably not enough: on a frame with
+# two X buttons, five single-shot calls picked the wrong one four times, and
+# repeating the call does not help because the bias is systematic (a consensus
+# of five converged on the wrong button). Cropping around the coarse answer and
+# asking again does fix it -- the crop spans both candidates and the zoom makes
+# the difference visible. Measured: three coarse answers 90px out all came back
+# within 1-4px of truth. The crop must be wide enough to include the real target
+# when the coarse answer lands on a neighbour.
+GROUNDING_CROP_PCT = 0.15    # half-width of the crop, as a fraction of the frame
+GROUNDING_ZOOM = 2.5         # upscale before the second look
 DISMISS_MAX_Y_PCT = 0.60     # close buttons live in the upper part of a panel
-DISMISS_DANGER_MARGIN = 0.10  # keep this far away from the deploy buttons
+# Exclusion radius around each deploy button. Was 0.10 and that was too greedy:
+# a correctly located panel close button at (0.759, 0.215) sits 0.093 / 0.079
+# from NEW_TROOP_BTN_PCT, so the guard refused the single most accurate answer
+# grounding has produced (1px from truth). At 1533px wide, 0.10 fences off a
+# 306x172px box around a button perhaps a third that size. 0.05 still keeps a
+# ~77x43px cordon while leaving legitimate close buttons clickable.
+# MARCH_BTN_PCT is at y=0.763 and is already excluded by DISMISS_MAX_Y_PCT.
+DISMISS_DANGER_MARGIN = 0.05
 
 # --- Button position registry ---
 # A fixed UI button lands in the same place every time, so a detection far from

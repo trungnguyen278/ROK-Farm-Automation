@@ -103,9 +103,41 @@ def test_a_normal_close_button_position_is_accepted():
     assert ok is True
 
 
+def test_the_measured_real_close_button_is_accepted():
+    """Regression: the guard once refused this exact point.
+
+    (777,125) in a 1024x576 shot is the research panel's X -- the most accurate
+    answer grounding has produced, 1px from truth. At a 0.10 danger margin it
+    fell inside the cordon around NEW_TROOP_BTN_PCT and was refused.
+    """
+    runner = StubRunner([4.9])
+    frame = np.full((576, 1024, 3), 120, dtype=np.uint8)
+    ok, why = runner._guard_dismiss_point(frame, (777, 125))
+    assert ok is True, why
+
+
+def test_the_deploy_cordon_is_still_a_cordon():
+    """Tightening the margin must not open a hole over the button itself."""
+    runner = StubRunner([4.9])
+    frame = np.full((576, 1024, 3), 120, dtype=np.uint8)
+    x = int(cfg.NEW_TROOP_BTN_PCT[0] * 1024)
+    y = int(cfg.NEW_TROOP_BTN_PCT[1] * 576)
+    for dx, dy in ((0, 0), (20, 0), (0, 15), (-20, -10)):
+        ok, _ = runner._guard_dismiss_point(frame, (x + dx, y + dy))
+        assert ok is False, f"offset {(dx, dy)} from the deploy button was allowed"
+
+
 # --- the flow ----------------------------------------------------------------
 
 def test_nothing_happens_when_the_screen_is_not_covered():
+    """The precondition that makes an invented coordinate harmless.
+
+    Asked to locate a close button on a frame with no panel at all, the model
+    answered `found=false` three times out of four -- and the fourth time it
+    returned a point. Nothing protects against that except never asking: this
+    path only runs once the dim ratio says something really is covering the
+    game.
+    """
     oracle = FakeOracle((1180, 120))
     runner = StubRunner([1.05], oracle=oracle)
     assert runner._dismiss_modal() is False

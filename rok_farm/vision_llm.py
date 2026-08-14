@@ -32,6 +32,7 @@ import cv2
 import numpy as np
 
 from rok_farm.config import (AI_MODE_PROFILE_DIR, AI_MODE_TIMEOUT_S,
+                             GROUNDING_CROP_PCT, GROUNDING_ZOOM,
                              ORACLE_JPEG_QUALITY, ORACLE_MAX_ERRORS,
                              ORACLE_MAX_PER_HOUR, ORACLE_MAX_WIDTH,
                              ORACLE_MIN_GAP_S, ORACLE_TIMEOUT_S,
@@ -95,8 +96,11 @@ OVERLAYS = set(STATE_SCHEMA["schema"]["properties"]["overlay"]["enum"])
 # The API path leads on LATENCY (2s vs 30s), not accuracy. What makes clicking
 # this safe is the verification in dismiss.py, not the model.
 #
-# The good news from the same runs: on a frame with no panel, both answered
-# found=false rather than inventing a target.
+# On a frame with NO panel, the answer was found=false three times out of four
+# -- and once it returned a point anyway. So "it declines when there is nothing
+# to close" is a tendency, not a guarantee. What actually makes that harmless is
+# that dismiss.py never asks unless the dim ratio already says something is
+# covering the game.
 
 DISMISS_PROMPT = (
     "This is a screenshot of the game Rise of Kingdoms. A panel or popup is "
@@ -587,13 +591,44 @@ class VisionOracle:
         self._budget.record_error()
         return None
 
-    def locate_dismiss(self, frame: np.ndarray) -> tuple[int, int] | None:
+    @staticmethod
+    def _parse_point(reply: str | None, w: int, h: int) -> tuple[int, int] | None:
+        """Normalised 0-1000 coordinates back into pixels of a w x h image."""
+        m = re.search(r'\{[^{}]*"x"\s*:.*?\}', reply or "", re.S)
+        if not m:
+            logger.info("Grounding reply had no JSON: %r", (reply or "")[:120])
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return None
+        if not data.get("found"):
+            logger.info("Grounding: no close button reported")
+            return None
+        try:
+            return (int(float(data["x"]) / 1000.0 * w),
+                    int(float(data["y"]) / 1000.0 * h))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def locate_dismiss(self, frame: np.ndarray, refine: bool = True):
         """Frame pixel coordinates of a panel's close button, or None.
 
-        Never cached: the answer is only valid for the popup currently on
-        screen. Callers must still run it through the guardrails in dismiss.py
-        -- accuracy was good in testing, but "good" is not "safe to click on
-        trust".
+        Two calls, coarse then fine, because one call is measurably not enough.
+        Asked about a frame with two X buttons -- the panel's and a smaller one
+        on a banner above it -- five single-shot calls picked the wrong one four
+        times, and always by the same margin. Repeating the call does NOT fix
+        that: the bias is systematic, so a consensus of five converges
+        confidently on the wrong button.
+
+        Cropping around the coarse answer and asking again does fix it. The crop
+        spans both candidates, and at 2.5x the model can see which is the panel's
+        own close button. Measured: three coarse answers all on the banner X
+        became (777,124), (779,121), (774,123) against a truth of (777,125) --
+        1 to 4 pixels, from 90px out.
+
+        Never cached: the answer is only valid for the popup on screen right now.
+        The guardrails in dismiss.py still apply to the result.
         """
         if frame is None or not self.enabled:
             return None
@@ -611,35 +646,56 @@ class VisionOracle:
         if not jpeg:
             return None
 
+        h, w = frame.shape[:2]
         self._budget.record_call(now)
         try:
-            reply = provider.ask_grounding(jpeg, DISMISS_PROMPT, DISMISS_SCHEMA)
+            coarse = self._parse_point(
+                provider.ask_grounding(jpeg, DISMISS_PROMPT, DISMISS_SCHEMA), w, h)
         except Exception as e:
             logger.warning("Grounding call failed: %s", str(e)[:160])
             self._budget.record_error()
             return None
-
-        m = re.search(r'\{[^{}]*"x"\s*:.*?\}', reply or "", re.S)
-        if not m:
-            logger.info("Grounding reply had no JSON: %r", (reply or "")[:120])
-            return None
-        try:
-            data = json.loads(m.group(0))
-        except Exception:
-            return None
-        if not data.get("found"):
-            logger.info("Grounding: no close button reported")
-            return None
-
-        h, w = frame.shape[:2]
-        try:
-            x = int(float(data["x"]) / 1000.0 * w)
-            y = int(float(data["y"]) / 1000.0 * h)
-        except (KeyError, TypeError, ValueError):
+        if coarse is None:
             return None
         self._budget.record_success()
-        logger.info("Grounding: close button at (%d,%d) of %dx%d", x, y, w, h)
-        return x, y
+        logger.info("Grounding coarse: (%d,%d) of %dx%d", coarse[0], coarse[1], w, h)
+
+        if not refine:
+            return coarse
+        fine = self._refine_point(provider, frame, coarse)
+        return fine or coarse
+
+    def _refine_point(self, provider, frame: np.ndarray,
+                      coarse: tuple[int, int]) -> tuple[int, int] | None:
+        """Second look, inside a crop around the coarse answer."""
+        h, w = frame.shape[:2]
+        half = int(w * GROUNDING_CROP_PCT)
+        x1, y1 = max(0, coarse[0] - half), max(0, coarse[1] - half)
+        x2, y2 = min(w, coarse[0] + half), min(h, coarse[1] + half)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        big = cv2.resize(crop, None, fx=GROUNDING_ZOOM, fy=GROUNDING_ZOOM,
+                         interpolation=cv2.INTER_CUBIC)
+        jpeg = encode_frame(big)
+        if not jpeg:
+            return None
+
+        self._budget.record_call(time.time())
+        try:
+            reply = provider.ask_grounding(jpeg, DISMISS_PROMPT, DISMISS_SCHEMA)
+        except Exception as e:
+            logger.info("Grounding refine failed, keeping the coarse answer: %s",
+                        str(e)[:120])
+            return None
+        point = self._parse_point(reply, x2 - x1, y2 - y1)
+        if point is None:
+            return None
+        fine = (x1 + point[0], y1 + point[1])
+        moved = ((fine[0] - coarse[0]) ** 2 + (fine[1] - coarse[1]) ** 2) ** 0.5
+        logger.info("Grounding refined: (%d,%d) -> (%d,%d), moved %.0fpx",
+                    coarse[0], coarse[1], fine[0], fine[1], moved)
+        return fine
 
 
 def build_oracle(provider_name: str | None = None,
