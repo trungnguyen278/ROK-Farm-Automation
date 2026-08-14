@@ -401,6 +401,13 @@ Through the real oracle, three further runs gave (773,121), (778,124),
 real target even when the coarse answer lands on a neighbour, which is exactly
 the case being corrected.
 
+**How exact does this need to be?** The X glyph measures ~17 px across in a
+1024-wide frame (~26 px at the live 1533 window), and the clickable corner is
+bigger than the glyph. Every post-refinement error observed -- 1, 4, 4, 6, 1,
+6 px -- lands inside it. Precision is settled; the failure that mattered was
+choosing the wrong button, and that is what the second look fixes. No reason to
+spend further calls narrowing pixels.
+
 ### The guardrail that was too greedy
 
 The first `DISMISS_DANGER_MARGIN` of 0.10 refused the single most accurate

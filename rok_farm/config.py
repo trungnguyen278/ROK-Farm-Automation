@@ -234,6 +234,13 @@ DISMISS_CROP_PCT = 0.02      # half-size of the crop saved when a button works
 # when the coarse answer lands on a neighbour.
 GROUNDING_CROP_PCT = 0.15    # half-width of the crop, as a fraction of the frame
 GROUNDING_ZOOM = 2.5         # upscale before the second look
+#
+# How much residual error is harmless: the X glyph measures ~17px across in a
+# 1024-wide frame (~26px at the live 1533 window), and the clickable corner is
+# larger still. Post-refinement errors observed were 1, 4, 4, 6, 1, 6 px -- all
+# inside the glyph. Precision is therefore a solved problem here; the failure
+# that mattered was picking the WRONG button, which is what the second look
+# fixes. Do not spend more calls chasing pixels.
 DISMISS_MAX_Y_PCT = 0.60     # close buttons live in the upper part of a panel
 # Exclusion radius around each deploy button. Was 0.10 and that was too greedy:
 # a correctly located panel close button at (0.759, 0.215) sits 0.093 / 0.079
