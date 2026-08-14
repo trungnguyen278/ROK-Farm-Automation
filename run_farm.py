@@ -120,7 +120,7 @@ OCCUPIED_TEMPLATES = ["resources/occupied_green", "resources/occupied_red",
                       "resources/occupied_blue"]
 OCCUPIED_THRESHOLD = 0.62
 
-# Deploy-flow buttons at FIXED client positions (measured via tools/locate_ui.py).
+# Deploy-flow buttons at FIXED client positions (measured from screenshots).
 # Clicked directly instead of template-matched: detection fails at night, and a
 # wrong/missed click here marches nothing while looking like success.
 NEW_TROOP_BTN_PCT = (0.852, 0.294)   # "Quan moi" (new troop), right side

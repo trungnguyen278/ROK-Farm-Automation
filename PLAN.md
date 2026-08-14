@@ -42,9 +42,9 @@ Useful variants:
 | Vision | `vision/`, `templates/`, `data/gem_classifier.npz`, `data/gem_patches/` |
 | Behavior | `anti_detection/`, `profiles/default.json`, `data/mouse_training/` |
 | Helpers | `tools/` (capture_templates, bootstrap/train_gem_classifier, generate_gem_template, record_mouse, train_mouse, resize_window) |
-| Debug | `tools/dev/` (test_esp32, test_notification_listener, test_mouse_paths, test_loop_3actions, locate_ui, read_cursor) |
+| Debug | `tools/dev/` (test_esp32, test_notification_listener, test_mouse_paths, test_loop_3actions, read_cursor) |
 
-Note: `tools/dev/` holds spent or occasional-use scripts. `locate_ui.py` is hardcoded to old absolute screenshot paths and is a delete candidate.
+Note: `tools/dev/` holds occasional-use debug scripts only. `locate_ui.py` was deleted (2026-08-14): it was hardcoded to absolute screenshot paths that no longer exist. The fixed button positions it produced are already constants in `run_farm.py`.
 
 ## Decisions
 
