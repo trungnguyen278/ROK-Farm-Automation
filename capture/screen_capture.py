@@ -10,7 +10,14 @@ from collections import namedtuple
 import numpy as np
 import win32gui
 
+from capture.screen_info import exe_for_hwnd
+
 logger = logging.getLogger(__name__)
+
+# The Lilith launcher window carries the same "Rise of Kingdoms" title as the
+# game itself, so a title-only search can bind the capture to the launcher and
+# then grab the wrong window forever. Match on the owning executable instead.
+EXCLUDED_EXES = ("launcher.exe",)
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -164,6 +171,8 @@ class ScreenCapture:
                     return
                 title = win32gui.GetWindowText(hwnd)
                 if self._title.lower() in title.lower():
+                    if exe_for_hwnd(hwnd).lower() in EXCLUDED_EXES:
+                        return
                     vis = ScreenCapture._get_visible_rect(hwnd)
                     if vis:
                         left, top, right, bottom = vis
