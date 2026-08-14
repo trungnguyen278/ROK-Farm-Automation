@@ -10,6 +10,14 @@ import numpy as np
 # (CLAHE distorts local contrast which breaks template matching.)
 NIGHT_BRIGHTNESS_THRESH = 90
 DAY_TARGET_BRIGHTNESS = 130
+# Night normalization is intentionally GENTLE. TM_CCOEFF_NORMED is already
+# brightness-invariant, so heavy V-scaling + clipping only distorts patterns,
+# and BOOSTING saturation amplified the blue/teal night cast (measured: a real
+# gem matched 0.745 raw but only 0.697 after V*3 + S*1.5). Instead: a moderate
+# brightness lift (enough for the color filter's white test) + DESATURATE to
+# neutralize the cast. Measured best: gem 0.727 + color filter still passes.
+NIGHT_V_SCALE_MAX = 2.0
+NIGHT_S_SCALE = 0.6
 
 
 def estimate_terrain_brightness(frame: np.ndarray) -> float:
@@ -40,11 +48,12 @@ def normalize_frame(frame: np.ndarray) -> tuple[np.ndarray, bool]:
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
 
-    scale = min(DAY_TARGET_BRIGHTNESS / max(brightness, 1.0), 3.0)
+    # Moderate brightness lift (capped) -- just enough for the color filter.
+    scale = min(DAY_TARGET_BRIGHTNESS / max(brightness, 1.0), NIGHT_V_SCALE_MAX)
     v_scaled = np.clip(v.astype(np.float32) * scale, 0, 255).astype(np.uint8)
 
-    s_boost = min(1.0 + (1.0 - brightness / DAY_TARGET_BRIGHTNESS) * 0.4, 1.5)
-    s_scaled = np.clip(s.astype(np.float32) * s_boost, 0, 255).astype(np.uint8)
+    # DESATURATE to neutralize the night cast (boosting it hurt matching).
+    s_scaled = np.clip(s.astype(np.float32) * NIGHT_S_SCALE, 0, 255).astype(np.uint8)
 
     out = cv2.merge([h, s_scaled, v_scaled])
     return cv2.cvtColor(out, cv2.COLOR_HSV2BGR), True

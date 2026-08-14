@@ -90,6 +90,14 @@ INFO = "\033[94mINFO\033[0m"
 # --- Thresholds ---
 ICON_ZOOM_SCROLLS = 0
 GEM_ICON_THRESHOLD = 0.72
+# Night gate. With the desaturate normalization a real gem matches ~0.73, while
+# terrain noise sits ~0.62-0.65, so gate at 0.70 to drop the noise.
+GEM_ICON_THRESHOLD_NIGHT = 0.70
+
+# Out-of-kingdom fog is a smooth low-detail gray cloud. Measured: fog lap_var~8,
+# sat~13; terrain lap_var~440-580, sat~155-160 -- huge gap, generous thresholds.
+FOG_LAP_VAR_MAX = 60.0
+FOG_SAT_MAX = 55.0
 BUTTON_THRESHOLD = 0.70
 GATHER_BTN_THRESHOLD = 0.65
 WORLD_MAP_BTN_THRESHOLD = 0.75
@@ -102,10 +110,23 @@ DRAG_OVERLAP = 0.20
 MARCH_TEMPLATES = ["buttons/march_btn_orange", "buttons/march_btn"]
 GEM_MINE_TEMPLATES = ["resources/gem_mine_close", "resources/gem_mine"]
 
-# "Hanh quan" (March) button -- fixed spot in the deploy panel (measured from
-# screenshots at client frac (0.656, 0.763)). Clicked directly: template match
-# kept locking onto look-alikes elsewhere and mis-clicking.
-MARCH_BTN_PCT = (0.656, 0.763)
+# "Occupied" gathering icon: a colored circle with a white pickaxe shown on top
+# of a mine that someone is already gathering. Three colors by alliance relation
+# (green = own/ally, blue, red = other). Matched ONLY in a tight region around
+# the detected mine so a different mine's icon farther away isn't picked up.
+OCCUPIED_TEMPLATES = ["resources/occupied_green", "resources/occupied_red",
+                      "resources/occupied_blue"]
+OCCUPIED_THRESHOLD = 0.62
+
+# Deploy-flow buttons at FIXED client positions (measured via tools/locate_ui.py).
+# Clicked directly instead of template-matched: detection fails at night, and a
+# wrong/missed click here marches nothing while looking like success.
+NEW_TROOP_BTN_PCT = (0.852, 0.294)   # "Quan moi" (new troop), right side
+MARCH_BTN_PCT = (0.656, 0.763)       # "Hanh quan" (march), in the commander panel
+# Bottom-right corner toggles city <-> world. Clicked at this FIXED spot: the
+# template-matched position can land just off the hit-area (observed: matched
+# click didn't toggle, fixed corner did), and detection is flaky at night.
+TOGGLE_BTN_PCT = (0.95, 0.93)
 
 # After clicking a gem icon the game auto-centers on the mine, so the mine
 # structure (~0.52,0.45) and its gather popup land in the middle. The post-click
@@ -195,6 +216,10 @@ class GemFarmFlowTest:
         self._recalibrate = recalibrate
         self._skip_mail_alliance = skip_mail_alliance
         self._initial_alttab = initial_alttab
+        # Tracks whether we believe we're on the world map. Set when we reach it
+        # / stay after a march; cleared on city return / alt-tab. Avoids the
+        # flaky post-march city_btn-vs-globe re-detection (they read ~tied).
+        self._view_is_world = False
         self.sc: ScreenCapture | None = None
         self.cache: TemplateCache | None = None
         self.matcher: TemplateMatcher | None = None
@@ -385,54 +410,10 @@ class GemFarmFlowTest:
         sy = self.win["top"] + int(wh * pct_y) + random.randint(-jitter_px, jitter_px)
         self._click(sx, sy)
 
-    _X_SEARCH_REGION = {
-        "bag":      (0.78, 0.10, 0.95, 0.28),
-        "alliance": (0.68, 0.14, 0.85, 0.32),
-        "mail":     (0.74, 0.05, 0.92, 0.18),
-    }
-    _X_BUTTON_THRESHOLD = {
-        "mail":     0.75,
-        "alliance": 0.70,
-        "bag":      0.70,
-    }
-
-    def _find_x_button(self, frame, panel: str):
-        """Detect X close button in a small region around expected position."""
-        region = self._X_SEARCH_REGION.get(panel)
-        if region is None:
-            return None
-        fh, fw = frame.shape[:2]
-        rx1, ry1, rx2, ry2 = region
-        x1, y1 = int(fw * rx1), int(fh * ry1)
-        x2, y2 = int(fw * rx2), int(fh * ry2)
-        crop = frame[y1:y2, x1:x2]
-        if crop.size == 0:
-            return None
-        threshold = self._X_BUTTON_THRESHOLD.get(panel, 0.60)
-        for tpl_name in [f"ui/btn_x_close_{panel}", "ui/btn_x_close"]:
-            m = self.matcher.match_single(crop, tpl_name)
-            if m and m.confidence >= threshold:
-                ax, ay = m.x + x1, m.y + y1
-                return Match(m.name, ax, ay, m.w, m.h, m.confidence,
-                             (ax + m.w // 2, ay + m.h // 2))
-        return None
-
     def _close_panel(self, panel: str):
         if panel in self._X_CLOSE_POS:
             self._click_pct(*self._X_CLOSE_POS[panel], jitter_px=3)
             time.sleep(random.uniform(0.4, 0.8))
-
-    def _dismiss_popups(self):
-        """Detect and close any open panel popup."""
-        frame = self._grab()
-        if frame is None:
-            return
-        for panel in ("alliance", "mail", "bag"):
-            m = self._find_x_button(frame, panel)
-            if m:
-                logger.debug("dismiss_popups: %s detected (conf=%.3f), closing", panel, m.confidence)
-                self._close_panel(panel)
-                return
 
     def _phase_full_cycle(self):
         """All march slots are full. Behave like a real player between bursts:
@@ -501,6 +482,8 @@ class GemFarmFlowTest:
                   f"tabbing back to check queue")
 
         self._tab_back()
+        # View is uncertain after alt-tabbing back -> force a fresh detect next mine.
+        self._view_is_world = False
 
         # Reconcile free slots so the next burst can start. OCR is authoritative;
         # without it, estimate from the toast count (>=1) so we never deadlock on
@@ -630,10 +613,17 @@ class GemFarmFlowTest:
             self._bg_frame = self._bg_back
         self._raw_frame = frame
         normalized, is_night = normalize_frame(frame)
+        self._is_night = is_night
         if is_night and not self._night_logged:
             print(f"  [{INFO}] Night mode detected -- normalizing frames")
             self._night_logged = True
         return normalized
+
+    def _gem_icon_threshold(self) -> float:
+        """At night the gem_icon template (captured by day) only matches ~0.65-0.71
+        even after normalization, so the day gate (0.72) drops real gems. Use a
+        lower gate at night and let the classifier + color filter discriminate."""
+        return GEM_ICON_THRESHOLD_NIGHT if getattr(self, "_is_night", False) else GEM_ICON_THRESHOLD
 
     def _check_reconnect_popup(self) -> bool:
         """Check and dismiss network disconnect popup. Call when flow seems stuck."""
@@ -1066,10 +1056,19 @@ class GemFarmFlowTest:
     _CITY_BTN_REGION = (0.82, 0.78, 1.0, 1.0)  # x1, y1, x2, y2 in frame pct
 
     def _find_city_btn(self, frame=None, threshold: float = 0.70) -> Match | None:
-        """Match city_btn only in the bottom-right corner, ignoring look-alikes
-        (e.g. a top-right event icon)."""
-        if frame is None:
-            frame = self._grab()
+        """Return the world-map 'back to city' button (only present ON the WORLD
+        MAP), matched in the bottom-right corner. The CITY view shows a 'world
+        map' globe button in the SAME corner, so require city_btn to OUT-score
+        world_map_city_btn.
+
+        Matches on the RAW (un-normalized) frame: these are HUD icons, and the
+        night desaturation that helps gem matching WEAKENS the button match
+        (measured: city_btn 0.83 raw vs 0.74 desaturated, margin +0.12 vs +0.02).
+        Raw gives a clear city-vs-world margin even at night.
+        """
+        if self._raw_frame is None:
+            self._grab()  # refresh _raw_frame
+        frame = self._raw_frame
         if frame is None:
             return None
         fh, fw = frame.shape[:2]
@@ -1079,12 +1078,33 @@ class GemFarmFlowTest:
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             return None
-        m = self.matcher.match_single(crop, "buttons/city_btn")
-        if m and m.confidence >= threshold:
-            ax, ay = m.x + x1, m.y + y1
-            return Match(m.name, ax, ay, m.w, m.h, m.confidence,
-                         (ax + m.w // 2, ay + m.h // 2))
+        mc = self.matcher.match_single(crop, "buttons/city_btn")
+        mw = self.matcher.match_single(crop, "buttons/world_map_city_btn")
+        cc = mc.confidence if mc else 0.0
+        wc = mw.confidence if mw else 0.0
+        on_world = bool(mc and cc >= threshold and cc >= wc)
+        logger.debug("city_btn cc=%.3f vs world_map_city_btn wc=%.3f -> %s",
+                     cc, wc, "WORLD" if on_world else "city/none")
+        if on_world:
+            ax, ay = mc.x + x1, mc.y + y1
+            return Match(mc.name, ax, ay, mc.w, mc.h, mc.confidence,
+                         (ax + mc.w // 2, ay + mc.h // 2))
         return None
+
+    def _on_world_map(self, frame=None) -> bool:
+        """True if currently on the world map (city_btn out-scores the city's
+        world-map globe in the bottom-right)."""
+        return self._find_city_btn(frame, threshold=0.70) is not None
+
+    def _wait_until_world_map(self, timeout: float = 4.0) -> bool:
+        """Poll for the world-map state until timeout -- lets a city<->world or
+        post-march transition animation settle before we judge the state."""
+        start = time.time()
+        while time.time() - start < timeout:
+            if self._on_world_map():
+                return True
+            time.sleep(random.uniform(0.4, 0.8))
+        return False
 
     # The "Quan moi" (New Troop) button sits on the RIGHT, next to the army /
     # troop-count list -- NOT bottom-center. Searching the whole frame matched a
@@ -1113,10 +1133,11 @@ class GemFarmFlowTest:
 
     def _find_all_gems(self, frame) -> list[Match]:
         matches = self.matcher.match_all(frame, "resources/gem_icon", overlap_thresh=0.3)
+        gem_thr = self._gem_icon_threshold()
         result = []
         edge_gems = []
         for m in matches:
-            if m.confidence < GEM_ICON_THRESHOLD:
+            if m.confidence < gem_thr:
                 continue
             patch = self._extract_icon_patch(frame, m)
             should, label, clf_conf = self.classifier.should_click(patch)
@@ -1292,39 +1313,18 @@ class GemFarmFlowTest:
         """After march, stay on world map and zoom back out to icon level."""
         print(f"\n--- [{tag}] Step 7: Stay on world map, re-zoom ---\n")
 
-        # After march, game often zooms in on marching troops -- wait for it
+        # We just marched, so we're on the world map. The post-march zoom-in
+        # reads ambiguously (city_btn vs globe ~tie), so DON'T verify the state
+        # here -- just wait for the zoom-in to settle, then zoom back out (which
+        # restores a clean world-map view). No empty-click (could select a tile).
         self._wait(random.uniform(1.0, 2.5))
 
-        # Escape any march animation overlay
-        self._press_escape()
-        self._wait(DELAY_AFTER_ESCAPE)
-
-        # Verify still on world map
-        city_btn = self._find_city_btn(threshold=0.70)
-        if not city_btn:
-            print(f"  [{WARN}] Not on world map after march, falling back to city")
-            self._step_return_city(tag)
-            return
-
-        # Shift camera away from just-gathered mine so we scan new area
-        cx, cy = self._center_screen()
-        ww, wh = self.win["width"], self.win["height"]
-        margin = 80
-        angle = random.uniform(0, 2 * math.pi)
-        for _ in range(random.randint(1, 2)):
-            dist = random.uniform(0.20, 0.30)
-            dx = int(math.cos(angle) * (ww // 2 - margin) * dist)
-            dy = int(math.sin(angle) * (wh // 2 - margin) * dist)
-            sx, sy = self._clamp_to_play_area(cx + dx, cy + dy)
-            ex, ey = self._clamp_to_play_area(cx - dx, cy - dy)
-            self._human_drag(sx, sy, ex, ey, speed_factor=random.uniform(3.0, 5.0))
-            self._wait(random.uniform(0.3, 0.8))
-            angle += random.gauss(0, 0.3)
-
-        # Zoom out to icon level
+        # Zoom out to icon level, then let the wander scan move the camera. (No
+        # separate camera-shift swipe here -- the scan already pans around.)
         self._scroll_at_center(-1, self._zoom_scrolls())
         self._wait(DELAY_AFTER_SCROLL)
 
+        self._view_is_world = True  # stayed on the world map
         self._record(f"{tag}_rezoom", True, "Stayed on world map, re-zoomed")
 
     # --- Setup ---
@@ -1380,7 +1380,7 @@ class GemFarmFlowTest:
             size = f"{img.shape[1]}x{img.shape[0]}" if img is not None else "MISSING"
             print(f"  [{status}] {t}: {size}")
 
-        optional_templates = ["ui/btn_confirm_reconnect"]
+        optional_templates = ["ui/btn_confirm_reconnect", *OCCUPIED_TEMPLATES]
         for t in optional_templates:
             img = self.cache.get(t)
             status = PASS if img is not None else WARN
@@ -1471,78 +1471,49 @@ class GemFarmFlowTest:
     # --- Step 1: City view -> world map -> icon zoom ---
 
     def _step_to_world_map(self, tag: str) -> bool:
-        print(f"\n--- [{tag}] Step 1: City -> World Map -> Zoom out ---\n")
+        print(f"\n--- [{tag}] Step 1: Ensure world map @ icon-zoom ---\n")
 
-        # Dismiss any open panel/popup before starting
-        self._dismiss_popups()
-
-        # Check if already on world map at icon zoom
-        frame = self._grab()
-        if frame is not None:
-            city_btn = self._find_city_btn(frame, threshold=0.70)
-            if city_btn:
-                gems = self._find_all_gems(frame)
-                if gems:
-                    print(f"  [{PASS}] Already on world map icon-zoom, {len(gems)} gem(s)")
-                    self._record(f"{tag}_world", True, f"Already icon-zoom, {len(gems)} gems")
-                    return True
-                print(f"  [{INFO}] On world map but not icon-zoom, zooming out...")
-                self._scroll_at_center(-1, self._zoom_scrolls())
-                self._wait(DELAY_AFTER_SCROLL)
-                self._record(f"{tag}_world", True, "World map, zoomed out")
-                return True
-
-        # From city view -> click world_map_city_btn (bottom-right)
-        m = self._find("buttons/world_map_city_btn", threshold=WORLD_MAP_BTN_THRESHOLD)
-        if m:
-            print(f"  [{PASS}] world_map_city_btn: conf={m.confidence:.3f} at {m.center}")
-            self._click_match(m)
-            self._wait(DELAY_WORLD_MAP)
+        # If we stayed on the world map after the last march (mid-burst), TRUST
+        # that -- don't re-detect/toggle. The post-march corner button reads
+        # city_btn ~tied with the globe, so re-detection would falsely think
+        # "city" and toggle away unnecessarily.
+        reached = self._view_is_world
+        if reached:
+            print(f"  [{INFO}] Staying on world map (tracked) -- no toggle")
         else:
-            if self._check_reconnect_popup():
-                m = self._find("buttons/world_map_city_btn", threshold=WORLD_MAP_BTN_THRESHOLD)
-                if m:
-                    self._click_match(m)
-                    self._wait(DELAY_WORLD_MAP)
-                else:
-                    print(f"  [{WARN}] world_map_city_btn not found after reconnect")
-            else:
-                print(f"  [{WARN}] world_map_city_btn not found, trying bottom-right click...")
-                br_x = self.win["left"] + int(self.win["width"] * 0.95)
-                br_y = self.win["top"] + int(self.win["height"] * 0.93)
-                self._click(br_x, br_y)
-                self._wait(DELAY_WORLD_MAP)
+            # Fresh state (after city / alt-tab) reads cleanly -- detect/toggle.
+            reached = self._on_world_map() or self._wait_until_world_map(timeout=2.0)
 
-        # Verify we're on world map (retry — transition animation takes time)
-        city_btn = None
-        for retry in range(4):
-            city_btn = self._find_city_btn(threshold=0.70)
-            if city_btn:
-                break
-            time.sleep(1.0)
-        if not city_btn:
-            # May have toggled wrong direction — try clicking Space again
-            m2 = self._find("buttons/world_map_city_btn", threshold=WORLD_MAP_BTN_THRESHOLD)
-            if m2:
-                print(f"  [{WARN}] Toggled wrong, clicking Space again...")
-                self._click_match(m2)
-                self._wait(DELAY_WORLD_MAP)
-                city_btn = self._find_city_btn(threshold=0.70)
-        if not city_btn:
-            print(f"  [{FAIL}] Not on world map after clicking")
+        if not reached:
+            for toggle in range(3):
+                print(f"  [{INFO}] City -> world map: toggle corner {TOGGLE_BTN_PCT} (try {toggle+1}/3)")
+                self._click_pct(*TOGGLE_BTN_PCT, jitter_px=4)
+                if self._wait_until_world_map(timeout=4.0):
+                    reached = True
+                    break
+                self._check_reconnect_popup()
+
+        if not reached:
+            print(f"  [{FAIL}] Not on world map after toggling")
+            self._view_is_world = False
             frame = self._grab()
             if frame is not None:
                 save_screenshot(frame, f"{tag}_world_fail")
             self._record(f"{tag}_world", False, "World map nav failed")
             return False
 
+        self._view_is_world = True
+
+        # On the world map. If already at icon-zoom with gems, scan; else zoom.
+        frame = self._grab()
+        gems = self._find_all_gems(frame) if frame is not None else []
+        if gems:
+            print(f"  [{PASS}] Already on world map icon-zoom, {len(gems)} gem(s)")
+            self._record(f"{tag}_world", True, f"Already icon-zoom, {len(gems)} gems")
+            return True
+
         zs = self._zoom_scrolls()
         print(f"  [{PASS}] On world map, zooming out {zs}x...")
-
-        # Keep it simple: _scroll_at_center already moves the cursor to a random
-        # spot in the play area before scrolling, so the city->world transition
-        # is just "move cursor somewhere + zoom out". No extra map panning here;
-        # the wander scan handles exploring to a fresh area.
         self._scroll_at_center(-1, zs)
         self._wait(DELAY_AFTER_SCROLL)
 
@@ -1599,13 +1570,29 @@ class GemFarmFlowTest:
 
         return True, f"ok({med:.0f})"
 
+    def _is_fog(self, frame) -> bool:
+        """True if the play area is mostly out-of-kingdom fog -- a smooth gray
+        cloud with very low detail (Laplacian variance) AND low saturation.
+        Real terrain (trees/rivers/nodes) has much higher detail and color."""
+        fh, fw = frame.shape[:2]
+        roi = frame[int(fh * 0.25):int(fh * 0.72), int(fw * 0.20):int(fw * 0.80)]
+        if roi.size == 0:
+            return False
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        if lap_var >= FOG_LAP_VAR_MAX:
+            return False
+        sat = float(cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)[:, :, 1].mean())
+        return sat < FOG_SAT_MAX
+
     def _find_all_icons(self, frame) -> list[Match]:
         """Find all resource icons (gem_icon template) on frame, sorted by confidence desc."""
         matches = self.matcher.match_all(frame, "resources/gem_icon", overlap_thresh=0.3)
+        gem_thr = self._gem_icon_threshold()
         result = []
         edge_gems = []
         for m in matches:
-            if m.confidence < GEM_ICON_THRESHOLD:
+            if m.confidence < gem_thr:
                 continue
             patch = self._extract_icon_patch(frame, m)
             should_click, label, clf_conf = self.classifier.should_click(patch)
@@ -1743,15 +1730,29 @@ class GemFarmFlowTest:
         return False, "free"
 
     def _is_mine_occupied(self, frame, mine_match: Match) -> tuple[bool, str]:
-        """Check for gathering icon above the mine (colored circle with pickaxe).
+        """Check whether the mine already has a gathering "pickaxe" icon on it.
 
-        Finds compact bright blobs matching icon size (~20-45px diameter).
-        Trees are diffuse/large; the gathering icon is a small circle.
+        Primary: template-match the colored pickaxe icon (green/red/blue) in a
+        TIGHT region around THIS mine, so a different mine's icon farther away is
+        not picked up. Fallback (if templates absent): compact bright color blob.
         """
         mine_cx, mine_cy = mine_match.center
         fh, fw = frame.shape[:2]
         mh = mine_match.h
 
+        # --- Primary: pickaxe icon templates, restricted to around this mine ---
+        tx1 = max(0, mine_cx - mh)
+        tx2 = min(fw, mine_cx + mh)
+        ty1 = max(0, mine_cy - int(mh * 1.8))
+        ty2 = min(fh, mine_cy + int(mh * 0.4))
+        tcrop = frame[ty1:ty2, tx1:tx2]
+        if tcrop.size:
+            for tpl in OCCUPIED_TEMPLATES:
+                m = self.matcher.match_single(tcrop, tpl)
+                if m and m.confidence >= OCCUPIED_THRESHOLD:
+                    return True, f"pickaxe {tpl.split('/')[-1]} conf={m.confidence:.2f}"
+
+        # --- Fallback: compact bright color blob above the mine ---
         y1 = max(0, mine_cy - mh * 3)
         y2 = max(0, mine_cy - mh // 3)
         x1 = max(0, mine_cx - mh)
@@ -1823,7 +1824,9 @@ class GemFarmFlowTest:
 
         mine_lx = mine_cx - x1
         mine_ly = mine_cy - y1
-        min_len = mine_r * 2
+        # The march line is DASHED, so segments are short -- use a shorter min
+        # length (was 2*r, which a dashed line never reaches as one segment).
+        min_len = mine_r
         near_r = mine_r * 2
 
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -1844,11 +1847,12 @@ class GemFarmFlowTest:
 
         combined = cv2.bitwise_or(white_mask, cv2.bitwise_or(cyan_mask, green_mask))
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        cleaned = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel, iterations=1)
+        # Dilate to bridge the gaps between dashes so HoughLinesP sees a line.
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        cleaned = cv2.dilate(combined, kernel, iterations=1)
 
         lines = cv2.HoughLinesP(cleaned, 1, np.pi / 180,
-                                threshold=30, minLineLength=int(min_len), maxLineGap=20)
+                                threshold=30, minLineLength=int(min_len), maxLineGap=40)
         if lines is None:
             return False, "no lines"
 
@@ -2143,13 +2147,23 @@ class GemFarmFlowTest:
 
             if not icons:
                 empty_streak += 1
+                # Panned out of the kingdom into fog? Bail early -- the camera is
+                # off the map edge, no resources will ever appear here. Return to
+                # city so the next mine re-centers on the player's city.
+                if self._is_fog(frame):
+                    print(f"  [{WARN}] Scan {scan_count:2d}: FOG (out of kingdom) -- "
+                          f"return to city, restart")
+                    self._step_return_city(tag)
+                    return None
                 print(f"  [ -- ] Scan {scan_count:2d}/{max_scans}: no icons "
                       f"(spd={scan_speed:.1f}x, empty={empty_streak})")
                 if empty_streak >= max_empty_streak:
                     if self._check_reconnect_popup():
                         empty_streak = 0
                         continue
-                    print(f"  [{WARN}] {max_empty_streak} consecutive empty scans -- zoom likely wrong, restarting from city")
+                    print(f"  [{WARN}] {max_empty_streak} consecutive empty scans -- "
+                          f"restarting from city")
+                    self._step_return_city(tag)
                     return None
                 continue
 
@@ -2244,69 +2258,44 @@ class GemFarmFlowTest:
     def _step_click_march(self, tag: str) -> bool:
         print(f"\n--- [{tag}] Step 6: Troop + March ---\n")
 
-        selected_new_troop = False
+        # Deterministic deploy flow, all FIXED clicks (template detection is
+        # flaky at night): gather -> "Quan moi" (new troop) -> "Hanh quan"
+        # (march). We do NOT retry-click: a retry after a march that already
+        # fired just clicks junk on the world map (and re-opens the deploy).
+        print(f"  [{INFO}] New Troop (Quan moi) at fixed pct{NEW_TROOP_BTN_PCT}")
+        self._click_pct(*NEW_TROOP_BTN_PCT, jitter_px=6)
+        self._wait(DELAY_VERIFY)
 
-        for attempt in range(6):
-            frame = self._grab()
-            if frame is None:
-                self._wait(DELAY_RECHECK)
-                continue
+        print(f"  [{INFO}] March (Hanh quan) at fixed pct{MARCH_BTN_PCT}")
+        self._click_pct(*MARCH_BTN_PCT, jitter_px=6)
 
-            # Try "New Troop" button first (troop selection panel, right side)
-            if not selected_new_troop:
-                m = self._find_new_troop_btn(frame, threshold=BUTTON_THRESHOLD)
-                if m:
-                    print(f"  [{PASS}] new_troop_btn: conf={m.confidence:.3f} at {m.center}")
-                    if self._click_match(m):
-                        selected_new_troop = True
-                        print(f"  [{PASS}] New troop selected")
-                        self._wait(DELAY_VERIFY)
-                        continue
-
-            # "Hanh quan" (March) is at a fixed spot in the deploy panel -- click
-            # it directly. Template matching here kept mis-firing onto look-alikes
-            # elsewhere on the frame, marching nothing while reporting success.
-            print(f"  [{INFO}] Clicking March (Hanh quan) at fixed pct{MARCH_BTN_PCT} (attempt {attempt+1}/6)")
-            self._click_pct(*MARCH_BTN_PCT, jitter_px=6)
-
-            # Marching kicks off a short zoom/animation before returning to the
-            # world map, so give it a moment before checking we're back.
-            self._wait(random.uniform(1.2, 2.0))
-            frame2 = self._grab()
-            if frame2 is not None:
-                save_screenshot(frame2, f"{tag}_after_march_{attempt:02d}")
-                # March succeeded only when we're back on the world map. The
-                # commander deploy panel has no new_troop_btn, so its absence is
-                # NOT proof of success -- check the world-map toggle (city_btn)
-                # is visible (the panel covers that corner while open).
-                if self._find_city_btn(frame2, threshold=0.70):
-                    print(f"  [{PASS}] March clicked! (back on world map)")
-                    self._record(f"{tag}_march", True, f"attempt={attempt+1}")
-                    return True
-                print(f"  [{WARN}] Still in deploy panel, not on world map (attempt {attempt+1}/6)")
-
-            self._wait(DELAY_RECHECK)
-
-        print(f"  [{FAIL}] March button not clicked")
-        self._record(f"{tag}_march", False, "Not found")
-        return False
+        # Trust the fixed clicks: the post-march world map zooms in on the troops
+        # and reads ambiguously (city_btn ~tie globe), so verifying here is
+        # unreliable and just wastes time. The OCR queue check next loop is the
+        # real source of truth -- if the march didn't fire, the slot stays free
+        # and we simply farm it again. Just let the march animation settle.
+        self._wait(random.uniform(1.5, 2.5))
+        print(f"  [{PASS}] March sent (fixed Quan moi + Hanh quan)")
+        self._record(f"{tag}_march", True, "sent")
+        frame2 = self._grab()
+        if frame2 is not None:
+            save_screenshot(frame2, f"{tag}_after_march")
+        return True
 
     # --- Step 7: Return to city view ---
 
     def _step_return_city(self, tag: str):
         print(f"\n--- [{tag}] Return to city ---\n")
 
-        # Try city_btn first (visible on world map)
-        m = self._find_city_btn(threshold=0.75)
-        if m:
-            print(f"  [{INFO}] Clicking city_btn...")
-            self._click_match(m)
-            self._wait(DELAY_WORLD_MAP)
-        else:
-            self._press_escape()
-            self._wait(DELAY_AFTER_ESCAPE)
-            self._press_escape()
-            self._wait(DELAY_AFTER_SCROLL)
+        # Always called from the world map (after a burst / scan-fail / fog), so
+        # click the FIXED bottom-right corner to toggle to the city. We do NOT
+        # gate on _on_world_map(): right after a march the world map reads
+        # ambiguously (city_btn ~tie globe) and the guard falsely said "already
+        # in city", so the toggle was skipped and we never returned.
+        print(f"  [{INFO}] City toggle corner {TOGGLE_BTN_PCT}")
+        self._click_pct(*TOGGLE_BTN_PCT, jitter_px=4)
+        self._wait(DELAY_WORLD_MAP)
+        self._view_is_world = False  # now in the city
 
         frame = self._grab()
         if frame is not None:
