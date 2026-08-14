@@ -44,7 +44,7 @@ from rok_farm.config import (CITY_READY_TIMEOUT, GAME_LAUNCH_TIMEOUT,
                              MODAL_RATIO_MIN, PATHS_FILE, QUIT_TIMEOUT,
                              RESTART_COOLDOWN, WORLD_MAP_BTN_THRESHOLD)
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
-from rok_farm.state_probe import ScreenState, dim_ratio
+from rok_farm.state_probe import dim_ratio
 
 PLAY_TEMPLATE = "launcher/play_btn"
 PLAY_BTN_THRESHOLD = 0.70
@@ -590,39 +590,9 @@ class GameLifecycleMixin:
         if now - last_ok > self._frame_stall_timeout:
             return f"no fresh frame for {now - last_ok:.0f}s"
 
-        # A frozen client still delivers frames -- identical ones. That is
-        # invisible to the check above, so ask the probe, which knows to ignore
-        # the stillness of an open panel.
-        state = self._probe_state()
-        if not state.alive:
-            return self._confirm_frozen(state)
+        # Deliberately nothing about frame MOTION here. A healthy ROK screen is
+        # frequently frozen solid -- the world map at icon zoom measures 0.001,
+        # and that is where the bot spends most of its time -- so pixel stillness
+        # cannot mean "crashed". A real freeze surfaces through the checks above
+        # or through RESTART_AFTER_FAILS, since a frozen client fails every mine.
         return None
-
-    def _looks_loading(self) -> bool:
-        """Is the client mid-load rather than dead? Worth one oracle call before
-        spending a restart, because a loading screen is also static."""
-        state = self._resolve_state(reason="frozen check")
-        return state.view in ("loading", "login")
-
-    def _confirm_frozen(self, first: ScreenState) -> str | None:
-        """Re-check before condemning the client.
-
-        A single still moment is not a crash -- the camera can simply be idle
-        between animations -- so require the stillness to persist across a few
-        seconds before spending a restart on it.
-        """
-        logger.info("Client may be frozen (%s), confirming...", first.note)
-        for _ in range(3):
-            time.sleep(5.0)
-            state = self._probe_state()
-            if state.alive:
-                logger.info("Client recovered on re-check (%s)", state.note)
-                return None
-        # Still static. A loading or login screen looks exactly the same, and
-        # restarting through one would be both pointless and destructive, so
-        # spend one oracle call here if layer 2 is available.
-        if self._looks_loading():
-            print(f"  [{INFO}] Static screen is a loading/login screen, not a "
-                  f"crash -- waiting instead of restarting")
-            return None
-        return f"client frozen ({first.note})"

@@ -15,9 +15,10 @@ Two layers answering one question: **what is on screen right now?**
 | Client frozen | still delivers identical frames, so "no frame" never fires |
 | Event popup after login | no detection at all |
 
-The decision the bot actually needs is narrow: *is something covering the HUD*,
-*is the client still alive*, and *city or world map*. Naming the popup does not
-change the action -- every modal closes the same way.
+The decision the bot actually needs is narrow: *is something covering the HUD*
+and *city or world map*. Naming the popup does not change the action -- every
+modal closes the same way. ("Is the client alive" was a third question until the
+measurements showed it cannot be answered from pixels; see 1a.)
 
 ## Coordinates from a model: allowed, for dismissing only
 
@@ -125,29 +126,47 @@ locally for free.
 ```python
 @dataclass
 class ScreenState:
-    view: str        # "city" | "world_map" | "loading" | "unknown"
-    overlay: str     # "none" | "modal" | "reconnect" | "unknown"
-    alive: bool
+    view: str        # "city" | "world_map" | "unknown"
+    overlay: str     # "none" | "modal" | "unknown"
     confidence: float
     source: str      # "local" | "<provider>" | "cache"
     note: str
 ```
 
-### 1a. Liveness -- is the client running or frozen?
+### 1a. Liveness -- attempted, measured, REMOVED
 
-Sample 3 frames ~0.5 s apart, downscale to 160x90 gray, take the mean absolute
-difference between consecutive frames. A live ROK view always animates (water,
-flags, troops, cloud shadows); a frozen or crashed client repeats one frame.
+The plan was: a live ROK view animates (water, flags, troops), a crashed one
+repeats a frame, so the mean absolute difference between frames 0.5 s apart
+should separate them. It does not. Measured, in order:
 
-Declare `alive=False` only after `LIVENESS_SAMPLES` consecutive quiet windows
-(default 3, i.e. ~15 s) -- one quiet sample is not enough, a paused menu can be
-almost static.
+| Screen | Frame activity |
+|---|---|
+| world map, zoomed near | 0.867 |
+| city | 0.504 |
+| **gather popup** | **0.088** |
+| alliance panel | 0.021 |
+| bag panel | 0.008 |
+| **world map at icon zoom** | **0.001** |
 
-`LIVENESS_MIN_DIFF` -- **to be measured**, see "Calibration" below.
+The last row is fatal. Icon zoom is where the bot spends most of its time while
+scanning for gems, and it is completely static while perfectly healthy. The
+gather popup, which appears in every single mine, is nearly as quiet.
 
-This replaces today's `_client_looks_broken` frame-stall check, which only fires
-when capture returns *nothing*; a frozen client still returns frames and is
-invisible to it.
+Two thresholds were picked and both were falsified by the next state measured:
+0.15 (from the busy world map) condemned the gather popup; 0.02 condemned icon
+zoom. And the action on a "frozen" verdict is to restart the game -- in the
+middle of the farm flow.
+
+There is no fallback anchor either: the obvious one, the ticking HUD clock, is
+hidden in the compact mode used at icon zoom.
+
+**So the detector was deleted.** A real freeze still surfaces, through evidence
+that means something: the window disappearing, capture returning nothing at all
+(`FRAME_STALL_TIMEOUT`), or `RESTART_AFTER_FAILS` consecutive mine failures --
+a frozen client fails every mine. Slower, but it cannot fire on a healthy game.
+
+`tests/test_state_probe.py` keeps the measurements and a guard against the
+feature being rebuilt from the same wrong assumption.
 
 ### 1b. Modal detect -- is something covering the HUD?
 
@@ -480,8 +499,8 @@ they settle the common cases, layer 2 stays as rare as intended.
 ## Acceptance
 
 - With no provider: behaviour identical to today, zero network calls, tests green.
-- Frozen client (game suspended) is detected within ~15 s, where today it is not
-  detected at all.
+- A healthy screen is NEVER called a frozen client. Measured on six states; the
+  detector that would have done it was removed rather than re-tuned.
 - With a panel open, `_wait_until_in_city` reports "modal" rather than timing out
   after 300 s.
 - Oracle disabled after `ORACLE_MAX_ERRORS` failures, and never called more than

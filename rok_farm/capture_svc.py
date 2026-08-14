@@ -18,9 +18,8 @@ from vision.color_filter import normalize_frame
 
 from rok_farm import config as cfg
 from rok_farm.config import (GEM_ICON_THRESHOLD, GEM_ICON_THRESHOLD_NIGHT,
-                             LIVENESS_SAMPLE_GAP, TARGET_CONTENT_W, TITLE_BAR_H)
+                             TARGET_CONTENT_W, TITLE_BAR_H)
 from rok_farm.logging_setup import INFO, WARN
-from rok_farm.state_probe import activity_frame, frame_activity
 
 
 class CaptureMixin:
@@ -44,8 +43,6 @@ class CaptureMixin:
     def _capture_loop(self):
         win_refresh_interval = 10.0
         last_win_refresh = time.monotonic()
-        last_activity_at = 0.0
-        prev_small = None
         while self._capture_running:
             # While alt-tabbed away (Phase 3) we only read OS notifications, so
             # don't grab the screen -- it's wasted work and a needless capture of
@@ -61,22 +58,10 @@ class CaptureMixin:
                 with self._frame_lock:
                     self._bg_back = self._bg_frame
                     self._bg_frame = frame
-                # Health signal for _client_looks_broken: a client that froze or
-                # died stops producing frames long before anything else notices.
+                # Health signal for _client_looks_broken: a dead client stops
+                # producing frames entirely. (Frame *motion* is not a health
+                # signal in this game -- see the note in config.py.)
                 self._last_frame_ok = time.time()
-
-                # Liveness sampling. Deliberately spaced at LIVENESS_SAMPLE_GAP:
-                # the thresholds in config.py were measured at that spacing, and
-                # comparing frames captured milliseconds apart would read as
-                # "static" no matter how alive the game is.
-                now_s = time.monotonic()
-                if now_s - last_activity_at >= LIVENESS_SAMPLE_GAP:
-                    small = activity_frame(frame)
-                    if prev_small is not None:
-                        self._activity_samples.append(
-                            frame_activity(small, prev_small))
-                    prev_small = small
-                    last_activity_at = now_s
             now = time.monotonic()
             if now - last_win_refresh > win_refresh_interval:
                 self._refresh_window()

@@ -11,7 +11,6 @@ from __future__ import annotations
 import random
 import threading
 import time
-from collections import deque
 
 import numpy as np
 
@@ -31,8 +30,7 @@ from rok_farm.button_registry import ButtonRegistry
 from rok_farm.capture_svc import CaptureMixin
 from rok_farm.config import (AUTO_LAUNCH_GAME, COUNTDOWN_SECONDS,
                              DELAY_AFTER_CLICK, DELAY_BETWEEN_MINES,
-                             FRAME_STALL_TIMEOUT, LIVENESS_WINDOW,
-                             MAX_MARCH_MINUTES,
+                             FRAME_STALL_TIMEOUT, MAX_MARCH_MINUTES,
                              OCCUPIED_TEMPLATES, RESTART_AFTER_FAILS,
                              RESTART_BREAK_MINUTES, RESTART_ON_RECOVERY,
                              SCREENSHOT_DIR, TEMPLATE_DIR, WINDOW_LOST_TIMEOUT)
@@ -107,10 +105,6 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         self._bg_frame = None
         self._bg_back = None
         self._capture_running = False
-        # Rolling liveness samples, filled by the capture thread (see
-        # state_probe.py for why the spacing matters).
-        self._activity_samples: deque[float] = deque(maxlen=LIVENESS_WINDOW)
-        self._quiet_streak = 0
 
         # Position history for fixed buttons; gates every click that comes from
         # a template match (see _click_match).

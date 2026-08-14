@@ -128,28 +128,42 @@ QUIT_TIMEOUT = 30.0              # graceful exit before taskkill
 RESTART_COOLDOWN = (20.0, 60.0)  # random pause between quit and relaunch
 
 # --- Layer 1: local screen-state probe ---
-# Measured on the live client at 1533x863, 2026-08-14, one sample per state
+# Measured on the live client at 1533x863, 2026-08-14
 # (tools/dev/measure_state_signals.py, results in logs/state_signals.json):
 #
-#   state        liveness min   dim ratio   city_btn   world_map_city_btn
-#   world map        0.867         1.064      0.777          0.742
-#   city             0.504         1.178      0.612          0.958
-#   bag panel        0.008         4.971      0.482          0.444
+#   state             frame activity   dim ratio   city_btn   world_map_city_btn
+#   world map (near)      0.867           1.064      0.777          0.742
+#   city                  0.504           1.178      0.612          0.958
+#   gather popup          0.088           1.188      0.908          0.618
+#   alliance panel        0.021           4.775      0.586          0.367
+#   bag panel             0.008           4.971      0.482          0.444
+#   world map (icon zoom) 0.001           1.131      0.787          0.754
 #
-# Two conclusions drove the design:
-#  1. A modal dims the background hard (border brightness 127-133 -> 22.9), so
-#     the centre/border ratio separates cleanly: 1.18 clean vs 4.97 covered.
-#  2. Liveness ALONE CANNOT detect a frozen client. An open panel is nearly
-#     static (0.008), which looks exactly like a crashed one. The frozen verdict
-#     is therefore only valid when no modal is up -- otherwise opening the bag
-#     would look like a dead game and trigger a restart.
-LIVENESS_SAMPLE_GAP = 0.5   # seconds between activity samples; the numbers above
-                            # were measured at this spacing, so keep them in sync
-LIVENESS_WINDOW = 6         # samples kept for the running average
-LIVENESS_MIN_DIFF = 0.15    # below this = static (live floor measured at 0.504)
-LIVENESS_QUIET_STREAK = 3   # consecutive quiet windows before declaring frozen
+# The dim ratio separates with a wide margin and no ambiguity: everything
+# uncovered lands at 1.06-1.19, every full modal at 4.78-4.97. MODAL_RATIO_MIN
+# sits in the empty space between.
+MODAL_RATIO_MIN = 1.8       # centre/border brightness; 1.19 uncovered vs 4.78 modal
 
-MODAL_RATIO_MIN = 1.8       # centre/border brightness; 1.18 clean vs 4.97 panel
+# --- Why there is no frame-difference "client froze" detector ---
+# There was one, and the measurements above killed it. The idea was that a live
+# view animates while a crashed one repeats a frame. It does not hold here:
+#
+#   * the world map at icon zoom -- the view the bot spends MOST of its time in
+#     while scanning for gems -- reads 0.001, i.e. completely static;
+#   * the gather popup, which appears in every single mine, reads 0.088;
+#   * an open panel reads 0.008.
+#
+# So a healthy, extremely common screen is indistinguishable from a dead client,
+# and the action on "dead" is to restart the game. Two successive attempts to
+# pick a safe threshold (0.15, then 0.02) were both falsified by the next state
+# measured. There is also no always-animating anchor to fall back on: the HUD
+# clock disappears in compact mode, which is exactly the mode used at icon zoom.
+#
+# A real freeze is still caught, just later and by evidence that means something:
+# the window vanishing, capture returning nothing at all (FRAME_STALL_TIMEOUT),
+# or RESTART_AFTER_FAILS consecutive mine failures -- a frozen client fails every
+# mine. Do not reintroduce the pixel-motion version without a signal that is
+# actually guaranteed to move.
 
 # The city/world discriminator. The old margin comparison is fragile: on the
 # world map city_btn beat world_map_city_btn by only 0.035. The ABSOLUTE score of

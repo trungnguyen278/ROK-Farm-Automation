@@ -1,15 +1,15 @@
 """Layer 1: work out what is on screen from the pixels alone.
 
-Free, instant, no network. Answers three questions the flow keeps needing:
+Free, instant, no network. Answers two questions the flow keeps needing:
 
     is something covering the game?   -> the background dims behind a modal
-    is the client still alive?        -> a live view animates, a dead one repeats
     city or world map?                -> one template, not a margin comparison
 
 Every threshold here was measured on the live client; see the table in
-config.py. The one that matters most is the interaction between the first two:
-an open panel is nearly static (activity 0.008), which looks exactly like a
-frozen client, so the frozen verdict is only trusted when no modal is up.
+config.py. A third question -- "is the client frozen?" -- was attempted from
+frame motion and removed once the measurements showed the world map at icon zoom
+sits at 0.001, i.e. a healthy screen is indistinguishable from a dead one. The
+reasoning is kept in config.py so it is not rebuilt by accident.
 """
 
 from __future__ import annotations
@@ -19,10 +19,9 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from rok_farm.config import (CITY_WMCB_MIN, LIVENESS_MIN_DIFF,
-                             LIVENESS_QUIET_STREAK, MODAL_RATIO_MIN,
+from rok_farm.config import (CITY_WMCB_MIN, MODAL_RATIO_MIN,
                              ORACLE_ESCALATE_BELOW, WORLD_CITY_BTN_MIN)
-from rok_farm.logging_setup import INFO, logger
+from rok_farm.logging_setup import INFO
 
 ACTIVITY_SIZE = (160, 90)
 
@@ -33,24 +32,12 @@ class ScreenState:
 
     view: str           # "city" | "world_map" | "unknown"
     overlay: str        # "none" | "modal" | "unknown"
-    alive: bool
     confidence: float   # 0..1; below ORACLE_ESCALATE_BELOW asks layer 2
     note: str = ""
 
     @property
     def blocked(self) -> bool:
         return self.overlay == "modal"
-
-
-def activity_frame(frame: np.ndarray) -> np.ndarray:
-    """The small grayscale image consecutive frames are compared on."""
-    return cv2.cvtColor(cv2.resize(frame, ACTIVITY_SIZE,
-                                   interpolation=cv2.INTER_AREA),
-                        cv2.COLOR_BGR2GRAY).astype(np.int16)
-
-
-def frame_activity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.abs(a - b).mean())
 
 
 def dim_ratio(frame: np.ndarray) -> float:
@@ -75,42 +62,19 @@ def dim_ratio(frame: np.ndarray) -> float:
 class StateProbeMixin:
     """Local screen-state reasoning. Mixed into GemFarmRunner."""
 
-    def _activity(self) -> float | None:
-        """Running mean frame-to-frame difference, kept by the capture thread."""
-        samples = getattr(self, "_activity_samples", None)
-        if not samples:
-            return None
-        return sum(samples) / len(samples)
-
     def _probe_state(self, frame=None) -> ScreenState:
         """Read the current screen without touching the network."""
         if frame is None:
             frame = self._grab()
         if frame is None:
-            return ScreenState("unknown", "unknown", alive=False, confidence=0.0,
+            return ScreenState("unknown", "unknown", confidence=0.0,
                                note="no frame")
 
         ratio = dim_ratio(frame)
-        modal = ratio >= MODAL_RATIO_MIN
-        activity = self._activity()
-
-        # --- alive? Only meaningful when nothing is covering the game. ---
-        if modal:
-            # A panel is static by nature; its stillness says nothing about the
-            # client's health, so do not let it accuse a healthy game.
-            alive = True
-            self._quiet_streak = 0
-        elif activity is None:
-            alive = True                       # not enough samples yet
-        elif activity >= LIVENESS_MIN_DIFF:
-            alive = True
-            self._quiet_streak = 0
-        else:
-            self._quiet_streak = getattr(self, "_quiet_streak", 0) + 1
-            alive = self._quiet_streak < LIVENESS_QUIET_STREAK
-
-        if modal:
-            return ScreenState("unknown", "modal", alive=True, confidence=0.85,
+        if ratio >= MODAL_RATIO_MIN:
+            # Something is covering the game. What is behind it cannot be read
+            # and does not matter: the action is to clear it either way.
+            return ScreenState("unknown", "modal", confidence=0.85,
                                note=f"dim {ratio:.2f}")
 
         # --- city or world map? ---
@@ -127,14 +91,9 @@ class StateProbeMixin:
         else:
             view, conf = "unknown", max(wmcb_conf, city_conf)
 
-        note = (f"dim {ratio:.2f} act "
-                f"{'n/a' if activity is None else f'{activity:.3f}'} "
-                f"wmcb {wmcb_conf:.3f} city_btn {city_conf:.3f}")
-        if not alive:
-            logger.warning("Client looks frozen: %s", note)
-            return ScreenState(view, "none", alive=False,
-                               confidence=max(0.5, conf), note=note)
-        return ScreenState(view, "none", alive=True, confidence=conf, note=note)
+        note = (f"dim {ratio:.2f} wmcb {wmcb_conf:.3f} "
+                f"city_btn {city_conf:.3f}")
+        return ScreenState(view, "none", confidence=conf, note=note)
 
     # --- escalation to layer 2 ---
 
@@ -173,6 +132,5 @@ class StateProbeMixin:
               f"overlay={verdict.overlay} (local was {state.view}/"
               f"{state.overlay} @ {state.confidence:.2f}{', ' + reason if reason else ''})")
         overlay = "modal" if verdict.blocked else "none"
-        return ScreenState(view=verdict.view, overlay=overlay,
-                           alive=state.alive, confidence=0.8,
+        return ScreenState(view=verdict.view, overlay=overlay, confidence=0.8,
                            note=f"{state.note} | oracle:{verdict.source}")

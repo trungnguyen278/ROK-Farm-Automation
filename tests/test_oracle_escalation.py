@@ -7,7 +7,6 @@ line -- a confident local verdict must never spend a call.
 import numpy as np
 import pytest
 
-from rok_farm import config as cfg
 from rok_farm.state_probe import ScreenState, StateProbeMixin
 from rok_farm.vision_llm import MockProvider, VisionOracle
 
@@ -34,8 +33,6 @@ class StubRunner(StateProbeMixin):
         self._raw_frame = self._frame
         self._confidences = {"buttons/world_map_city_btn": m["wmcb"],
                              "buttons/city_btn": m["city_btn"]}
-        self._activity_samples = [1.0, 1.0, 1.0]
-        self._quiet_streak = 0
         self.oracle = oracle
 
     def _grab(self):
@@ -93,14 +90,13 @@ def test_unrecognised_screen_escalates(mock_oracle):
     assert state.view == "world_map", "the model's answer replaces 'unknown'"
 
 
-def test_escalation_keeps_the_local_alive_verdict(mock_oracle):
-    """The model sees one frame; whether the client is animating is not its call."""
+def test_escalation_is_repeatable(mock_oracle):
+    """Asking twice about the same murky screen must stay consistent, not drift."""
     oracle, _ = mock_oracle
     runner = StubRunner("murky", oracle)
-    runner._activity_samples = [0.0, 0.0, 0.0]
-    for _ in range(cfg.LIVENESS_QUIET_STREAK):
-        state = runner._resolve_state()
-    assert state.alive is False
+    first = runner._resolve_state()
+    second = runner._resolve_state()
+    assert (first.view, first.overlay) == (second.view, second.overlay)
 
 
 def test_no_oracle_configured_falls_back_to_local():
