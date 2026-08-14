@@ -32,13 +32,16 @@ MEASURED = {
     "alliance": {"activity": 0.021, "dim": 4.775, "city_btn": 0.586, "wmcb": 0.367},
     "bag": {"activity": 0.008, "dim": 4.971, "city_btn": 0.482, "wmcb": 0.444},
     "world_icon": {"activity": 0.001, "dim": 1.131, "city_btn": 0.787, "wmcb": 0.754},
+    # The same camera position at night: border brightness 134.1 -> 76.0.
+    "world_icon_night": {"activity": 1.228, "dim": 1.045,
+                         "city_btn": 0.844, "wmcb": 0.662},
     # Nothing matches: the case that escalates to layer 2.
     "murky": {"activity": 0.5, "dim": 1.05, "city_btn": 0.30, "wmcb": 0.25},
 }
 
-UNCOVERED = ("world_near", "city", "gather", "world_icon")
+UNCOVERED = ("world_near", "city", "gather", "world_icon", "world_icon_night")
 COVERED = ("alliance", "bag")
-WORLD = ("world_near", "gather", "world_icon")
+WORLD = ("world_near", "gather", "world_icon", "world_icon_night")
 
 
 def frame_with_ratio(ratio: float, border: int = 120, size=(863, 1533)):
@@ -133,6 +136,26 @@ def test_city_gate_separates_the_two_views():
                      - MEASURED["world_near"]["wmcb"])
     new_margin = MEASURED["city"]["wmcb"] - MEASURED["world_near"]["wmcb"]
     assert new_margin > old_margin * 5
+
+
+def test_night_lighting_does_not_move_the_dim_ratio():
+    """Why this is a ratio and not a brightness.
+
+    Same camera position, same icons, night lighting: the border brightness fell
+    134.1 -> 76.0, a 44% drop that an absolute threshold would have tripped
+    over. The ratio barely moved because the darkening divides out.
+    """
+    day = MEASURED["world_icon"]["dim"]
+    night = MEASURED["world_icon_night"]["dim"]
+    assert abs(day - night) < 0.15
+    assert max(day, night) < cfg.MODAL_RATIO_MIN
+
+
+def test_night_lighting_does_not_flip_the_view_verdict():
+    day = StubProbe("world_icon")._probe_state()
+    night = StubProbe("world_icon_night")._probe_state()
+    assert day.view == night.view == "world_map"
+    assert day.overlay == night.overlay == "none"
 
 
 def test_there_is_no_frame_motion_health_check():

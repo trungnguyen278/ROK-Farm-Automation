@@ -138,10 +138,18 @@ RESTART_COOLDOWN = (20.0, 60.0)  # random pause between quit and relaunch
 #   alliance panel        0.021           4.775      0.586          0.367
 #   bag panel             0.008           4.971      0.482          0.444
 #   world map (icon zoom) 0.001           1.131      0.787          0.754
+#   the same, at NIGHT    n/a             1.045      0.844          0.662
 #
 # The dim ratio separates with a wide margin and no ambiguity: everything
-# uncovered lands at 1.06-1.19, every full modal at 4.78-4.97. MODAL_RATIO_MIN
+# uncovered lands at 1.05-1.19, every full modal at 4.78-4.97. MODAL_RATIO_MIN
 # sits in the empty space between.
+#
+# The night row is why this is a RATIO and not a brightness. Same camera
+# position, same icons, night lighting: border brightness fell 134.1 -> 76.0, a
+# 44% drop that any absolute threshold would have tripped over, while the ratio
+# barely moved (1.131 -> 1.045) because the darkening divides out. The view
+# discriminators also held: city_btn 0.844 still clears its gate and
+# world_map_city_btn 0.662 still misses the city gate.
 MODAL_RATIO_MIN = 1.8       # centre/border brightness; 1.19 uncovered vs 4.78 modal
 
 # --- Why there is no frame-difference "client froze" detector ---
