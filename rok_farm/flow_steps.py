@@ -298,10 +298,40 @@ class GemFlowMixin:
         print(f"  [{WARN}] [{attempt}] Not a gem mine")
         return False
 
-    def _return_to_icon_zoom(self):
-        """After a failed icon click, zoom back to icon level."""
+    def _return_to_icon_zoom(self, heading: float | None = None):
+        """After a failed icon click, zoom back out AND move on.
+
+        Clicking an icon zooms the game onto that mine, so zooming back out
+        leaves the camera centred on it. The wander then pans only 0.5-0.75 of
+        the HALF screen -- overlap that exists so gems are not skipped -- which
+        leaves the just-failed mine still in view and still the most prominent
+        icon. Its frame coordinates have changed though, so `clicked_positions`
+        (which is in frame space) no longer recognises it and the flow clicks
+        the same mine again. Observed: the same mine attempted four times.
+
+        Panning a full screen away breaks that loop, and matches what a player
+        does after a dud -- go somewhere else, not circle the same rock.
+        """
         self._scroll_at_center(-1, self._zoom_scrolls())
         self._wait(DELAY_AFTER_SCROLL)
+
+        cx, cy = self._center_screen()
+        ww, wh = self.win["width"], self.win["height"]
+        if heading is None:
+            heading = getattr(self, "_wander_heading", random.uniform(0, 2 * math.pi))
+        # Leave at an angle to the search heading so we do not simply retrace
+        # the ground the wander already covered.
+        heading += random.uniform(-math.pi / 3, math.pi / 3)
+        # pct > 1 of the half-screen reach: one swipe shifts the map by roughly
+        # a full screen, which is what it takes to put a centred mine outside
+        # the view rather than merely near its edge.
+        pct = random.uniform(1.0, 1.35)
+        dx = int((ww // 2 - 80) * pct * math.cos(heading))
+        dy = int((wh // 2 - 80) * pct * math.sin(heading))
+        sx, sy = self._clamp_to_play_area(cx + dx // 2, cy + dy // 2)
+        ex, ey = self._clamp_to_play_area(cx - dx // 2, cy - dy // 2)
+        self._human_drag(sx, sy, ex, ey, speed_factor=random.uniform(3.6, 5.0))
+        self._wait(DELAY_DRAG_SETTLE)
 
     def _step_scan_and_verify_gem(self, tag: str) -> Match | None:
         print(f"\n--- [{tag}] Step 2: Scan + verify gem mines ---\n")
@@ -471,7 +501,7 @@ class GemFlowMixin:
                     self._wander_heading = wander_heading
                     self._record(f"{tag}_find", True, f"Gem at attempt {attempt}, scan {scan_count}")
                     return icon
-                self._return_to_icon_zoom()
+                self._return_to_icon_zoom(wander_heading)
 
         self._wander_heading = wander_heading
         print(f"  [{FAIL}] No gem mine after {scan_count} scans, {attempt} icons checked")
