@@ -52,10 +52,14 @@ class SerialConnection:
                 baudrate=self._baud,
                 timeout=ACK_TIMEOUT,
             )
-            time.sleep(2.5)  # wait for ESP32 boot + USB enumeration
-            self._serial.reset_input_buffer()
-
-            if not self._handshake():
+            # Opening the port makes the CH340 auto-reset the ESP32. Drive the
+            # reset lines to the APP-boot combination (GPIO0 high) so the board
+            # never comes up in the ROM download mode -- there it answers nothing
+            # on UART and its native USB shows up as USB-Serial-JTAG instead of
+            # our HID. Then POLL the handshake: a single fixed 2.5 s wait raced
+            # the boot + USB re-enumeration and often missed the first PONG.
+            self._app_boot_reset()
+            if not self._handshake_with_retries():
                 self._serial.close()
                 self._serial = None
                 return False
@@ -127,6 +131,39 @@ class SerialConnection:
             return resp is not None and resp.status == "PONG"
         except (ConnectionError, serial.SerialException):
             return False
+
+    def _app_boot_reset(self):
+        """Pulse EN with GPIO0 held high so the board boots the app, not the ROM
+        bootloader. Same sequence used to recover the board over UART."""
+        try:
+            self._serial.setDTR(False)   # GPIO0 high -> normal (app) boot
+            self._serial.setRTS(True)    # EN low: hold the chip in reset
+            time.sleep(0.15)
+            self._serial.setRTS(False)   # EN high: release -> boot
+        except Exception as e:
+            logger.debug("Reset pulse failed (non-fatal): %s", e)
+
+    def _handshake_with_retries(self, attempts: int = 7,
+                                delay: float = 0.8) -> bool:
+        """Poll the handshake while the board boots and re-enumerates USB.
+
+        The board needs ~2-4 s after a reset; retrying a cheap PING beats betting
+        on one fixed sleep. The full handshake (with RESET) runs once PONG lands.
+        """
+        for i in range(attempts):
+            time.sleep(delay)
+            try:
+                self._serial.reset_input_buffer()
+            except Exception:
+                pass
+            ping = self._protocol.pack_with_id(0, "PING")
+            resp = self.send_and_wait(ping, 0, timeout=1.0)
+            if resp and resp.status == "PONG":
+                return self._handshake()
+            logger.debug("No PONG yet (%d/%d), board still booting",
+                         i + 1, attempts)
+        logger.error("Handshake failed: no PONG after %d attempts", attempts)
+        return False
 
     def _handshake(self) -> bool:
         ping = self._protocol.pack_with_id(0, "PING")
