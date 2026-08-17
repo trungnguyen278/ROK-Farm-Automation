@@ -36,6 +36,18 @@ GEM_ICON_THRESHOLD_NIGHT = 0.70
 # sat~13; terrain lap_var~440-580, sat~155-160 -- huge gap, generous thresholds.
 FOG_LAP_VAR_MAX = 60.0
 FOG_SAT_MAX = 55.0
+# The other way out of the kingdom is open WATER, and it breaks the gray-fog
+# assumption above: the sea is vividly blue (sat ~185), i.e. MORE saturated than
+# the grassland it must be told apart from, so `sat < 55` can never fire on it.
+# Measured over 87 live scan frames labelled by the player (22 out-of-kingdom):
+# water hue_std 0.48-3.24 vs terrain hue_std 5.02-39 -- a clean gap, because the
+# sea is one flat hue while terrain mixes green/brown/gray. Gate at 4.0 with
+# sat > 100 (terrain sits at 78-90 median); together they caught 18/22 with ZERO
+# false alarms, and a false alarm is the expensive error: it abandons a farmable
+# map. The 4 misses are coastline frames with real land in view, and the pure
+# water frame one or two pans later trips it anyway.
+FOG_HUE_STD_MAX = 4.0
+FOG_WATER_SAT_MIN = 100.0
 BUTTON_THRESHOLD = 0.70
 GATHER_BTN_THRESHOLD = 0.65
 WORLD_MAP_BTN_THRESHOLD = 0.75
