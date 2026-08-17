@@ -62,6 +62,33 @@ class HidInputMixin:
             else:
                 del self._NO_CLICK_ZONES
 
+    # Set by _muscle_memory(); None means the normal deliberate pacing.
+    _mm_speed: float | None = None
+
+    @contextmanager
+    def _muscle_memory(self, speed: float = 3.0):
+        """Click like a player who knows exactly where the button is.
+
+        The deploy chain (gather -> new troop -> march) is three buttons at
+        FIXED positions that a gem farmer hits from memory. Paying the normal
+        "find it, recognise it, then click" cost there is not just slow, it is
+        WRONG: measured 3.6 s then 2.3 s between clicks, where a practised
+        player takes ~0.5-0.8 s per beat. Being slowest exactly where humans are
+        fastest is itself a tell, so this trims the perceive pause and speeds
+        the pointer travel, while keeping the position jitter, the hold-time
+        variation and the occasional fumble that make the motion human.
+        """
+        had = "_mm_speed" in self.__dict__
+        prev = self.__dict__.get("_mm_speed")
+        self._mm_speed = speed
+        try:
+            yield
+        finally:
+            if had:
+                self._mm_speed = prev
+            else:
+                del self._mm_speed
+
     def _probe_moveto(self) -> bool:
         """Send MOVETO and verify cursor arrives near the expected screen position.
 
@@ -174,6 +201,7 @@ class HidInputMixin:
             self.cmd.send("MOVETO", hx, hy)
         else:
             sc = self._mouse_scale
+            mm = self._mm_speed
             for px, py, step_ms in path:
                 ax, ay = get_cursor_pos()
                 mdx = px - ax
@@ -182,6 +210,10 @@ class HidInputMixin:
                 send_dy = int(mdy / sc) if sc != 1.0 else int(mdy)
                 if abs(send_dx) > 0 or abs(send_dy) > 0:
                     dur = max(step_ms, max(abs(send_dx), abs(send_dy)))
+                    if mm:
+                        # A practised flick covers the same curve faster; the
+                        # humanizer's shape is kept, only the clock is scaled.
+                        dur = max(3, int(dur / mm))
                     self.cmd.send("MOVE", send_dx, send_dy, dur)
             for _ in range(4):
                 time.sleep(0.03)
@@ -221,8 +253,13 @@ class HidInputMixin:
             return False
         if not self._moveto(sx, sy):
             return False
-        perceive = random.lognormvariate(-0.5, 0.4)
-        time.sleep(max(0.15, min(2.0, perceive)))
+        if self._mm_speed:
+            # Known button: no visual search, just the reaction floor. Still
+            # jittered -- a human is fast here, not metronomic.
+            time.sleep(random.uniform(0.04, 0.13))
+        else:
+            perceive = random.lognormvariate(-0.5, 0.4)
+            time.sleep(max(0.15, min(2.0, perceive)))
         if random.random() < 0.015:
             miss_dx = random.randint(-40, 40)
             miss_dy = random.randint(-30, 30)
@@ -245,7 +282,10 @@ class HidInputMixin:
                      sx, sy, acx, acy, err, tag)
         ok = self.cmd.send("CLICK", "L", hold_ms)
         self.session.record_action()
-        self._wait(DELAY_AFTER_CLICK)
+        if self._mm_speed:
+            self._wait((0.06, 0.03))
+        else:
+            self._wait(DELAY_AFTER_CLICK)
         return ok
 
     def _click_match(self, match: Match) -> bool:

@@ -525,12 +525,17 @@ class GemFlowMixin:
         # flaky at night): gather -> "Quan moi" (new troop) -> "Hanh quan"
         # (march). We do NOT retry-click: a retry after a march that already
         # fired just clicks junk on the world map (and re-opens the deploy).
-        print(f"  [{INFO}] New Troop (Quan moi) at fixed pct{NEW_TROOP_BTN_PCT}")
-        self._click_pct(*NEW_TROOP_BTN_PCT, jitter_px=6)
-        self._wait(DELAY_VERIFY)
+        # Muscle-memory pacing: these are memorised positions, and the measured
+        # 3.6 s / 2.3 s gaps were slower than a real gem farmer by roughly 5x.
+        with self._muscle_memory():
+            print(f"  [{INFO}] New Troop (Quan moi) at fixed pct{NEW_TROOP_BTN_PCT}")
+            self._click_pct(*NEW_TROOP_BTN_PCT, jitter_px=6)
+            # Still wait for the commander panel to actually paint -- fast is
+            # the goal, clicking into a panel that is not up yet is not.
+            self._wait((0.28, 0.08))
 
-        print(f"  [{INFO}] March (Hanh quan) at fixed pct{MARCH_BTN_PCT}")
-        self._click_pct(*MARCH_BTN_PCT, jitter_px=6)
+            print(f"  [{INFO}] March (Hanh quan) at fixed pct{MARCH_BTN_PCT}")
+            self._click_pct(*MARCH_BTN_PCT, jitter_px=6)
 
         # Trust the fixed clicks: the post-march world map zooms in on the troops
         # and reads ambiguously (city_btn ~tie globe), so verifying here is
