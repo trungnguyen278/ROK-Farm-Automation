@@ -79,6 +79,7 @@ class _WGCBackend:
         self._latest_frame: np.ndarray | None = None
         self._lock = threading.Lock()
         self._control: CaptureControl | None = None
+        self._closed = False
 
         cap = WindowsCapture(
             cursor_capture=False,
@@ -88,19 +89,33 @@ class _WGCBackend:
 
         @cap.event
         def on_frame_arrived(frame: Frame, capture_control: CaptureControl):
+            # COPY here, while the native frame is still alive. frame_buffer is
+            # a view into memory WGC owns and frees once this callback returns,
+            # so storing the view left a dangling pointer and the next grab()
+            # memcpy'd freed memory. That is a latent race at any time, and a
+            # near-certain crash when the captured window dies mid-grab: it
+            # killed an overnight run with an access violation (0xc0000005 in
+            # VCRUNTIME140) seconds after the game window closed, taking the
+            # farm down instead of letting it relaunch the client.
             bgr = frame.convert_to_bgr()
+            buf = np.array(bgr.frame_buffer, copy=True)
             with self._lock:
-                self._latest_frame = bgr.frame_buffer
+                self._latest_frame = buf
 
         @cap.event
         def on_closed():
-            pass
+            # The capture target is gone (window closed). Stop handing out the
+            # last frame: the caller must see "no frame" and rebind, not keep
+            # working from a stale picture of a window that no longer exists.
+            with self._lock:
+                self._closed = True
+                self._latest_frame = None
 
         self._control = cap.start_free_threaded()
 
     def grab(self, monitor: dict) -> np.ndarray | None:
         with self._lock:
-            if self._latest_frame is None:
+            if self._closed or self._latest_frame is None:
                 return None
             return self._latest_frame.copy()
 
