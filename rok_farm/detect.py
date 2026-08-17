@@ -17,8 +17,7 @@ from vision.color_filter import is_gem_icon_color
 from vision.template_matcher import Match
 
 from rok_farm.config import (BUTTON_THRESHOLD, DARK_TERRAIN_THRESH,
-                             FOG_HUE_STD_MAX, FOG_LAP_VAR_MAX, FOG_SAT_MAX,
-                             FOG_WATER_SAT_MIN, MARCH_TEMPLATES,
+                             FOG_HUE_STD_MAX, FOG_LAP_VAR_MAX, MARCH_TEMPLATES,
                              OCCUPIED_TEMPLATES, OCCUPIED_THRESHOLD,
                              SAFE_ZONE_MARGIN, VERIFY_ROI)
 from rok_farm.logging_setup import INFO, logger
@@ -235,20 +234,17 @@ class DetectMixin:
         return True, f"ok({med:.0f})"
 
     def _is_fog(self, frame) -> bool:
-        """True if the play area is outside the kingdom -- gray fog OR open sea.
+        """True if the play area is outside the kingdom.
 
-        Two different signatures, tested separately because neither test works
-        for the other case:
+        Out-of-kingdom looks different depending on where and when you leave it
+        -- gray cloud, blue sea, beige sand in afternoon light -- so colour
+        cannot identify it. Being FEATURELESS can: no trees, rocks or resource
+        nodes to raise the detail measure, or a single flat hue across the whole
+        view. Real terrain fails both (see the measured ranges in config).
 
-          * gray fog  -- smooth AND colourless: low detail, low saturation.
-          * open sea  -- smooth AND vividly blue. Saturation is HIGHER than the
-            grassland here, so the fog test can never fire on it; what gives it
-            away is that the whole ROI is one flat hue. (Hue is meaningless at
-            near-zero saturation, which is why the fog branch must not use it.)
-
-        Either way the flow bails back to the city: a camera 265 km out over the
-        sea will never find a node, and a bot that keeps panning around out
-        there looks nothing like a player.
+        The flow bails back to the city on a hit: a camera 139-265 km off the
+        map will never find a node, and a bot that keeps panning out there does
+        not look like a player.
         """
         fh, fw = frame.shape[:2]
         roi = frame[int(fh * 0.25):int(fh * 0.72), int(fw * 0.20):int(fw * 0.80)]
@@ -257,16 +253,13 @@ class DetectMixin:
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        sat = float(hsv[:, :, 1].mean())
-
-        if lap_var < FOG_LAP_VAR_MAX and sat < FOG_SAT_MAX:
-            logger.info("fog: gray cloud (lap=%.1f sat=%.1f)", lap_var, sat)
-            return True
-
         hue_std = float(hsv[:, :, 0].std())
-        if hue_std < FOG_HUE_STD_MAX and sat > FOG_WATER_SAT_MIN:
-            logger.info("fog: open water (hue_std=%.2f sat=%.1f lap=%.1f)",
-                        hue_std, sat, lap_var)
+
+        if lap_var < FOG_LAP_VAR_MAX:
+            logger.info("fog: featureless (lap=%.1f hue_std=%.2f)", lap_var, hue_std)
+            return True
+        if hue_std < FOG_HUE_STD_MAX:
+            logger.info("fog: single flat hue (hue_std=%.2f lap=%.1f)", hue_std, lap_var)
             return True
         return False
 

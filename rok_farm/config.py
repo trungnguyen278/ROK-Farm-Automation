@@ -34,20 +34,24 @@ GEM_ICON_THRESHOLD_NIGHT = 0.70
 
 # Out-of-kingdom fog is a smooth low-detail gray cloud. Measured: fog lap_var~8,
 # sat~13; terrain lap_var~440-580, sat~155-160 -- huge gap, generous thresholds.
-FOG_LAP_VAR_MAX = 60.0
-FOG_SAT_MAX = 55.0
-# The other way out of the kingdom is open WATER, and it breaks the gray-fog
-# assumption above: the sea is vividly blue (sat ~185), i.e. MORE saturated than
-# the grassland it must be told apart from, so `sat < 55` can never fire on it.
-# Measured over 87 live scan frames labelled by the player (22 out-of-kingdom):
-# water hue_std 0.48-3.24 vs terrain hue_std 5.02-39 -- a clean gap, because the
-# sea is one flat hue while terrain mixes green/brown/gray. Gate at 4.0 with
-# sat > 100 (terrain sits at 78-90 median); together they caught 18/22 with ZERO
-# false alarms, and a false alarm is the expensive error: it abandons a farmable
-# map. The 4 misses are coastline frames with real land in view, and the pure
-# water frame one or two pans later trips it anyway.
+# Out-of-kingdom renders at least THREE ways, so saturation cannot gate it:
+# gray cloud (sat ~13), open sea (sat ~185) and beige sand under afternoon light
+# (sat ~56). Those span the whole range, which is why the original `sat < 55`
+# rule fired on none of them in a 71-empty-scan run while the camera drifted
+# 265 km off the map.
+#
+# What every version shares is being FEATURELESS -- either smooth (no trees,
+# rocks or nodes to raise Laplacian variance) or one flat hue. Measured across
+# 100 live frames from two runs in different lighting, labelled by the player
+# (32 out-of-kingdom, 68 terrain):
+#   out-of-kingdom : lap_var 2.7-191   hue_std 0.48-16.1
+#   terrain        : lap_var 69.7-1315 hue_std 5.02-46.5
+# `lap_var < 50 OR hue_std < 4` catches 28/32 with ZERO false alarms, and the
+# gates sit well clear of the terrain floor (69.7 and 5.02). A false alarm is
+# the expensive error -- it abandons a farmable map -- while a miss only costs
+# one more pan, since the next frame further out trips it.
+FOG_LAP_VAR_MAX = 50.0
 FOG_HUE_STD_MAX = 4.0
-FOG_WATER_SAT_MIN = 100.0
 BUTTON_THRESHOLD = 0.70
 GATHER_BTN_THRESHOLD = 0.65
 WORLD_MAP_BTN_THRESHOLD = 0.75
