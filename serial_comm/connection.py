@@ -77,7 +77,12 @@ class SerialConnection:
         self._connected.clear()
         with self._lock:
             if self._serial and self._serial.is_open:
-                self._serial.close()
+                # Closing a handle whose device was yanked raises; that must not
+                # abort a reconnect, which is exactly when it happens.
+                try:
+                    self._serial.close()
+                except Exception as e:
+                    logger.debug("Serial close failed (device gone?): %s", e)
             self._serial = None
         logger.info("Disconnected")
 
