@@ -80,8 +80,11 @@ class DetectMixin:
         (measured: city_btn 0.83 raw vs 0.74 desaturated, margin +0.12 vs +0.02).
         Raw gives a clear city-vs-world margin even at night.
         """
-        if self._raw_frame is None:
-            self._grab()  # refresh _raw_frame
+        # Grab a FRESH frame every call. Poll callers (_wait_until_world_map)
+        # don't refresh between checks, so reusing a cached _raw_frame made a
+        # city->world toggle invisible: the view switched but this kept reading
+        # the pre-toggle frame and reported "city" forever.
+        self._grab()
         frame = self._raw_frame
         if frame is None:
             return None
@@ -92,22 +95,31 @@ class DetectMixin:
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             return None
-        mc = self.matcher.match_single(crop, "buttons/city_btn")
-        mw = self.matcher.match_single(crop, "buttons/world_map_city_btn")
-        cc = mc.confidence if mc else 0.0
-        wc = mw.confidence if mw else 0.0
-        on_world = bool(mc and cc >= threshold and cc >= wc)
-        logger.debug("city_btn cc=%.3f vs world_map_city_btn wc=%.3f -> %s",
-                     cc, wc, "WORLD" if on_world else "city/none")
+        # The two bottom-right "Space" buttons are identical apart from their
+        # inner glyph -- a CASTLE means we are on the world map (the button
+        # returns to the city), a MAP means we are in the city. Matching the
+        # whole button was dominated by the shared disc + "Space" text and scored
+        # ~equally in both states (measured: world_map_city_btn hit 0.96 on the
+        # castle button it should NOT match). Match just the glyphs instead:
+        # castle out-scoring map is the world map. (measured margins: city
+        # map 0.85 vs castle 0.64; world castle 0.99 vs map 0.00.)
+        castle = self.matcher.match_single(crop, "buttons/space_castle")
+        city = self.matcher.match_single(crop, "buttons/space_map")
+        cc = castle.confidence if castle else 0.0
+        mm = city.confidence if city else 0.0
+        on_world = bool(castle and cc >= threshold and cc > mm)
+        logger.debug("space_castle=%.3f vs space_map=%.3f -> %s",
+                     cc, mm, "WORLD" if on_world else "city/none")
         if on_world:
-            ax, ay = mc.x + x1, mc.y + y1
-            return Match(mc.name, ax, ay, mc.w, mc.h, mc.confidence,
-                         (ax + mc.w // 2, ay + mc.h // 2))
+            ax, ay = castle.x + x1, castle.y + y1
+            return Match(castle.name, ax, ay, castle.w, castle.h,
+                         castle.confidence,
+                         (ax + castle.w // 2, ay + castle.h // 2))
         return None
 
     def _on_world_map(self, frame=None) -> bool:
-        """True if currently on the world map (city_btn out-scores the city's
-        world-map globe in the bottom-right)."""
+        """True if currently on the world map (the bottom-right Space button
+        shows the castle glyph, not the map glyph)."""
         return self._find_city_btn(frame, threshold=0.70) is not None
 
     def _wait_until_world_map(self, timeout: float = 4.0) -> bool:
