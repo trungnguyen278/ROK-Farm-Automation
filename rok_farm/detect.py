@@ -17,7 +17,8 @@ from vision.color_filter import is_gem_icon_color
 from vision.template_matcher import Match
 
 from rok_farm.config import (BUTTON_THRESHOLD, DARK_TERRAIN_THRESH,
-                             FOG_HUE_STD_MAX, FOG_LAP_VAR_MAX, MARCH_TEMPLATES,
+                             FOG_HUE_STD_MAX, FOG_LAP_VAR_MAX, FOG_SAT_MAX,
+                             MARCH_TEMPLATES,
                              OCCUPIED_TEMPLATES, OCCUPIED_THRESHOLD,
                              SAFE_ZONE_MARGIN, VERIFY_ROI)
 from rok_farm.logging_setup import INFO, logger
@@ -236,32 +237,47 @@ class DetectMixin:
     def _is_fog(self, frame) -> bool:
         """True if the play area is outside the kingdom.
 
-        Out-of-kingdom looks different depending on where and when you leave it
-        -- gray cloud, blue sea, beige sand in afternoon light -- so colour
-        cannot identify it. Being FEATURELESS can: no trees, rocks or resource
-        nodes to raise the detail measure, or a single flat hue across the whole
-        view. Real terrain fails both (see the measured ranges in config).
+        Out-of-kingdom has shown up four different ways -- smooth gray cloud,
+        blue sea, beige sand in afternoon light, and gray fog WITH texture -- so
+        no single measure finds them all. Three independent signatures do, any
+        one of which is enough (measured ranges and margins live in config):
+
+          * featureless  -- nothing to raise Laplacian variance
+          * one flat hue -- the whole view is a single colour
+          * colourless   -- almost no saturation, however detailed it looks
+
+        Measured on the RAW frame: night normalisation deliberately desaturates,
+        which would drag real terrain toward the colourless test and cause the
+        one error that actually costs something -- abandoning a farmable map.
 
         The flow bails back to the city on a hit: a camera 139-265 km off the
         map will never find a node, and a bot that keeps panning out there does
         not look like a player.
         """
-        fh, fw = frame.shape[:2]
-        roi = frame[int(fh * 0.25):int(fh * 0.72), int(fw * 0.20):int(fw * 0.80)]
+        raw = getattr(self, "_raw_frame", None)
+        if raw is None:
+            raw = frame
+        fh, fw = raw.shape[:2]
+        roi = raw[int(fh * 0.25):int(fh * 0.72), int(fw * 0.20):int(fw * 0.80)]
         if roi.size == 0:
             return False
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         hue_std = float(hsv[:, :, 0].std())
+        sat = float(hsv[:, :, 1].mean())
 
         if lap_var < FOG_LAP_VAR_MAX:
-            logger.info("fog: featureless (lap=%.1f hue_std=%.2f)", lap_var, hue_std)
-            return True
-        if hue_std < FOG_HUE_STD_MAX:
-            logger.info("fog: single flat hue (hue_std=%.2f lap=%.1f)", hue_std, lap_var)
-            return True
-        return False
+            why = f"featureless (lap={lap_var:.1f})"
+        elif hue_std < FOG_HUE_STD_MAX:
+            why = f"single flat hue (hue_std={hue_std:.2f})"
+        elif sat < FOG_SAT_MAX:
+            why = f"colourless (sat={sat:.1f})"
+        else:
+            return False
+        logger.info("fog: %s [lap=%.1f sat=%.1f hue_std=%.2f]",
+                    why, lap_var, sat, hue_std)
+        return True
 
     def _find_all_icons(self, frame) -> list[Match]:
         """Find all resource icons (gem_icon template) on frame, sorted by confidence desc."""

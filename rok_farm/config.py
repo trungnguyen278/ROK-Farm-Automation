@@ -46,12 +46,20 @@ GEM_ICON_THRESHOLD_NIGHT = 0.70
 # (32 out-of-kingdom, 68 terrain):
 #   out-of-kingdom : lap_var 2.7-191   hue_std 0.48-16.1
 #   terrain        : lap_var 69.7-1315 hue_std 5.02-46.5
-# `lap_var < 50 OR hue_std < 4` catches 28/32 with ZERO false alarms, and the
-# gates sit well clear of the terrain floor (69.7 and 5.02). A false alarm is
-# the expensive error -- it abandons a farmable map -- while a miss only costs
-# one more pan, since the next frame further out trips it.
+# A fourth appearance then broke a detail-only rule: gray fog WITH texture
+# (lap_var 199-398, i.e. more detailed than some terrain) but nearly colourless
+# at sat 15-19. Detail cannot see it and flat-hue cannot either; only its lack
+# of colour gives it away. So three independent signatures, each sufficient:
+#   featureless : lap_var < 50   (smooth sand, smooth water, smooth cloud)
+#   one flat hue: hue_std < 4    (open sea)
+#   colourless  : sat     < 30   (gray fog, textured or not)
+# Over 111 frames from three runs (39 out-of-kingdom, 72 terrain) this catches
+# 35/39 with ZERO false alarms. Terrain never drops below sat 78.4, lap 69.7 or
+# hue_std 5.02, so every gate keeps a wide margin -- deliberately, because a
+# false alarm abandons a farmable map while a miss costs only one more pan.
 FOG_LAP_VAR_MAX = 50.0
 FOG_HUE_STD_MAX = 4.0
+FOG_SAT_MAX = 30.0
 BUTTON_THRESHOLD = 0.70
 GATHER_BTN_THRESHOLD = 0.65
 WORLD_MAP_BTN_THRESHOLD = 0.75
