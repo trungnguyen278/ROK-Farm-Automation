@@ -57,8 +57,15 @@ GEM_ICON_THRESHOLD_NIGHT = 0.70
 # 35/39 with ZERO false alarms. Terrain never drops below sat 78.4, lap 69.7 or
 # hue_std 5.02, so every gate keeps a wide margin -- deliberately, because a
 # false alarm abandons a farmable map while a miss costs only one more pan.
+# The flat-hue test then produced the expensive error live: it abandoned green
+# farmland 36 km from the city (grass, trees, resource nodes everywhere) because
+# all of it is green -- hue_std 3.77 -- while lap_var was 467.7. Uniform colour
+# only means out-of-kingdom when there is also nothing THERE, so that branch
+# carries a detail ceiling. True flat-hue fog peaked at lap_var 191; the false
+# alarm sat at 467; 250 splits them with room on both sides.
 FOG_LAP_VAR_MAX = 50.0
 FOG_HUE_STD_MAX = 4.0
+FOG_HUE_LAP_MAX = 250.0
 FOG_SAT_MAX = 30.0
 BUTTON_THRESHOLD = 0.70
 GATHER_BTN_THRESHOLD = 0.65
