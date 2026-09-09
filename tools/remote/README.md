@@ -65,6 +65,59 @@ Leave it running. It survives farm restarts and can control a run it did not
 launch — the farm and watchdog are found by scanning command lines, not by a
 remembered pid, so the bot itself can be restarted at any time.
 
+## Starting a farming session
+
+**1. Start the bot** (once — it can control runs it did not launch):
+
+Double-click `tools\remote\start_bot.bat`. It posts "Bot online" in `#chung`
+when it is ready.
+
+**2. Start the farm** — from Discord, or locally.
+
+From Discord: send `!start` in `#chung`. If you are sitting at the machine it
+will refuse and ask for `!start force`, because the ESP32 would otherwise
+fight you for the mouse. That refusal is the feature; `force` is the answer.
+
+Locally, without the bot:
+
+```
+.venv\Scripts\python tools\dev\overnight\farm_full.py
+```
+
+and, in a second window, the supervisor (it needs the farm's pid):
+
+```
+.venv\Scripts\python tools\dev\overnight\watchdog2.py <farm pid>
+```
+
+The bot's `!start` does both, and starts the farm detached so restarting the
+bot cannot take a live run down with it.
+
+**Prefer starting with the game CLOSED.** The farm launches it itself. Attaching
+to a client that is already running and sitting in the background costs the
+first three mines: ROK stops redrawing when it is not in front, WGC keeps
+handing back the last frame it got, and the flow fails mine after mine on an
+identical template score for about 75 seconds before the frame stream resumes.
+Measured on 2026-09-09: three runs that attached to a backgrounded client lost
+mines 1-3 every time; the one run that launched the game itself lost none.
+
+## Stopping
+
+`!stop` in Discord, or `!stop game` to close the client too. Either way the
+ESP32's idle jitter is turned off — the farm leaves it on while tabbed away,
+and a board still nudging the pointer is the thing you notice first.
+
+To stop the bot itself, close the `start_bot.bat` window.
+
+## After a run
+
+```
+.venv\Scripts\python tools\dev\overnight\report.py
+```
+
+Throughput per segment, why mines failed, and the timings measured in
+production rather than assumed.
+
 ## Commands
 
 | | |
