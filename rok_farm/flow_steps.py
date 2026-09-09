@@ -90,6 +90,13 @@ class GemFlowMixin:
             self._map_id_votes = []
         else:
             self._map_id_votes = []
+        # The first world we see is home. Anything else, confirmed by the vote
+        # above, means the camera has crossed out of it.
+        if getattr(self, "_home_map_id", None) is None:
+            self._home_map_id = map_id
+            logger.info("Home map is %s", map_id)
+        self._off_home_map = map_id != self._home_map_id
+
         if self.mapmem is None or self.mapmem.map_id != map_id:
             # Different map id = different world (home kingdom vs KvK), so a
             # different book. No configuration: the HUD says which one.
@@ -650,6 +657,26 @@ class GemFlowMixin:
 
             icons = self._find_all_icons(frame)
             self._map_sync(frame, bool(icons), scan_count=scan_count)
+
+            # Crossed into another kingdom. On a KvK map the ground beyond the
+            # border is not white fog but another participating kingdom's
+            # terrain, so _is_fog can never fire there -- the bot walked west to
+            # X:1, stepped into map 4096, and carried on scanning ground it
+            # cannot gather from. The HUD says which world we are in and the
+            # scan already reads it every few frames; nothing was watching it.
+            # Deposits over there are real, which is why the classifier keeps
+            # confirming them and the gather popup then refuses to open.
+            if getattr(self, "_off_home_map", False):
+                print(f"  [{WARN}] Left the home map ({self._home_map_id} -> "
+                      f"{self.mapmem.map_id if self.mapmem else '?'}) -- "
+                      f"cannot gather here, turning back")
+                logger.warning("Off home map %s -> %s; retreating",
+                               self._home_map_id,
+                               self.mapmem.map_id if self.mapmem else "?")
+                back = wander_heading + math.pi + random.uniform(-0.35, 0.35)
+                self._retreat_from_edge(back)
+                self._step_return_city(tag)
+                return None
 
             if not icons and self._edge_gems:
                 print(f"  [{INFO}] Scan {scan_count:2d}: {len(self._edge_gems)} edge gem(s), recentering...")
