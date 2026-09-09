@@ -15,6 +15,11 @@ from rok_farm.config import (MAX_MARCH_MINUTES, WAIT_EARLY_MARGIN,
                              WAIT_QUIT_MINUTES)
 from rok_farm.logging_setup import INFO, WARN, logger
 
+# What one alt-tab out-and-back costs before any waiting happens: _tab_back()
+# sleeps uniform(1.5, 3.0) plus a warmup capped at 8s. Staying out for less
+# than this is pure overhead, so it is the floor on a planned wait.
+TAB_CYCLE_COST = 20.0
+
 
 
 class PhasesMixin:
@@ -135,7 +140,21 @@ class PhasesMixin:
         # the deploy panel, so this is a plan rather than a vigil.
         wait_s = self.seconds_until_first_return()
         if wait_s is not None:
-            plan = max(0.0, wait_s - WAIT_EARLY_MARGIN)
+            # Coming back 90s early only makes sense when the wait is longer
+            # than 90s. Subtracting the margin from a 24-second gather gave
+            # plan = 0, and with the "stay in the game" branch gone that became
+            # "alt-tab out for 0.0min" -- tab out, tab straight back, reconcile,
+            # compute an even shorter wait, repeat. Seen flickering three times
+            # in twenty seconds at 16:50, which wastes the cycle and is a far
+            # worse behavioural tell than sitting still would have been.
+            # The floor is not a tuning knob: _tab_back() alone sleeps
+            # uniform(1.5, 3.0) plus a warmup capped at 8s, so a tab cycle costs
+            # up to ~11 seconds. Planning to stay out for less than that is all
+            # overhead and no waiting. Capping at wait_s keeps a genuinely short
+            # gather from being rounded UP past its own return.
+            plan = (wait_s if wait_s <= WAIT_EARLY_MARGIN
+                    else min(wait_s,
+                             max(TAB_CYCLE_COST, wait_s - WAIT_EARLY_MARGIN)))
             before = self._detect_march_queue()
             if plan > WAIT_QUIT_MINUTES * 60:
                 print(f"  [{INFO}] Troops home in ~{wait_s / 60:.0f}min -- "
