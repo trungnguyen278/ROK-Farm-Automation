@@ -418,10 +418,29 @@ class GatherModelMixin:
         open_m = getattr(self, "_open_marches", [])
         if not open_m:
             return None
-        homes = [m.get("est_home") for m in open_m]
-        if not homes or any(h is None for h in homes):
+        # No estimate anywhere means no plan. Do not prune in this case: those
+        # marches ARE out, we just cannot time them.
+        if any(m.get("est_home") is None for m in open_m):
             return None
-        return max(0.0, min(homes) - time.time())
+
+        # A march whose estimate has passed is either home already or was
+        # mis-estimated; either way it must not set the floor. The old code
+        # clamped to 0.0 instead, which made the caller "wait" zero seconds and
+        # walk straight back into a queue that could still be full -- the same
+        # silent failure sync_open_marches() exists to prevent, reached by a
+        # second path. That path only closes when the queue badge is readable,
+        # and badge OCR fails 42% of the time (822 of 1932 reads in the log),
+        # so it cannot be the only defence.
+        now = time.time()
+        fresh = [m for m in open_m if m["est_home"] > now]
+        if len(fresh) != len(open_m):
+            logger.info("Dropped %d march(es) past their estimated return",
+                        len(open_m) - len(fresh))
+            self._open_marches = fresh
+            self._save_open_marches()
+        if not fresh:
+            return None
+        return min(m["est_home"] for m in fresh) - now
 
     def sync_open_marches(self, used: int):
         """Trim the outstanding-march list to what the queue badge actually says.
