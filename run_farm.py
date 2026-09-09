@@ -51,8 +51,6 @@ def main():
     parser.add_argument("--recalibrate", action="store_true",
                         help="Force re-measuring mouse MOVETO/scale (the startup cursor jerk); "
                              "otherwise the cached value from the persona is reused")
-    parser.add_argument("--no-mail-alliance", action="store_true",
-                        help="Disable the mail + alliance gift check in the city phase")
     parser.add_argument("--no-initial-alttab", action="store_true",
                         help="Skip the startup alt-tab into the game (on by default; "
                              "needed because the terminal is foreground when launched)")
@@ -93,7 +91,6 @@ def main():
         account_id=args.account_id,
         actions_override=actions_list,
         recalibrate=args.recalibrate,
-        skip_mail_alliance=args.no_mail_alliance,
         initial_alttab=not args.no_initial_alttab,
         auto_launch=not args.no_auto_launch,
         allow_restart=not args.no_restart,

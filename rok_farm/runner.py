@@ -65,7 +65,6 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                  account_id: str = "default",
                  actions_override: list[str] | None = None,
                  recalibrate: bool = False,
-                 skip_mail_alliance: bool = False,
                  initial_alttab: bool = True,
                  auto_launch: bool = AUTO_LAUNCH_GAME,
                  allow_restart: bool = RESTART_ON_RECOVERY,
@@ -81,7 +80,6 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         self.max_marches = max_marches
         self._account_id = account_id
         self._recalibrate = recalibrate
-        self._skip_mail_alliance = skip_mail_alliance
         self._initial_alttab = initial_alttab
         # Tracks whether we believe we're on the world map. Set when we reach it
         # / stay after a march; cleared on city return / alt-tab. Avoids the

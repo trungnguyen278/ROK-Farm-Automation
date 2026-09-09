@@ -12,18 +12,9 @@ import random
 import time
 
 from rok_farm.config import (MAX_MARCH_MINUTES, WAIT_EARLY_MARGIN,
-                             WAIT_QUIT_MINUTES, WAIT_STAY_SECONDS)
+                             WAIT_QUIT_MINUTES)
 from rok_farm.logging_setup import INFO, WARN, logger
 
-
-# How often the between-burst idle bothers to look at mail / alliance gifts.
-# Was 0.70 / 0.50, i.e. nearly every single burst -- which over a long day is a
-# lot of identical little errands, and the point of these actions is to look
-# incidental, not scheduled. Both self-skip when the icon carries no red badge
-# ("alliance icon has no badge, skipping"), so the real open rate is lower
-# again; these numbers only control how often it even glances.
-MAIL_CHANCE = 0.25
-ALLIANCE_CHANCE = 0.15
 
 
 class PhasesMixin:
@@ -110,9 +101,8 @@ class PhasesMixin:
 
     def _phase_full_cycle(self):
         """All march slots are full. Behave like a real player between bursts:
-        drop back to the city, do light city tasks (mail/alliance only if they
-        actually have a red badge), then alt-tab out and wait for the Windows
-        'troops returned to city' toast before the next burst."""
+        drop back to the city for a light idle, then wait out the gather --
+        alt-tab for a short one, quit the client for a long one."""
         self._phase_city_idle()
         # Last look at the queue while the client is still in front of us -- the
         # moment the next line runs we are tabbed away and blind to it.
@@ -121,20 +111,17 @@ class PhasesMixin:
         self._queue_wait_start = time.time()
 
     def _phase_city_idle(self):
-        """Phase 2: back in city while troops are out marching. Quick glance at
-        mail / alliance gifts (the actions self-skip when there is no badge),
-        plus an occasional light idle. No map distractions here -- we're in city."""
+        """Phase 2: back in city while troops are out marching.
+
+        Mail and alliance gifts used to be opened here for realism. Both open a
+        panel, and a panel that fails to close strands the bot in a screen no
+        step knows how to leave -- observed hanging on the alliance panel. The
+        idle actions kept below never open anything, so they cannot strand it.
+        """
         print(f"\n  [{INFO}] Phase: back to city, light tasks while troops march")
         self._step_return_city("city_idle")
         self._wait(random.uniform(1.0, 2.5))
 
-        if self._skip_mail_alliance:
-            print(f"  [{INFO}] Mail/alliance check disabled (--no-mail-alliance)")
-        else:
-            if random.random() < MAIL_CHANCE:
-                self._actions.do("mail")
-            if random.random() < ALLIANCE_CHANCE:
-                self._actions.do("alliance")
         if random.random() < 0.3:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
@@ -160,16 +147,9 @@ class PhasesMixin:
                     self._score_wait_prediction(before, wait_s, "quit")
                     return
                 print(f"  [{WARN}] Could not quit; falling back to alt-tab")
-            elif plan <= WAIT_STAY_SECONDS:
-                print(f"  [{INFO}] Troops home in ~{wait_s / 60:.1f}min -- "
-                      f"staying in the game")
-                time.sleep(plan)
-                self._view_is_world = False
-                self._score_wait_prediction(before, wait_s, "stayed")
-                return
             else:
-                print(f"  [{INFO}] Troops home in ~{wait_s / 60:.0f}min -- "
-                      f"alt-tab out for {plan / 60:.0f}min")
+                print(f"  [{INFO}] Troops home in ~{wait_s / 60:.1f}min -- "
+                      f"alt-tab out for {plan / 60:.1f}min")
                 self._capture_paused = True
                 self._tab_out()
                 time.sleep(plan)

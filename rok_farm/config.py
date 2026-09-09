@@ -194,7 +194,6 @@ DELAY_MICRO_PAUSE = (0.40, 0.15)
 # and is invisible to the game.
 WAIT_QUIT_MINUTES = 8.0      # expected wait above this -> quit the client
 WAIT_EARLY_MARGIN = 90.0     # come back this many seconds early
-WAIT_STAY_SECONDS = 120.0    # below this, do not even alt-tab; just wait
 
 # --- Game process lifecycle ---
 # The game client is only quit/relaunched for recovery or a LONG break. The
