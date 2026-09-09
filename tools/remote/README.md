@@ -103,8 +103,11 @@ mines 1-3 every time; the one run that launched the game itself lost none.
 
 ## Stopping
 
-`!stop` in Discord, or `!stop game` to close the client too. Either way the
-ESP32's idle jitter is turned off — the farm leaves it on while tabbed away,
+`!stop` in Discord. It stops the farm and watchdog AND closes the client --
+leaving the account logged in and idle for hours is its own signal, and the
+next start would then attach to a backgrounded window and lose three mines.
+`!stop keep` leaves the client running. Either way the ESP32's idle jitter
+is turned off — the farm leaves it on while tabbed away,
 and a board still nudging the pointer is the thing you notice first.
 
 To stop the bot itself, close the `start_bot.bat` window.
@@ -129,8 +132,8 @@ production rather than assumed.
 | `!start` | farm + watchdog |
 | `!start solo` | farm only, nothing supervising it |
 | `!start force` | start even though someone is using the machine |
-| `!stop` | stop farm + watchdog, turn ESP32 idle jitter off |
-| `!stop game` | ...and close the client too |
+| `!stop` | stop farm + watchdog, close the client, ESP32 jitter off |
+| `!stop keep` | ...but leave the client running |
 
 The bot also speaks up on its own: when the farm process disappears it posts
 the last few log lines to the pinned channel (or to wherever you last talked to

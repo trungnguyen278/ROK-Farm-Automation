@@ -510,7 +510,13 @@ def do_start(with_watchdog):
     return " ".join(msg)
 
 
-def do_stop(close_game):
+def do_stop(close_game=True):
+    """Stop the automation. Closes the client too, unless told to keep it.
+
+    Leaving the client logged in after the bot stops is a half-finished state:
+    the account sits idle in-game for hours, and the next start then attaches
+    to a backgrounded window, which costs the first three mines.
+    """
     killed = []
     for p in wd_procs():
         kill_tree(p)
@@ -553,8 +559,8 @@ HELP = """```
 !start           start farm + watchdog
 !start solo      start the farm with no watchdog
 !start force     start even if someone is using the machine
-!stop            stop farm + watchdog, turn ESP32 jitter off
-!stop game       ...and close the game too
+!stop            stop farm + watchdog, close the game, ESP32 jitter off
+!stop keep       ...but leave the game running
 !help            this
 ```"""
 
@@ -812,7 +818,7 @@ async def on_message(message):
         elif cmd == "stop":
             async with message.channel.typing():
                 await reply(message,
-                            await asyncio.to_thread(do_stop, "game" in args))
+                            await asyncio.to_thread(do_stop, "keep" not in args))
 
         else:
             await reply(message, f"unknown command `{cmd}` -- try `!help`")
