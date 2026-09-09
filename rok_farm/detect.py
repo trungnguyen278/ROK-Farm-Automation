@@ -508,7 +508,13 @@ class DetectMixin:
         # The march line is DASHED, so segments are short -- use a shorter min
         # length (was 2*r, which a dashed line never reaches as one segment).
         min_len = mine_r
-        near_r = mine_r * 2
+        # A march line ENDS at the mine, so its endpoint sits on the icon. This
+        # was mine_r * 2, which is not a distance from the mine so much as a
+        # fraction of the screen: a template matched at 160px made "near the
+        # mine" mean 320px, and a line whose nearest end was 263px away was
+        # accepted. Same frame, same node: at mine_r=80 it read clean, at
+        # mine_r=160 it flagged. The radius must not grow with the match.
+        near_r = mine_r
 
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
@@ -531,6 +537,22 @@ class DetectMixin:
         # Dilate to bridge the gaps between dashes so HoughLinesP sees a line.
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         cleaned = cv2.dilate(combined, kernel, iterations=1)
+
+        # Blank the HUD before looking for lines. white_mask is (V>200, S<50),
+        # which is the definition of white TEXT -- the governor banner, the
+        # resource counters, the chat log. Dilating then bridging gaps of 40px
+        # is exactly what turns a row of characters into a 254px "line", and
+        # that is what the false positives were: re-running the detector on the
+        # frame it fired on showed a mask containing chat text and no march
+        # line at all. These rectangles are the game's own no-click zones, so
+        # they are known HUD, never map, and a real march line cannot be there.
+        for zx1, zy1, zx2, zy2 in getattr(self, "_NO_CLICK_ZONES", []):
+            zfx1, zfy1 = int(fw * zx1), int(fh * zy1)
+            zfx2, zfy2 = int(fw * zx2), int(fh * zy2)
+            ix1, iy1 = max(x1, zfx1) - x1, max(y1, zfy1) - y1
+            ix2, iy2 = min(x2, zfx2) - x1, min(y2, zfy2) - y1
+            if ix2 > ix1 and iy2 > iy1:
+                cleaned[iy1:iy2, ix1:ix2] = 0
 
         lines = cv2.HoughLinesP(cleaned, 1, np.pi / 180,
                                 threshold=30, minLineLength=int(min_len), maxLineGap=40)

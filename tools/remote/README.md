@@ -103,7 +103,9 @@ mines 1-3 every time; the one run that launched the game itself lost none.
 
 ## Stopping
 
-`!stop` in Discord. It stops the farm and watchdog AND closes the client --
+`!stop` in Discord. It stops the farm and watchdog AND closes the client the
+way the farm does -- focus it, then ALT+F4 through the HID, never a process
+kill, because a hard kill reads as a crash. --
 leaving the account logged in and idle for hours is its own signal, and the
 next start would then attach to a backgrounded window and lose three mines.
 `!stop keep` leaves the client running. Either way the ESP32's idle jitter

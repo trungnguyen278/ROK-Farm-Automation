@@ -23,6 +23,7 @@ import asyncio
 import ctypes
 import io
 import os
+import random
 import re
 import subprocess
 import sys
@@ -195,34 +196,90 @@ def idle_seconds():
         return -1.0
 
 
-def release_hid():
-    """Turn off the ESP32's idle micro-jitter and let go of the port.
+QUIT_WAIT = 45.0
 
-    _tab_out() switches jitter ON while the bot is tabbed away. Killing the
-    farm mid-jitter leaves the board nudging the pointer, which is intolerable
-    when the human wants their machine back -- so every stop comes through here.
+
+def _quit_game_gracefully(cmd):
+    """Close the client the way the farm does: focus it, then ALT+F4.
+
+    NOT a process kill. quit_game() in game_process.py puts it plainly -- "a
+    hard kill reads as a crash" -- and the point of closing at all is to leave
+    the account cleanly logged out, so the next !start relaunches it exactly
+    like the farm's own quit-and-wait does. taskkill is the last resort, not
+    the method.
+
+    ALT+F4 lands on whatever is in front, so the game has to be focused first;
+    without that it would close the window running the bot.
+    """
+    import win32gui
+
+    from rok_farm.game_process import focus_window, taskkill
+
+    g = game_proc()
+    if not g:
+        return "Game was not running."
+
+    hwnd = None
+
+    def cb(h, _):
+        nonlocal hwnd
+        if win32gui.IsWindowVisible(h) and \
+                "rise of kingdoms" in win32gui.GetWindowText(h).lower():
+            hwnd = h
+
+    win32gui.EnumWindows(cb, None)
+    if hwnd is None or not focus_window(hwnd):
+        taskkill("MASS.exe")
+        return "Game: could not focus it, so ALT+F4 would hit the wrong window -- killed instead."
+
+    time.sleep(random.uniform(0.5, 1.2))
+    cmd.send("COMBO", "ALT", "F4", random.randint(50, 120))
+    deadline = time.time() + QUIT_WAIT
+    while time.time() < deadline:
+        time.sleep(1.0)
+        if game_proc() is None:
+            return "Game closed (ALT+F4)."
+    taskkill("MASS.exe")
+    time.sleep(3.0)
+    return f"Game did not close in {QUIT_WAIT:.0f}s -- killed."
+
+
+def shutdown_board(close_game):
+    """Close the client if asked, then leave the ESP32 not touching the mouse.
+
+    One serial session for both: closing the game needs the board (ALT+F4 goes
+    through the HID like every other keystroke), and the jitter must go off
+    afterwards. _tab_out() switches jitter ON while the bot is tabbed away, and
+    a board still nudging the pointer is what the player notices first.
     """
     try:
         from serial_comm.connection import SerialConnection
         from serial_comm.command_buffer import CommandBuffer
     except Exception as e:
-        return f"HID: import failed ({type(e).__name__})"
+        return [f"HID: import failed ({type(e).__name__})"]
     conn = SerialConnection(port=SERIAL_PORT)
+    out = []
     try:
         if not conn.connect():
-            return "HID: could not open the board (unplugged, or still held)"
+            return ["HID: could not open the board (unplugged, or still held)"]
         cmd = CommandBuffer(conn)
         cmd.start()
+        if close_game:
+            try:
+                out.append(_quit_game_gracefully(cmd))
+            except Exception as e:
+                out.append(f"Game close failed: {type(e).__name__}: {e}")
         cmd.send("IDLE", "0")
         cmd.stop()
         conn.disconnect()
-        return "HID: idle jitter OFF, port released"
+        out.append("HID: idle jitter OFF, port released")
+        return out
     except Exception as e:
         try:
             conn.disconnect()
         except Exception:
             pass
-        return f"HID: release failed ({type(e).__name__}: {e})"
+        return out + [f"HID: release failed ({type(e).__name__}: {e})"]
 
 
 # --------------------------------------------------------------------------
@@ -526,17 +583,7 @@ def do_stop(close_game=True):
         killed.append(f"farm {p.pid}")
     lines = [f"Stopped: {', '.join(killed)}" if killed else "Nothing was running."]
     time.sleep(2)
-    lines.append(release_hid())
-    if close_game:
-        g = game_proc()
-        if g:
-            try:
-                kill_tree(g)
-                lines.append("Game closed.")
-            except Exception as e:
-                lines.append(f"Game close failed: {e}")
-        else:
-            lines.append("Game was not running.")
+    lines.extend(shutdown_board(close_game))
     blog(" | ".join(lines))
     return "\n".join(lines)
 
