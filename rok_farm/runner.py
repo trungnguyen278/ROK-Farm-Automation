@@ -94,7 +94,13 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         self.win: dict | None = None
         self.results: list[dict] = []
         self.mines_completed = 0
-        self.gathered_positions: list[tuple[int, int]] = []
+        # Deposits already marched to this session, as (map_id, x, y, when).
+        # Replaces gathered_positions, which stored SCREEN coordinates and was
+        # never read by anything -- so "Marked gem at (1184, 253) as gathered"
+        # was a message with no mechanism behind it, and nothing stopped the
+        # bot marching twice to the same node.
+        self._marched_sites: list[tuple[str, int, int, float]] = []
+        self._pending_site: tuple[str, int, int] | None = None
         self._edge_gems: list[Match] = []
         self.classifier = GemPatchClassifier()
         self.classifier.load()

@@ -28,6 +28,13 @@ from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
 from rok_farm.map_memory import MapMemory
 from rok_farm.screenshots import save_annotated, save_screenshot
 
+# How close two HUD coordinate readings must be to mean the same deposit.
+# Exact for now, on purpose: a missed duplicate costs one march, but a wrong
+# match would refuse a genuinely new deposit for the rest of the session. Every
+# march logs its distance to the nearest already-marched site, so if duplicates
+# turn out to land a tile apart, the data says so and this can grow.
+SITE_MATCH_TILES = 0
+
 
 class GemFlowMixin:
     """Per-mine flow steps. Mixed into GemFarmRunner."""
@@ -145,8 +152,13 @@ class GemFlowMixin:
         if not self._step_click_march(tag):
             return False
 
-        self.gathered_positions.append(gem.center)
-        print(f"  [{INFO}] Marked gem at {gem.center} as gathered ({len(self.gathered_positions)} total)")
+        if self._pending_site:
+            mid, sx, sy = self._pending_site
+            self._marched_sites.append((mid, sx, sy, time.time()))
+            print(f"  [{INFO}] Marched to {sx}:{sy} "
+                  f"({len(self._marched_sites)} deposit(s) this session)")
+            logger.info("Marched to deposit %s %d:%d", mid, sx, sy)
+            self._pending_site = None
 
         # Step 7: prep for the next march by re-zooming to icon level on the
         # world map -- but only if a slot is still free. If this march just
@@ -728,6 +740,33 @@ class GemFlowMixin:
                 print(f"  [{PASS}] gather_btn: conf={m.confidence:.3f}")
                 save_annotated(frame, m, f"{tag}_gather_found")
 
+                # Identify the deposit BEFORE opening the deploy panel: that
+                # panel covers the top-left corner where the coordinates live.
+                # Clicking a node centres the camera on it, so the HUD readout
+                # here is the node's own tile -- no pixel-to-tile calibration
+                # needed. An army still marching does not mark its target as
+                # occupied, so without this the same deposit gets a second
+                # march minutes later (mines 2 and 3 on 2026-09-09 21:12, both
+                # reporting march=356s to the second).
+                self._pending_site = None
+                site = self._read_map_position(frame)
+                if site:
+                    seen, dist = self._marched_before(site)
+                    if seen:
+                        print(f"  [{WARN}] Deposit {site[1]}:{site[2]} already "
+                              f"marched this session -- backing out")
+                        logger.info("Duplicate deposit %s -- not marching again",
+                                    site)
+                        self._record(f"{tag}_gather", False, "duplicate deposit")
+                        return False
+                    self._pending_site = site
+                    if dist is not None:
+                        # Feeds the tolerance decision with real numbers instead
+                        # of a guess: if duplicates keep landing 1 tile apart,
+                        # SITE_MATCH_TILES needs to grow.
+                        logger.info("Deposit %d:%d, nearest already marched is "
+                                    "%d tile(s) away", site[1], site[2], dist)
+
                 if self._click_match(m):
                     print(f"  [{PASS}] Gather clicked!")
                     self._wait(DELAY_VERIFY)
@@ -745,6 +784,26 @@ class GemFlowMixin:
         print(f"  [{FAIL}] gather_btn not found")
         self._record(f"{tag}_gather", False, "Not found")
         return False
+
+    def _marched_before(self, site):
+        """(already marched?, tiles to the nearest one already marched).
+
+        Exact-match only for now. Under-blocking is the safe direction: a
+        missed duplicate costs one march, while a wrong block would refuse a
+        genuinely new deposit forever. The distance is logged on every march so
+        the real spread decides whether a tolerance is needed, rather than a
+        number picked here.
+        """
+        mid, x, y = site
+        nearest = None
+        for m2, x2, y2, _when in self._marched_sites:
+            if m2 != mid:
+                continue
+            d = max(abs(x - x2), abs(y - y2))
+            nearest = d if nearest is None else min(nearest, d)
+            if d <= SITE_MATCH_TILES:
+                return True, d
+        return False, nearest
 
     def _step_click_march(self, tag: str) -> bool:
         print(f"\n--- [{tag}] Step 6: Troop + March ---\n")

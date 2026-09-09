@@ -45,6 +45,8 @@ PATTERNS = {
     "fog_prevented": re.compile(r"Fog vanished on re-check"),
     "retreat":       re.compile(r"Retreating inland"),
     "queue_short":   re.compile(r"slot\(s\) never filled|slot\(s\) unfilled"),
+    "dup_deposit":   re.compile(r"already marched this session"),
+    "marched_site":  re.compile(r"Marched to \d+:\d+"),
     "queue_full_ok": re.compile(r"Queue reconciled"),
     "wait_ontime":   re.compile(r"Wait check:.*\[ON TIME\]"),
     "wait_early":    re.compile(r"Wait check:.*\[TOO EARLY\]"),
@@ -148,6 +150,8 @@ def main():
               f"by the second-frame check; {counts['retreat']} edge retreat(s)")
         print(f"  queue      : {counts['queue_full_ok']} burst(s) reconciled full, "
               f"{counts['queue_short']} short")
+        print(f"  deposits   : {counts['marched_site']} distinct marched, "
+              f"{counts['dup_deposit']} duplicate(s) refused")
         print(f"  fog bails  : {counts['fog']}     "
               f"empty scans: {counts['empty_scan']}     "
               f"scan giveups: {counts['scan_giveup']}")
