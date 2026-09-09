@@ -18,6 +18,11 @@
 #define CMD_PATH_PT   "PPT"
 #define CMD_PATH_GO   "PGO"
 #define CMD_PATH_DRAG "PDRAG"
+// USB link diagnostics / recovery. The native-USB PHY sometimes fails to
+// re-attach after a flash, leaving the board reachable over UART but invisible
+// to the host as an HID device -- which normally needs a physical replug.
+#define CMD_USB_STAT  "USBST"
+#define CMD_USB_REATT "USBRE"
 
 #define RSP_ACK  "ACK"
 #define RSP_NACK "NACK"

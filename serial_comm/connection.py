@@ -33,15 +33,47 @@ class SerialConnection:
     def is_connected(self) -> bool:
         return self._connected.is_set()
 
+    # The board's UART bridge is a CH340. Matching its VID:PID identifies the
+    # right device positively, instead of hoping the description string is
+    # distinctive -- "USB" alone matches any USB-serial adapter on the machine.
+    _CH340_VID_PID = (0x1A86, 0x7523)
+
     @staticmethod
     def auto_detect_port() -> str | None:
-        for p in serial.tools.list_ports.comports():
+        ports = list(serial.tools.list_ports.comports())
+        vid, pid = SerialConnection._CH340_VID_PID
+        for p in ports:
+            if p.vid == vid and p.pid == pid:
+                logger.info("Auto-detected board on %s (CH340 %04X:%04X)",
+                            p.device, vid, pid)
+                return p.device
+        for p in ports:                      # looser fallback, unchanged
             if "ESP32" in (p.description or "") or "USB" in (p.description or ""):
+                logger.info("Auto-detected %s by description %r",
+                            p.device, p.description)
                 return p.device
         return None
 
     def connect(self) -> bool:
-        port = self._port or self.auto_detect_port()
+        # A port named on the command line is a HINT, not a promise. Windows
+        # reassigns COM numbers across reboots and re-plugs, so a hard-coded
+        # COM13 that was right three weeks ago can quietly be someone else's
+        # device today. If the named port is not present, fall back to finding
+        # the board rather than failing the whole run.
+        port = self._port
+        if port:
+            present = {p.device for p in serial.tools.list_ports.comports()}
+            if port not in present:
+                found = self.auto_detect_port()
+                if found:
+                    logger.warning("%s is gone; using %s instead", port, found)
+                    port = found
+                else:
+                    logger.error("%s is gone and no board found on %s",
+                                 port, sorted(present) or "no ports at all")
+                    return False
+        else:
+            port = self.auto_detect_port()
         if not port:
             logger.error("No serial port specified and auto-detect failed")
             return False
@@ -52,10 +84,14 @@ class SerialConnection:
                 baudrate=self._baud,
                 timeout=ACK_TIMEOUT,
             )
-            time.sleep(2.5)  # wait for ESP32 boot + USB enumeration
-            self._serial.reset_input_buffer()
-
-            if not self._handshake():
+            # Opening the port makes the CH340 auto-reset the ESP32. Drive the
+            # reset lines to the APP-boot combination (GPIO0 high) so the board
+            # never comes up in the ROM download mode -- there it answers nothing
+            # on UART and its native USB shows up as USB-Serial-JTAG instead of
+            # our HID. Then POLL the handshake: a single fixed 2.5 s wait raced
+            # the boot + USB re-enumeration and often missed the first PONG.
+            self._app_boot_reset()
+            if not self._handshake_with_retries():
                 self._serial.close()
                 self._serial = None
                 return False
@@ -73,7 +109,12 @@ class SerialConnection:
         self._connected.clear()
         with self._lock:
             if self._serial and self._serial.is_open:
-                self._serial.close()
+                # Closing a handle whose device was yanked raises; that must not
+                # abort a reconnect, which is exactly when it happens.
+                try:
+                    self._serial.close()
+                except Exception as e:
+                    logger.debug("Serial close failed (device gone?): %s", e)
             self._serial = None
         logger.info("Disconnected")
 
@@ -127,6 +168,39 @@ class SerialConnection:
             return resp is not None and resp.status == "PONG"
         except (ConnectionError, serial.SerialException):
             return False
+
+    def _app_boot_reset(self):
+        """Pulse EN with GPIO0 held high so the board boots the app, not the ROM
+        bootloader. Same sequence used to recover the board over UART."""
+        try:
+            self._serial.setDTR(False)   # GPIO0 high -> normal (app) boot
+            self._serial.setRTS(True)    # EN low: hold the chip in reset
+            time.sleep(0.15)
+            self._serial.setRTS(False)   # EN high: release -> boot
+        except Exception as e:
+            logger.debug("Reset pulse failed (non-fatal): %s", e)
+
+    def _handshake_with_retries(self, attempts: int = 7,
+                                delay: float = 0.8) -> bool:
+        """Poll the handshake while the board boots and re-enumerates USB.
+
+        The board needs ~2-4 s after a reset; retrying a cheap PING beats betting
+        on one fixed sleep. The full handshake (with RESET) runs once PONG lands.
+        """
+        for i in range(attempts):
+            time.sleep(delay)
+            try:
+                self._serial.reset_input_buffer()
+            except Exception:
+                pass
+            ping = self._protocol.pack_with_id(0, "PING")
+            resp = self.send_and_wait(ping, 0, timeout=1.0)
+            if resp and resp.status == "PONG":
+                return self._handshake()
+            logger.debug("No PONG yet (%d/%d), board still booting",
+                         i + 1, attempts)
+        logger.error("Handshake failed: no PONG after %d attempts", attempts)
+        return False
 
     def _handshake(self) -> bool:
         ping = self._protocol.pack_with_id(0, "PING")

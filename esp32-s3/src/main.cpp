@@ -2,6 +2,7 @@
 #include "USB.h"
 #include "USBHIDMouse.h"
 #include "USBHIDKeyboard.h"
+#include "tusb.h"
 #include "commands.h"
 USBHIDMouse Mouse;
 USBHIDAbsoluteMouse AbsMouse;
@@ -366,6 +367,34 @@ void handle_path_drag(const ParsedCommand& cmd) {
     send_ack(cmd.cmd_id);
 }
 
+// Force the device off the bus and back on, so the host runs a fresh
+// enumeration. Electrically this is what unplugging and replugging the native
+// USB cable does -- the point being that it works over the UART link, with
+// nobody near the board.
+static void usb_reattach() {
+    tud_disconnect();
+    delay(400);      // long enough for the host to register the disconnect
+    tud_connect();
+}
+
+void handle_usb_stat(const ParsedCommand& cmd) {
+    // connected = the PHY sees a host (VBUS + bus reset); mounted = the host
+    // finished enumerating us. The pair separates a cable/port fault from an
+    // enumeration fault, which is otherwise guesswork from this side.
+    Serial.printf("<%d,USBST,%d,%d,%d>\n", cmd.cmd_id,
+                  tud_connected() ? 1 : 0,
+                  tud_mounted() ? 1 : 0,
+                  tud_suspended() ? 1 : 0);
+}
+
+void handle_usb_reatt(const ParsedCommand& cmd) {
+    usb_reattach();
+    delay(600);      // give the host time to enumerate before we report back
+    Serial.printf("<%d,USBRE,%d,%d>\n", cmd.cmd_id,
+                  tud_connected() ? 1 : 0,
+                  tud_mounted() ? 1 : 0);
+}
+
 void handle_reset(const ParsedCommand& cmd) {
     Mouse.release(MOUSE_LEFT);
     Mouse.release(MOUSE_RIGHT);
@@ -381,6 +410,11 @@ void execute_command(const ParsedCommand& cmd) {
     last_cmd_time = millis();
 
     if (strcmp(cmd.command, CMD_PING) == 0)       { send_pong(); return; }
+    // Diagnostics stay outside the `executing` guard: they must answer even
+    // when a command is mid-flight, since a wedged USB link is exactly when
+    // you need to ask about it.
+    if (strcmp(cmd.command, CMD_USB_STAT) == 0)   { handle_usb_stat(cmd); return; }
+    if (strcmp(cmd.command, CMD_USB_REATT) == 0)  { handle_usb_reatt(cmd); return; }
     if (strcmp(cmd.command, CMD_RESET) == 0)      { handle_reset(cmd); return; }
     if (strcmp(cmd.command, CMD_IDLE) == 0)       { handle_idle(cmd); return; }
     if (strcmp(cmd.command, CMD_PATH_CLR) == 0)   { handle_path_clr(cmd); return; }
@@ -468,6 +502,18 @@ void setup() {
     AbsMouse.begin();
     Keyboard.begin();
     USB.begin();
+
+    // After a flash the host often keeps the pre-flash device state and never
+    // re-enumerates us, so HID reports go nowhere while UART still works fine.
+    // Waiting on tud_mounted() and forcing one re-attach turns what used to
+    // need a physical replug into something the board fixes by itself.
+    unsigned long usb_wait_start = millis();
+    while (!tud_mounted() && millis() - usb_wait_start < 2000) {
+        delay(50);
+    }
+    if (!tud_mounted()) {
+        usb_reattach();
+    }
 
     last_cmd_time = millis();
     last_mouse_idle = millis();

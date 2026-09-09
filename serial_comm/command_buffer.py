@@ -3,6 +3,8 @@ import threading
 from queue import Queue, Empty
 from dataclasses import dataclass
 
+import serial
+
 from .connection import SerialConnection, ACK_TIMEOUT
 from .protocol import Response
 
@@ -87,7 +89,15 @@ class CommandBuffer:
             except Empty:
                 continue
 
-            self._execute_with_retry(pending)
+            try:
+                self._execute_with_retry(pending)
+            except Exception:
+                # Last line of defence. If this thread dies the whole bot is
+                # silently paralysed -- it keeps running, keeps capturing, and
+                # never sends another command. Better to fail one command and
+                # keep the channel alive; the caller sees success=False.
+                logger.exception("Command %s raised; worker staying alive",
+                                 pending.cmd)
             pending.result.set()
 
     def _ack_timeout_for(self, cmd: str, params: tuple) -> float:
@@ -112,8 +122,15 @@ class CommandBuffer:
             cmd_id, data = protocol.pack(pending.cmd, *pending.params)
             try:
                 resp = self._conn.send_and_wait(data, cmd_id, timeout=ack_timeout)
-            except ConnectionError:
-                logger.warning("Connection lost during %s (attempt %d)", pending.cmd, attempt)
+            except (ConnectionError, serial.SerialException, OSError) as e:
+                # serial.SerialException is NOT a ConnectionError, so catching
+                # only the latter let an unplugged board kill this worker thread
+                # outright: pyserial raises SerialException(PermissionError) the
+                # moment the handle dies. The farm then stayed "alive" with a
+                # dead command channel -- capture still logging, nothing ever
+                # clicking again -- until someone noticed hours later.
+                logger.warning("Serial lost during %s (attempt %d): %s",
+                               pending.cmd, attempt, e)
                 if not self._conn.reconnect():
                     break
                 continue

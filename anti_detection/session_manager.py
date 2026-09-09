@@ -107,6 +107,17 @@ class SessionManager:
         self._daily_max = s.get("daily_hours_max", 6)
         self._active_window = s.get("active_window", ["08:00", "23:00"])
         self._idle_chance = s.get("idle_action_chance", 0.08)
+        # A break long enough that a real player would CLOSE the game rather
+        # than leave it sitting there. Without one of these the client stays
+        # logged in for the whole session: breaks are drawn from
+        # gauss(break_duration_mean, ...) which for this profile is 2 minutes,
+        # and the quit/relaunch path only triggers at RESTART_BREAK_MINUTES
+        # (30), so it was mathematically unreachable -- the game was never once
+        # closed across a ten-hour day. That, not the clicking, is the part a
+        # human never does. Defaults sit clear of the 30min quit threshold.
+        self._long_break_chance = s.get("long_break_chance", 0.25)
+        self._long_break_min = s.get("long_break_min_minutes", 35)
+        self._long_break_max = s.get("long_break_max_minutes", 110)
 
         self._session_start: float = time.monotonic()
         self._daily_start: float = time.monotonic()
@@ -136,6 +147,12 @@ class SessionManager:
         if self._on_break:
             remaining = max(0, self._break_end - time.monotonic())
             return remaining
+        # Occasionally stop properly instead of taking another breather. The
+        # caller quits the client for any break past RESTART_BREAK_MINUTES, so
+        # this is what actually gets the game closed during a long day.
+        if random.random() < self._long_break_chance:
+            return random.uniform(self._long_break_min * 60,
+                                  self._long_break_max * 60)
         dur = max(60, random.gauss(self._break_mean * 60, self._break_std * 60))
         return dur
 
@@ -195,6 +212,29 @@ class SessionManager:
     def _update_daily_active(self):
         if not self._on_break:
             self._daily_active_seconds = time.monotonic() - self._daily_start
+
+    def in_active_window(self) -> bool:
+        """Public: is now inside the persona's declared playing hours?
+
+        `should_stop_daily` already answered this but was never called from
+        anywhere -- so the profile advertised 09:00-22:00 while the bot farmed
+        straight through the night. A persona whose stated habits and actual
+        habits disagree is worse than no persona at all.
+        """
+        return self._in_active_window()
+
+    def seconds_until_active_window(self) -> float:
+        """How long until the play window opens again (0 if it is open)."""
+        if self._in_active_window():
+            return 0.0
+        if len(self._active_window) < 2:
+            return 0.0
+        now = datetime.now()
+        h, m = (int(x) for x in self._active_window[0].split(":"))
+        start = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if start <= now:
+            start += timedelta(days=1)
+        return max(0.0, (start - now).total_seconds())
 
     def _in_active_window(self) -> bool:
         if len(self._active_window) < 2:

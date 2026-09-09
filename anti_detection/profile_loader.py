@@ -59,7 +59,9 @@ class ProfileLoader:
             logger.warning("Profile %s not found, using defaults", name)
             return DEFAULT_PROFILE.copy()
 
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig: a hand-edited/Windows-written profile can carry a BOM, which
+        # plain utf-8 rejects outright (secrets.json did, and killed startup).
+        with open(path, encoding="utf-8-sig") as f:
             raw = json.load(f)
 
         profile = _deep_merge(DEFAULT_PROFILE, raw)
@@ -73,7 +75,13 @@ class ProfileLoader:
             return DEFAULT_PROFILE.copy()
         return self.load(random.choice(names))
 
+    # Not behaviour profiles, just other JSON that lives in the same folder.
+    # Without this, load_random() could pick "secrets" or "paths" and merge a
+    # non-profile file into the behaviour config.
+    _NOT_PROFILES = {"secrets", "paths"}
+
     def list_profiles(self) -> list[str]:
         if not self._dir.exists():
             return []
-        return [p.stem for p in self._dir.glob("*.json")]
+        return [p.stem for p in self._dir.glob("*.json")
+                if p.stem not in self._NOT_PROFILES]

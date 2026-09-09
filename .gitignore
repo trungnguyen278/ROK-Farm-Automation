@@ -42,3 +42,13 @@ data/patches/
 
 # Template images tracked via git LFS or directly
 # (subdirectories like templates/buttons/, templates/ui/ are tracked)
+
+data/ai_mode_profile/
+
+# Secrets (Discord bot token etc.)
+.env
+
+# Learned runtime state, per machine/account -- regenerated, not source
+data/button_registry.json
+data/map_knowledge/
+data/open_marches.json

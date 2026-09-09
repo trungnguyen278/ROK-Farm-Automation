@@ -1,10 +1,48 @@
 import ctypes
+import ctypes.wintypes
 
 HID_ABS_MAX = 32767
+
+# OpenProcess access right that a normal user process may request for any of its
+# own processes -- enough for QueryFullProcessImageNameW, unlike the wider
+# PROCESS_QUERY_INFORMATION.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def pid_for_hwnd(hwnd) -> int:
+    pid = ctypes.wintypes.DWORD()
+    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return int(pid.value)
+
+
+def exe_for_pid(pid: int) -> str:
+    """Executable file name (basename, e.g. 'MASS.exe') owning `pid`, '' if unknown."""
+    if not pid:
+        return ""
+    h = ctypes.windll.kernel32.OpenProcess(
+        _PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return ""
+    try:
+        size = ctypes.wintypes.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                h, 0, buf, ctypes.byref(size)):
+            return ""
+        return buf.value.rsplit("\\", 1)[-1]
+    finally:
+        ctypes.windll.kernel32.CloseHandle(h)
+
+
+def exe_for_hwnd(hwnd) -> str:
+    """Executable file name owning a window. Used to tell the ROK game window
+    apart from the Lilith launcher window -- both carry 'Rise of Kingdoms' in
+    their title, so the title alone cannot distinguish them."""
+    return exe_for_pid(pid_for_hwnd(hwnd))
 
 
 def get_screen_resolution() -> tuple[int, int]:
