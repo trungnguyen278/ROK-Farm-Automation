@@ -51,3 +51,4 @@ data/ai_mode_profile/
 # Learned runtime state, per machine/account -- regenerated, not source
 data/button_registry.json
 data/map_knowledge/
+data/open_marches.json

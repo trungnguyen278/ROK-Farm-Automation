@@ -149,6 +149,11 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         # Learned world-map book; the real one is opened lazily once the
         # HUD tells us which map we are standing on (home kingdom vs KvK).
         self.mapmem: MapMemory | None = None
+        # Troops keep gathering while the bot is not running, so a restart
+        # mid-wait must not forget them. sync_open_marches() reconciles this
+        # against the queue badge on the first read, so a stale file can only
+        # make the bot behave as it did before, never worse.
+        self.load_open_marches()
 
         self._scroll_overshoot_chance = self._jitter(
             self._persona["scroll_overshoot"], 0.08)

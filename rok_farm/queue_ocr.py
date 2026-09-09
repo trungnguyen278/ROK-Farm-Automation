@@ -262,8 +262,58 @@ GATHER_DATA = PROJECT_ROOT / "data" / "gather_times.json"
 GEM_BASE_PER_HOUR = 20.0
 
 
+OPEN_MARCHES = PROJECT_ROOT / "data" / "open_marches.json"
+
+
 class GatherModelMixin:
     """Learns how long a mine actually takes. Mixed into GemFarmRunner."""
+
+    def _save_open_marches(self):
+        """Persist the outstanding marches so a restart does not forget them.
+
+        Troops keep gathering while the bot is not running -- the game does not
+        care that the process died. Held only in memory, a restart mid-wait lost
+        the countdown entirely: seconds_until_first_return() answered None, and
+        the flow fell back to the blind "alt-tab away, cap 15min" path even
+        though the queue badge plainly said 5/5. That is what happened after the
+        2026-09-09 13:52 restart, twice.
+        """
+        try:
+            OPEN_MARCHES.parent.mkdir(parents=True, exist_ok=True)
+            OPEN_MARCHES.write_text(
+                json.dumps(getattr(self, "_open_marches", []), indent=1),
+                encoding="utf-8")
+        except Exception as e:
+            logger.warning("Could not store open marches: %s", e)
+
+    def load_open_marches(self):
+        """Reload marches that are still plausibly out, at startup.
+
+        Anything already due home is dropped: it either arrived while the bot
+        was down, or the estimate was wrong, and in both cases the queue badge
+        is the better authority. sync_open_marches() reconciles the rest
+        against the badge on the next read, so a stale file can only ever make
+        the bot behave as it does today, never worse.
+        """
+        try:
+            if not OPEN_MARCHES.exists():
+                return
+            data = json.loads(OPEN_MARCHES.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Could not read open marches: %s", e)
+            return
+        now = time.time()
+        live = [m for m in data
+                if isinstance(m, dict) and (m.get("est_home") or 0) > now]
+        self._open_marches = live
+        if data:
+            logger.info("Restored %d outstanding march(es) from disk "
+                        "(%d already due home, dropped)",
+                        len(live), len(data) - len(live))
+        if live:
+            soonest = min(m["est_home"] for m in live) - now
+            print(f"  [{INFO}] Resumed {len(live)} march(es) from the last run; "
+                  f"first one home in {soonest / 60:.0f} min")
 
     def note_march_sent(self, info: dict | None):
         """Remember a deploy so its return can be timed."""
@@ -283,6 +333,7 @@ class GatherModelMixin:
         })
         logger.info("Gather model: %d march(es) outstanding",
                     len(self._open_marches))
+        self._save_open_marches()
 
     def note_troops_returned(self, n: int = 1):
         """A return toast fired. Close out a march if attribution is certain."""
@@ -293,9 +344,11 @@ class GatherModelMixin:
             # Ambiguous: several could have come home. Drop the oldest without
             # recording rather than guess which one the toast meant.
             open_m.pop(0)
+            self._save_open_marches()
             logger.debug("Gather model: ambiguous return, sample discarded")
             return
         m = open_m.pop(0)
+        self._save_open_marches()
         total = time.time() - m["t_sent"]
         gather = total - 2 * m["march_s"]
         if gather <= 0:
@@ -388,5 +441,6 @@ class GatherModelMixin:
         open_m.sort(key=lambda m: m.get("est_home") or 0)
         dropped = len(open_m) - used
         self._open_marches = open_m[dropped:]
+        self._save_open_marches()
         logger.info("Queue says %d out; dropped %d stale march record(s)",
                     used, dropped)
