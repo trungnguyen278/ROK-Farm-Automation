@@ -73,6 +73,8 @@ def main():
     parser.add_argument("--oracle-model", action="append", default=None,
                         help="Vision model id to try, repeatable; overrides the "
                              "default list in config.py")
+    parser.add_argument("--profile", default=None,
+                        help="behaviour profile to use (cautious/default/aggressive). Omit for the account's stable default.")
     args = parser.parse_args()
 
     if args.no_screenshots:
@@ -99,6 +101,7 @@ def main():
         oracle_provider=args.oracle_provider,
         oracle_models=args.oracle_model,
         use_oracle=not args.no_oracle,
+        profile_name=args.profile,
     )
     runner.run()
 

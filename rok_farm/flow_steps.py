@@ -16,22 +16,116 @@ import time
 from vision.color_filter import is_gem_mine_color
 from vision.template_matcher import Match
 
-from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_AFTER_SCROLL,
-                             DELAY_DRAG_SETTLE, DELAY_MINE_CLICK,
+from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
+                             DELAY_MINE_CLICK,
                              DELAY_RECHECK, DELAY_VERIFY, DELAY_WORLD_MAP,
                              DELAY_ZOOM_IN_POLL, GATHER_BTN_THRESHOLD,
                              GEM_MINE_TEMPLATES, GEM_MINE_THRESHOLD,
-                             MARCH_BTN_PCT, NEW_TROOP_BTN_PCT, TOGGLE_BTN_PCT,
+                             MARCH_BTN_MAX_OFFSET, MARCH_BTN_PCT,
+                             NEW_TROOP_BTN_PCT, TOGGLE_BTN_PCT,
                              ZOOM_POLL_MAX)
-from rok_farm.logging_setup import FAIL, INFO, PASS, WARN
+from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
+from rok_farm.map_memory import MapMemory
 from rok_farm.screenshots import save_annotated, save_screenshot
 
 
 class GemFlowMixin:
     """Per-mine flow steps. Mixed into GemFarmRunner."""
 
+    # How often the city <-> world toggle uses the SPACE shortcut instead of
+    # clicking the corner button. The button is literally labelled "Space", so a
+    # player who knows the game uses both -- and hitting the same corner pixel
+    # every single time, hundreds of times a day, is a pattern worth breaking.
+    # Deliberately low: the click is the muscle-memory default and the thing the
+    # tuned positions and the button registry are built around.
+    TOGGLE_SPACE_CHANCE = 0.18
+
+    def _toggle_view(self, label: str):
+        """Switch between city and world map, by button or by keybind."""
+        if random.random() < self.TOGGLE_SPACE_CHANCE:
+            print(f"  [{INFO}] {label}: SPACE key")
+            self.cmd.send("KEY", "SPACE", random.randint(40, 90))
+        else:
+            print(f"  [{INFO}] {label}: corner {TOGGLE_BTN_PCT}")
+            self._click_pct(*TOGGLE_BTN_PCT, jitter_px=4)
+
+    # --- world-map memory -------------------------------------------------
+
+    # OCR is not free, so the position is not read on every single pan. Every
+    # few scans is plenty: the camera moves less than a cell most steps, and the
+    # decisive moments (a gem, a wall) are read regardless of the cadence.
+    MAP_READ_EVERY = 4
+
+    def _map_sync(self, frame, found: bool, force: bool = False,
+                  scan_count: int = 0):
+        """Read the HUD position, open the right book, file what we just saw."""
+        if not force and scan_count % self.MAP_READ_EVERY:
+            return getattr(self, "_last_map_xy", None)
+        pos = self._read_map_position(frame)
+        if pos is None:
+            return getattr(self, "_last_map_xy", None)
+        map_id, x, y = pos
+        # The map id is STICKY. Measured 2026-09-08 on the KvK map: the OCR
+        # returns a structurally valid but wrong id in about 8% of reads
+        # ("4093" against a HUD plainly showing "#S11465"), and narrowing the
+        # crop does not help because it is a digit misread, not stray UI. Acting
+        # on a single reading meant the book was swapped mid-run, over and over,
+        # so nothing ever accumulated. Switching worlds is rare; misreading is
+        # not -- so demand several consecutive agreeing reads before believing
+        # the world changed, and ignore the one-off entirely.
+        if self.mapmem is not None and self.mapmem.map_id != map_id:
+            self._map_id_votes = getattr(self, "_map_id_votes", [])
+            self._map_id_votes.append(map_id)
+            if len(self._map_id_votes) < 3 or len(set(self._map_id_votes[-3:])) != 1:
+                logger.debug("Ignoring map id %s (have %s, votes %s)",
+                             map_id, self.mapmem.map_id, self._map_id_votes[-3:])
+                return getattr(self, "_last_map_xy", None)
+            self._map_id_votes = []
+        else:
+            self._map_id_votes = []
+        if self.mapmem is None or self.mapmem.map_id != map_id:
+            # Different map id = different world (home kingdom vs KvK), so a
+            # different book. No configuration: the HUD says which one.
+            self.mapmem = MapMemory(map_id)
+            print(f"  [{INFO}] Map book opened -- {self.mapmem.stats()}")
+        self.mapmem.note_position(x, y)
+        self.mapmem.record_scan(x, y, found)
+        self._last_map_xy = (x, y)
+        return self._last_map_xy
+
+    def _steer_heading(self, heading: float):
+        """Nudge the wander toward ground the book likes, away from walls.
+
+        Deliberately a nudge and not a command: unexplored ground scores 0, so
+        the bot still wanders into places it has never been. It only overrides
+        the random walk when the book has something clearly better to say --
+        otherwise a couple of unlucky scans would pin it in one corner forever.
+        """
+        pos = getattr(self, "_last_map_xy", None)
+        if pos is None or self.mapmem is None:
+            return heading
+        x, y = pos
+        cands = [heading + d for d in
+                 (0.0, 0.7, -0.7, 1.4, -1.4, 2.2, -2.2, math.pi)]
+        scored = [(self.mapmem.heading_score(x, y, h), h) for h in cands]
+        best_score, best = max(scored, key=lambda t: t[0])
+        if best_score > scored[0][0] + 1.0:
+            logger.debug("steer: %.0f -> %.0f deg (score %.1f > %.1f)",
+                         math.degrees(heading) % 360,
+                         math.degrees(best) % 360, best_score, scored[0][0])
+            return best
+        return heading
+
     def _mine_flow(self, idx: int) -> bool:
         tag = f"m{idx}"
+
+        # Focus first, before anything is clicked. The operator uses this machine
+        # too, and the moment they alt-tab away every click lands in THEIR window
+        # while WGC keeps feeding us a perfect game frame -- observed 2026-08-19
+        # 08:31, three "City -> world map" toggles in a row that changed nothing
+        # because the game was behind the window the human had switched to.
+        # Checking only in _tab_back and before the deploy chain was too narrow.
+        self._ensure_game_focused(f"start of mine {idx}")
 
         # Step 1: Get to world map at icon-zoom level
         # If already on world map (from previous mine), skip city detour
@@ -83,10 +177,11 @@ class GemFlowMixin:
             # Fresh state (after city / alt-tab) reads cleanly -- detect/toggle.
             reached = self._on_world_map() or self._wait_until_world_map(timeout=2.0)
 
+        toggled_from_city = False
         if not reached:
             for toggle in range(3):
-                print(f"  [{INFO}] City -> world map: toggle corner {TOGGLE_BTN_PCT} (try {toggle+1}/3)")
-                self._click_pct(*TOGGLE_BTN_PCT, jitter_px=4)
+                toggled_from_city = True
+                self._toggle_view(f"City -> world map (try {toggle+1}/3)")
                 if self._wait_until_world_map(timeout=4.0):
                     reached = True
                     break
@@ -111,16 +206,25 @@ class GemFlowMixin:
             self._record(f"{tag}_world", True, f"Already icon-zoom, {len(gems)} gems")
             return True
 
-        zs = self._zoom_scrolls()
-        print(f"  [{PASS}] On world map, zooming out {zs}x...")
-        self._scroll_at_center(-1, zs)
-        self._wait(DELAY_AFTER_SCROLL)
+        # Zoom out ONLY when we just came from the city. The world map opens
+        # zoomed in close, so that first zoom-out is what reaches icon level --
+        # but firing it every time we merely FAIL TO SEE A GEM is what ratcheted
+        # the view out to 0.35x template scale over a night. Barren ground looks
+        # exactly like wrong zoom to a gem detector, so "no gems" must not be
+        # read as "zoom out more".
+        if toggled_from_city:
+            zs = self._zoom_scrolls()
+            print(f"  [{PASS}] Came from the city, zooming out {zs}x to icon level")
+            self._scroll_at_center(-1, zs)
+            self._wait_zoom_settled()
+        else:
+            print(f"  [{PASS}] Already on the world map -- leaving the zoom alone")
 
         frame = self._grab()
         if frame is not None:
             save_screenshot(frame, f"{tag}_icon_zoom")
 
-        self._record(f"{tag}_world", True, f"City -> world map -> zoom out {zs}x")
+        self._record(f"{tag}_world", True, "City -> world map -> icon zoom")
         return True
 
     def _step_stay_and_rezoom(self, tag: str):
@@ -133,13 +237,76 @@ class GemFlowMixin:
         # restores a clean world-map view). No empty-click (could select a tile).
         self._wait(random.uniform(1.0, 2.5))
 
-        # Zoom out to icon level, then let the wander scan move the camera. (No
-        # separate camera-shift swipe here -- the scan already pans around.)
-        self._scroll_at_center(-1, self._zoom_scrolls())
-        self._wait(DELAY_AFTER_SCROLL)
+        # Zoom out AND pan a full screen away -- the same treatment a dud mine
+        # gets in _return_to_icon_zoom, and for the same reason. "The scan pans
+        # around anyway" was not good enough: the scan's FIRST frame is grabbed
+        # before it pans, and the game has just centred the camera on the mine
+        # we marched to, so that mine is sitting in the middle of it. Its frame
+        # coordinates have changed with the zoom, so `clicked_positions` (frame
+        # space) does not recognise it, and it gets clicked again -- measured
+        # 2026-08-18 over 18 mid-burst transitions: 2 landed within 120px of the
+        # mine just gathered (69px and 106px, i.e. the same rock), several more
+        # within 200px. It is also a poor look: a real player does not re-farm
+        # the node their troops are still marching to.
+        self._return_to_icon_zoom()
 
         self._view_is_world = True  # stayed on the world map
         self._record(f"{tag}_rezoom", True, "Stayed on world map, re-zoomed")
+
+    def _fog_confirmed(self, frame) -> bool:
+        """Fog, but confirmed on a second frame a beat later.
+
+        One frame is not enough evidence to abandon a map. The world map streams
+        its terrain in, and a frame caught mid-load is a flat colour fill with no
+        minimap drawn yet -- lap_var 0.1 -- which the featureless branch reads as
+        out-of-kingdom. Measured 2026-08-18 09:09: the bot gave up on X:90 Y:140,
+        ordinary farmland beside its own city, on exactly such a frame; the very
+        next frame from the same spot was normal terrain full of nodes.
+
+        Real out-of-kingdom void does not resolve into terrain a second later, so
+        asking twice costs one second on a path that is rare anyway, and removes
+        the entire class of transition/loading false alarms. Cheap insurance
+        against the error the whole detector is tuned to avoid.
+        """
+        if not self._is_fog(frame):
+            return False
+        self._wait((0.9, 0.25))
+        second = self._grab()
+        if second is None:
+            return False
+        if self._is_fog(second):
+            return True
+        print(f"  [{INFO}] Fog vanished on re-check -- the view was still loading")
+        logger.info("fog: first frame said fog, second did not -- treated as a "
+                    "mid-load frame, NOT abandoning the map")
+        return False
+
+    def _retreat_from_edge(self, heading: float, swipes: int = 3):
+        """Walk the camera back inland along `heading` after a fog bail.
+
+        Same swipe mechanics the wander uses (drag opposite to the direction you
+        want the camera to travel), just committed and in one direction, so the
+        next mine does not start life staring at the same void.
+        """
+        cx, cy = self._center_screen()
+        ww, wh = self.win["width"], self.win["height"]
+        margin = 80
+        print(f"  [{INFO}] Retreating inland {swipes} screen(s) "
+              f"(heading {math.degrees(heading) % 360:.0f} deg)")
+        for _ in range(max(1, swipes)):
+            dx_f, dy_f = math.cos(heading), math.sin(heading)
+            half_x = int((ww // 2 - margin) * random.uniform(0.85, 1.0))
+            half_y = int((wh // 2 - margin) * random.uniform(0.85, 1.0))
+            sx, sy = self._clamp_to_play_area(cx + int(dx_f * half_x),
+                                              cy + int(dy_f * half_y))
+            ex, ey = self._clamp_to_play_area(cx - int(dx_f * half_x),
+                                              cy - int(dy_f * half_y))
+            self._human_drag(sx, sy, ex, ey,
+                             speed_factor=random.uniform(4.0, 5.5), easing="in")
+            self._wait(DELAY_DRAG_SETTLE)
+            heading += random.gauss(0, 0.12)
+        # Hand the new bearing to the next mine -- it is the whole point.
+        self._wander_heading = heading
 
     def _recenter_edge_gem(self, edge_match: Match) -> list[Match]:
         """Drag map to roughly center an edge gem, then re-scan."""
@@ -312,8 +479,12 @@ class GemFlowMixin:
         Panning a full screen away breaks that loop, and matches what a player
         does after a dud -- go somewhere else, not circle the same rock.
         """
+        # This one IS a real zoom-out: clicking an icon makes the game zoom in
+        # on that mine, so coming back out by the same amount returns to icon
+        # level. It is paired with a zoom-in that actually happened, which is
+        # what makes it safe -- unlike the unconditional one above.
         self._scroll_at_center(-1, self._zoom_scrolls())
-        self._wait(DELAY_AFTER_SCROLL)
+        self._wait_zoom_settled()
 
         cx, cy = self._center_screen()
         ww, wh = self.win["width"], self.win["height"]
@@ -348,7 +519,14 @@ class GemFlowMixin:
         max_scans = 60
         max_attempts = 10
         empty_streak = 0
-        max_empty_streak = 12
+        # 12 sat exactly on the observed ceiling, which is the tell that it was
+        # censoring the data rather than describing it. Over 374 finds in the
+        # log the streak-before-a-find decayed 24, 18, 14, 19, 9, 8 across
+        # lengths 6..11 and then dropped to a hard 0 at 12 -- not a natural
+        # tail, just the cutoff. Finds at 12-14 were unobservable, so 18 is set
+        # to actually run the experiment; report.py counts scan_giveup, so the
+        # next run says whether anything lands past 11.
+        max_empty_streak = 18
         max_icons_per_frame = 2
         attempt = 0
         SKIP_RADIUS = 80
@@ -401,6 +579,7 @@ class GemFlowMixin:
             if random.random() < 0.05:
                 turn = random.uniform(-math.pi, math.pi)
             wander_heading += turn
+            wander_heading = self._steer_heading(wander_heading)
 
             dx_f = math.cos(wander_heading)
             dy_f = math.sin(wander_heading)
@@ -448,6 +627,7 @@ class GemFlowMixin:
             save_screenshot(frame, f"{tag}_scan_{scan_count:02d}")
 
             icons = self._find_all_icons(frame)
+            self._map_sync(frame, bool(icons), scan_count=scan_count)
 
             if not icons and self._edge_gems:
                 print(f"  [{INFO}] Scan {scan_count:2d}: {len(self._edge_gems)} edge gem(s), recentering...")
@@ -458,9 +638,27 @@ class GemFlowMixin:
                 # Panned out of the kingdom into fog? Bail early -- the camera is
                 # off the map edge, no resources will ever appear here. Return to
                 # city so the next mine re-centers on the player's city.
-                if self._is_fog(frame):
+                if self._fog_confirmed(frame):
                     print(f"  [{WARN}] Scan {scan_count:2d}: FOG (out of kingdom) -- "
-                          f"return to city, restart")
+                          f"turn back inland, then return to city")
+                    # Strongest terrain evidence available: mark it permanently.
+                    # Mountains and the map void do not move, so unlike the
+                    # reach book this is never expired.
+                    xy = self._map_sync(frame, False, force=True)
+                    if xy and self.mapmem:
+                        self.mapmem.record_wall(*xy)
+                        self.mapmem.save()
+                    # Turning the camera around matters more than the city trip.
+                    # The world map REMEMBERS its camera across a city
+                    # round-trip, so "return to city, restart" recentres
+                    # nothing: measured 2026-08-18, a bail at X:0 was followed
+                    # by the next mine opening at X:1 and bailing again, and 4
+                    # of the 5 bails that day sat at X<=7. The heading also
+                    # persists across mines (`_wander_heading`), so without this
+                    # the bot re-enters at the same edge pointing the same way
+                    # and burns another mine discovering the same fog.
+                    back = wander_heading + math.pi + random.uniform(-0.35, 0.35)
+                    self._retreat_from_edge(back)
                     self._step_return_city(tag)
                     return None
                 print(f"  [ -- ] Scan {scan_count:2d}/{max_scans}: no icons "
@@ -557,28 +755,215 @@ class GemFlowMixin:
         # fired just clicks junk on the world map (and re-opens the deploy).
         # Muscle-memory pacing: these are memorised positions, and the measured
         # 3.6 s / 2.3 s gaps were slower than a real gem farmer by roughly 5x.
+        # Cheapest possible insurance in the most expensive place: if the game
+        # is not in front, the whole deploy chain clicks into another window and
+        # the march is lost silently.
+        self._ensure_game_focused("before deploy chain")
+
+        # Do NOT assume the Gather click opened the deploy panel. Measured
+        # 2026-08-19 12:57: gather_btn matched at 0.926, the click landed within
+        # 1px, "Gather clicked!" was printed -- and the panel never appeared.
+        # The chain then fired "Quan moi" at a fixed spot on the bare world map,
+        # which closed whatever was left, and the March poll spent 6s staring at
+        # an empty map (march_btn_TIMEOUT_125655.png). Same mistake as the March
+        # button: believing a UI transition happened because we asked for it.
+        if not self._wait_for_troop_panel():
+            print(f"  [{FAIL}] Deploy panel never opened after Gather -- "
+                  f"not firing the chain into the map")
+            self._record(f"{tag}_march", False, "deploy panel did not open")
+            return False
+
         with self._muscle_memory():
             print(f"  [{INFO}] New Troop (Quan moi) at fixed pct{NEW_TROOP_BTN_PCT}")
             self._click_pct(*NEW_TROOP_BTN_PCT, jitter_px=6)
-            # Still wait for the commander panel to actually paint -- fast is
-            # the goal, clicking into a panel that is not up yet is not.
-            self._wait((0.28, 0.08))
+            # Wait for the commander panel to ACTUALLY paint. The old fixed
+            # 0.28s was a guess at how long that takes, and clicking into a
+            # panel that is not up yet is precisely how a march fails in
+            # silence -- which is what the queue badge caught on 2026-08-18,
+            # three mines in a row with the New Troop click landing correctly.
+            # The templates are only a readiness gate: the click itself stays on
+            # the memorised fixed position, because template detection is flaky
+            # at night and the fixed positions are what the pacing is tuned for.
+            self._wait_for_march_button()
 
             print(f"  [{INFO}] March (Hanh quan) at fixed pct{MARCH_BTN_PCT}")
             self._click_pct(*MARCH_BTN_PCT, jitter_px=6)
 
-        # Trust the fixed clicks: the post-march world map zooms in on the troops
-        # and reads ambiguously (city_btn ~tie globe), so verifying here is
-        # unreliable and just wastes time. The OCR queue check next loop is the
-        # real source of truth -- if the march didn't fire, the slot stays free
-        # and we simply farm it again. Just let the march animation settle.
+        # Let the march animation settle. NOTE: the game moves the camera to the
+        # marching troop by itself here, so a post-march frame showing somewhere
+        # other than where we were scanning is the game doing that, NOT a bug --
+        # do not read camera jumps in these screenshots as a fault.
         self._wait(random.uniform(1.5, 2.5))
+
         print(f"  [{PASS}] March sent (fixed Quan moi + Hanh quan)")
         self._record(f"{tag}_march", True, "sent")
+        # Now that the march is away and nothing is time-critical, read the
+        # numbers off the panel frame captured between the two clicks.
+        self._log_deploy_panel(tag)
         frame2 = self._grab()
         if frame2 is not None:
             save_screenshot(frame2, f"{tag}_after_march")
         return True
+
+    def _wait_for_troop_panel(self, timeout: float = 4.0) -> bool:
+        """Is the panel with the "Quan moi" button actually up?
+
+        Position-checked like the March gate, because `new_troop_btn` can match
+        weakly elsewhere on a busy map and a false pass here is exactly what
+        sends the chain clicking into open ground.
+        """
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            self._wait((0.12, 0.04))
+            frame = self._grab()
+            if frame is None:
+                continue
+            m = self._match_verify(frame, "buttons/new_troop_btn",
+                                   self.fast_matcher, 0.70)
+            if m is None or m.confidence < 0.70:
+                continue
+            fw, fh = frame.shape[1], frame.shape[0]
+            at = (m.center[0] / fw, m.center[1] / fh)
+            off = math.hypot(at[0] - NEW_TROOP_BTN_PCT[0],
+                             at[1] - NEW_TROOP_BTN_PCT[1])
+            if off > MARCH_BTN_MAX_OFFSET:
+                logger.debug("Troop gate: ignoring match at (%.3f,%.3f), "
+                             "%.3f away", *at, off)
+                continue
+            logger.info("Deploy panel up after %.2fs (conf=%.3f)",
+                        time.monotonic() - start, m.confidence)
+            return True
+        logger.warning("Deploy panel did not open within %.1fs", timeout)
+        return False
+
+    def _wait_for_march_button(self, timeout: float = 6.0) -> float:
+        """Block until the March button is painted, or `timeout`. Returns seconds.
+
+        Diagnostic as much as fix: it logs how long the panel really took, so
+        the 0.28s that used to be assumed here becomes a measured number over
+        many mines instead of a guess. A timeout is logged loudly and still
+        falls through to the fixed click -- if the panel never appears, the
+        march was lost for a different reason and the queue check will say so.
+        """
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            self._wait((0.10, 0.03))
+            frame = self._grab()
+            if frame is None:
+                continue
+            for tpl in ("buttons/march_btn_orange", "buttons/march_btn"):
+                m = self._match_verify(frame, tpl, self.fast_matcher, 0.70)
+                if m is not None and m.confidence >= 0.70:
+                    # WHERE it matched decides whether it is the button at all.
+                    # Measured 2026-08-18: every lost march passed this gate on
+                    # `march_btn` matching at (1283,250) -- pct (0.837,0.291),
+                    # up in the troop list, 0.505 of the window away from the
+                    # button we click. Meanwhile the real "HANH QUAN" button was
+                    # still fading in, so it matched too weakly to be seen. The
+                    # click then landed on a panel that had not become
+                    # interactive. Successful marches matched at (0.652,0.758),
+                    # 0.006 away -- so the two cases are separated by two orders
+                    # of magnitude and a generous radius still splits them.
+                    fw, fh = frame.shape[1], frame.shape[0]
+                    at = (m.center[0] / fw, m.center[1] / fh)
+                    off = math.hypot(at[0] - MARCH_BTN_PCT[0],
+                                     at[1] - MARCH_BTN_PCT[1])
+                    if off > MARCH_BTN_MAX_OFFSET:
+                        logger.debug("March gate: ignoring %s at (%.3f,%.3f), "
+                                     "%.3f from the click point", tpl, *at, off)
+                        continue
+                    took = time.monotonic() - start
+                    # Keep the frame the click is about to be aimed at. Saving
+                    # it here would cost PNG-write time inside the muscle-memory
+                    # deploy chain, so it is only written later, and only when
+                    # the queue says the march did not fire -- the one case
+                    # where the panel's real state is worth seeing.
+                    self._deploy_frame = frame
+                    self._deploy_seen = (tpl, m.confidence, m.center)
+                    logger.info("March button painted after %.2fs (%s conf=%.3f) "
+                                "at %s vs fixed click %s",
+                                took, tpl, m.confidence, m.center, MARCH_BTN_PCT)
+                    return took
+        took = time.monotonic() - start
+        # Keep the evidence. A timeout here means either the panel never opened
+        # (so the fixed click below lands on nothing and the march is lost) or
+        # it opened somewhere unexpected -- and those need completely different
+        # fixes. Without the frame it is guesswork, and this path is rare enough
+        # that writing a PNG costs nothing overall.
+        frame = self._grab()
+        if frame is not None:
+            path = save_screenshot(frame, "march_btn_TIMEOUT")
+            logger.warning("March button did not appear within %.1fs -- clicking "
+                           "the fixed position anyway; screen saved to %s",
+                           timeout, path)
+        else:
+            logger.warning("March button did not appear within %.1fs -- clicking "
+                           "the fixed position anyway (no frame to save)", timeout)
+        return took
+
+    def _reconcile_queue(self):
+        """Read the march queue ONCE, after the burst and before tabbing away.
+
+        This replaced per-march verification, for two reasons. Reading the badge
+        inside the deploy chain put an OCR pause in the one place that has to
+        stay fast (it is memorised muscle memory, see
+        [[feedback_speed_matches_familiarity]]). And comparing the badge before
+        and after a single march is unreliable anyway: a gathering troop coming
+        home in the same window cancels the increment, so a real march reads as
+        a failure.
+
+        Here neither problem exists. The burst is finished, nothing is about to
+        be clicked, and the queue simply SHOULD be full -- so a shortfall is
+        real information. Purely diagnostic: it never fails a mine.
+        """
+        queue = self._detect_march_queue()
+        if not queue:
+            logger.info("Queue reconcile: OCR gave no reading")
+            return
+        used, total = queue
+        self._queue_before_mine = used
+        self.sync_open_marches(used)
+        if used >= total:
+            print(f"  [{PASS}] Queue reconciled: {used}/{total} -- burst is full")
+            logger.info("Queue reconcile: %d/%d full", used, total)
+        else:
+            print(f"  [{WARN}] Queue {used}/{total} after the burst -- "
+                  f"{total - used} slot(s) never filled")
+            logger.warning("Queue reconcile: %d/%d, %d slot(s) unfilled",
+                           used, total, total - used)
+
+    def _verify_march_fired(self, tries: int = 3):
+        """Did the march-queue badge go up? True / False / None if unknowable.
+
+        None means the question could not be answered -- no 'before' reading
+        this mine, or the OCR never landed -- and the caller then keeps the old
+        behaviour of trusting the clicks rather than failing a good march on a
+        missing measurement.
+        """
+        before = getattr(self, "_queue_before_mine", None)
+        if before is None:
+            logger.debug("March verify: no queue reading before this mine")
+            return None
+
+        saw_a_reading = False
+        for attempt in range(tries):
+            queue = self._detect_march_queue(retries=2)
+            if queue:
+                saw_a_reading = True
+                used, total = queue
+                if used > before:
+                    logger.info("March verified: queue %d/%d (was %d)",
+                                used, total, before)
+                    self._queue_before_mine = used
+                    return True
+            if attempt < tries - 1:
+                self._wait(random.uniform(0.7, 1.3))
+
+        if not saw_a_reading:
+            logger.warning("March verify: queue OCR never landed, trusting the clicks")
+            return None
+        logger.warning("March verify: queue still %d after the deploy chain", before)
+        return False
 
     # --- Step 7: Return to city view ---
 
@@ -590,8 +975,7 @@ class GemFlowMixin:
         # gate on _on_world_map(): right after a march the world map reads
         # ambiguously (city_btn ~tie globe) and the guard falsely said "already
         # in city", so the toggle was skipped and we never returned.
-        print(f"  [{INFO}] City toggle corner {TOGGLE_BTN_PCT}")
-        self._click_pct(*TOGGLE_BTN_PCT, jitter_px=4)
+        self._toggle_view("World map -> city")
         self._wait(DELAY_WORLD_MAP)
         self._view_is_world = False  # now in the city
 

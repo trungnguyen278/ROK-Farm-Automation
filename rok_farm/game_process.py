@@ -539,13 +539,19 @@ class GameLifecycleMixin:
             return False
 
         now = time.time()
+        # A planned quit while troops are out is not a symptom of anything, so
+        # it must not eat the failure budget -- otherwise a healthy farm that
+        # closes the client every cycle would lock itself out of restarting when
+        # something actually breaks.
+        planned = reason.startswith("waiting ")
         self._restart_times = [t for t in getattr(self, "_restart_times", [])
                                if now - t < 3600]
-        if len(self._restart_times) >= MAX_RESTARTS_PER_HOUR:
+        if not planned and len(self._restart_times) >= MAX_RESTARTS_PER_HOUR:
             print(f"  [{WARN}] {MAX_RESTARTS_PER_HOUR} restarts in the last hour "
                   f"-- refusing to loop, staying put")
             return False
-        self._restart_times.append(now)
+        if not planned:
+            self._restart_times.append(now)
 
         print(f"\n  [{WARN}] Restarting the game: {reason}")
         logger.warning("Game restart: %s", reason)
@@ -557,7 +563,20 @@ class GameLifecycleMixin:
             self.game.quit_game(self)
             cooldown = random.uniform(*RESTART_COOLDOWN) + max(0.0, extra_wait)
             print(f"  [{INFO}] Staying out for {cooldown / 60:.1f} min")
-            time.sleep(cooldown)
+            # Say something while sleeping. A planned wait can now run past 30
+            # minutes (waiting out a gather), which is LONGER than the
+            # supervisor's silence limit -- and a deliberate quiet period that
+            # outlasts the hang detector gets the farm killed for being healthy.
+            # That exact mistake has now been made twice; a heartbeat fixes it
+            # without blunting the detector, which raising the limit would.
+            slept = 0.0
+            while slept < cooldown:
+                step = min(240.0, cooldown - slept)
+                time.sleep(step)
+                slept += step
+                if slept < cooldown:
+                    print(f"  [{INFO}] Still out, {(cooldown - slept) / 60:.0f} "
+                          f"min to go")
             ok = self._ensure_game_running()
         finally:
             self._capture_paused = False
@@ -574,6 +593,105 @@ class GameLifecycleMixin:
             self.mines_completed = queue[0]
             print(f"  [{INFO}] After restart: queue {queue[0]}/{queue[1]}")
         return True
+
+    def _sleep_while_client_alive(self, seconds: float, reason: str,
+                                  step: float = 5.0) -> bool:
+        """Sleep, but stop the moment the game window disappears.
+
+        A plain time.sleep on the main thread is invisible to every health
+        check -- _client_looks_broken only runs between mines -- so a client
+        that dies mid-sleep goes unnoticed until the sleep ends. That is
+        exactly how a 1025s "simulating player left" pause in front of a
+        reconnect dialog cost a whole morning on 2026-08-18: the client closed
+        itself about six minutes in and the bot slept on for eleven more,
+        then needed a restart it could have started far sooner.
+
+        Returns True if the full duration elapsed with the client alive, False
+        if the window vanished (the caller should bail out and let the main
+        loop's restart path take over).
+        """
+        deadline = time.time() + max(0.0, seconds)
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return True
+            time.sleep(min(step, remaining))
+            if not self.game.is_game_running():
+                waited = seconds - max(0.0, deadline - time.time())
+                print(f"  [{WARN}] Client vanished {waited:.0f}s into "
+                      f"{seconds:.0f}s wait ({reason}) -- abandoning the wait")
+                logger.warning("Client died during wait (%s) after %.0fs of %.0fs",
+                               reason, waited, seconds)
+                return False
+
+    def _ensure_game_focused(self, reason: str) -> bool:
+        """Make sure the game is the FOREGROUND window before we click into it.
+
+        This is the one failure the capture stack cannot show us. The WGC
+        backend grabs the game window's own pixels, so it keeps handing back a
+        perfect game frame even while another window sits on top of it -- but
+        HID clicks go to whatever is actually topmost at those screen
+        coordinates. The bot then "sees" the game, clicks something else, and
+        nothing in the log looks wrong.
+
+        `_tab_back` fires ALT+TAB and never checked the result, so any change in
+        the alt-tab order (a toast, the launcher, an explorer window) left the
+        game behind another window for the rest of the burst. Suspected cause of
+        the 2026-08-18 18:02 loss: the deploy panel never opened because the
+        "Quan moi" click never reached the game, while the March-button poll
+        watched a perfectly healthy-looking frame for 4s.
+
+        HID first (that is the input path everything else uses); only if two
+        ALT+TABs fail to bring it forward do we fall back to SetForegroundWindow.
+        """
+        win = self.game.game_window()
+        if not win:
+            return False
+        hwnd = win.get("hwnd")
+        if hwnd is None:
+            return True                     # cannot tell; do not block the flow
+        try:
+            if win32gui.GetForegroundWindow() == hwnd:
+                return True
+        except Exception:
+            return True
+
+        # Minimised is the one state the capture stack cannot see through at
+        # all. WGC grabs a window's own pixels even when something covers it,
+        # but a minimised window has no surface to grab, so it keeps handing
+        # back the last frame forever: every template match returns an
+        # identical score and the flow fails mine after mine while the log
+        # looks merely unlucky. That is 2026-09-09 13:59 exactly -- the run
+        # before it was killed mid "alt-tab away", leaving the client
+        # minimised, and mines 1-3 all failed on the same frozen 0.607 match
+        # before the 45s stall timeout finally called the client broken.
+        # ALT+TAB does not reliably raise a minimised window, so restore it
+        # explicitly instead of spending two alt-tabs discovering that.
+        try:
+            if win32gui.IsIconic(hwnd):
+                print(f"  [{WARN}] Game is MINIMISED ({reason}) -- restoring; "
+                      f"capture returns a frozen frame while it is minimised")
+                logger.warning("Game minimised (%s) -- restoring", reason)
+                if focus_window(hwnd):
+                    return True
+        except Exception:
+            pass
+
+        print(f"  [{WARN}] Game is NOT the foreground window ({reason}) -- "
+              f"clicks would land elsewhere; bringing it forward")
+        logger.warning("Game lost foreground (%s) -- refocusing", reason)
+        for _ in range(2):
+            self.cmd.send("COMBO", "ALT", "TAB", random.randint(50, 120))
+            time.sleep(random.uniform(1.0, 1.8))
+            try:
+                if win32gui.GetForegroundWindow() == hwnd:
+                    logger.info("Refocused the game with ALT+TAB")
+                    return True
+            except Exception:
+                return True
+        ok = focus_window(hwnd)
+        logger.warning("ALT+TAB did not restore focus; SetForegroundWindow -> %s", ok)
+        return ok
 
     def _client_looks_broken(self) -> str | None:
         """Cheap health check run once per mine; returns a reason or None."""

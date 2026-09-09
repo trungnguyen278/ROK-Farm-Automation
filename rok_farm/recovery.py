@@ -38,6 +38,22 @@ class RecoveryMixin:
             return True
         return False
 
+    # A reconnect dialog is not a state the client holds indefinitely. Measured
+    # event of 2026-08-18: the popup was already on screen at 07:22:12 and the
+    # client process was gone by 07:28:15, so it survived AT MOST 363s
+    # unanswered -- and likely less, since it was up before the bot first looked.
+    # The old hesitation rolled 300-900s a fifth of the time and 900-1800s
+    # another fifth, so two rolls in five could outlive the dialog. One did: the
+    # client died mid-sleep, the bot slept on for another eleven minutes, and
+    # the farm produced nothing for over an hour.
+    #
+    # The pre-confirm hesitation now stays inside the only survival bound there
+    # is evidence for. The anti-detect point -- never answering a network popup
+    # in two seconds flat -- is kept through the spread below, and the "player
+    # walked away" flavour moves to AFTER the reconnect, where the client is
+    # alive and idling costs nothing but time.
+    RECONNECT_MAX_HESITATION = 120.0
+
     def _check_reconnect_popup(self) -> bool:
         """Check and dismiss network disconnect popup. Call when flow seems stuck."""
         frame = self.sc.grab_full()
@@ -45,29 +61,34 @@ class RecoveryMixin:
             return False
         m = self.matcher.match_single(frame, "ui/btn_confirm_reconnect")
         if m and m.confidence >= 0.75:
+            seen_at = time.time()
             roll = random.random()
-            if roll < 0.30:
-                time.sleep(random.uniform(1.0, 5.0))
-            elif roll < 0.60:
-                delay = random.uniform(30, 120)
-                logger.info("Reconnect: delayed %.0fs (brief AFK)", delay)
-                time.sleep(delay)
-            elif roll < 0.80:
-                delay = random.uniform(300, 900)
-                logger.info("Reconnect: long delay %.0fs (extended AFK)", delay)
-                time.sleep(delay)
-                frame = self.sc.grab_full()
-                m = self.matcher.match_single(frame, "ui/btn_confirm_reconnect") if frame is not None else None
-                if not m or m.confidence < 0.75:
-                    return False
+            if roll < 0.55:
+                delay = random.uniform(1.0, 5.0)
+            elif roll < 0.85:
+                delay = random.uniform(10.0, 45.0)
             else:
-                delay = random.uniform(900, 1800)
-                logger.info("Reconnect: very long delay %.0fs (simulating player left)", delay)
-                time.sleep(delay)
-                frame = self.sc.grab_full()
-                m = self.matcher.match_single(frame, "ui/btn_confirm_reconnect") if frame is not None else None
-                if not m or m.confidence < 0.75:
-                    return False
+                delay = random.uniform(45.0, self.RECONNECT_MAX_HESITATION)
+            logger.info("Reconnect: popup seen, hesitating %.0fs before confirm", delay)
+            if not self._sleep_while_client_alive(delay, "reconnect hesitation"):
+                # The client died while we hesitated. Say so loudly: this is the
+                # measurement that bounds RECONNECT_MAX_HESITATION, and it is
+                # the only way that number ever gets refined.
+                logger.warning("Reconnect: client died %.0fs after the popup was "
+                               "first seen (hesitation was %.0fs)",
+                               time.time() - seen_at, delay)
+                return False
+            # Re-verify before clicking: the client may have retried by itself,
+            # or swapped the dialog for a login screen, while we waited.
+            frame = self.sc.grab_full()
+            m = (self.matcher.match_single(frame, "ui/btn_confirm_reconnect")
+                 if frame is not None else None)
+            if not m or m.confidence < 0.75:
+                logger.info("Reconnect: popup gone on its own after %.0fs",
+                            time.time() - seen_at)
+                return False
+            logger.info("Reconnect: confirming after %.0fs on screen",
+                        time.time() - seen_at)
             print(f"  [{WARN}] Network disconnect popup (conf={m.confidence:.3f}), clicking confirm...")
             # Honour the result: the button registry can refuse a match that
             # landed far from where this button has ever been, and reporting a
@@ -76,6 +97,17 @@ class RecoveryMixin:
                 print(f"  [{WARN}] Confirm click was refused -- popup left alone")
                 return False
             time.sleep(random.uniform(3.0, 8.0))
+            # Here is where "I stepped away when the connection dropped" now
+            # lives. Same idea as the long delays this replaced, but on the far
+            # side of the confirm click: the client is reconnected and sitting
+            # safely in the city, so a long idle costs farming time instead of
+            # the whole session. Still interruptible -- nothing on this thread
+            # should ever block past the client's own lifetime again.
+            if random.random() < 0.20:
+                afk = random.uniform(120.0, 600.0)
+                logger.info("Reconnect: idling %.0fs after reconnect (was AFK)", afk)
+                print(f"  [{INFO}] Back online -- idling {afk / 60:.1f} min before farming")
+                self._sleep_while_client_alive(afk, "post-reconnect AFK")
             return True
         return False
 

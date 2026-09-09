@@ -18,7 +18,7 @@ from vision.template_matcher import Match
 
 from rok_farm.config import (BUTTON_THRESHOLD, DARK_TERRAIN_THRESH,
                              FOG_HUE_LAP_MAX, FOG_HUE_STD_MAX, FOG_LAP_VAR_MAX,
-                             FOG_SAT_MAX, MARCH_TEMPLATES,
+                             FOG_SAT_LAP_MAX, FOG_SAT_MAX, MARCH_TEMPLATES,
                              OCCUPIED_TEMPLATES, OCCUPIED_THRESHOLD,
                              SAFE_ZONE_MARGIN, VERIFY_ROI)
 from rok_farm.logging_setup import INFO, logger
@@ -246,7 +246,9 @@ class DetectMixin:
           * one flat hue AND little detail -- the detail ceiling matters: grass
             and forest are uniformly green too, and without it this abandoned
             farmland 36 km out that was covered in resource nodes
-          * colourless   -- almost no saturation, however detailed it looks
+          * colourless AND little detail -- same lesson, learned twice: snowy
+            mountains inside the kingdom are pale (sat 26) but hugely textured
+            (lap 1186), and without a ceiling here they were abandoned too
 
         Measured on the RAW frame: night normalisation deliberately desaturates,
         which would drag real terrain toward the colourless test and cause the
@@ -273,8 +275,8 @@ class DetectMixin:
             why = f"featureless (lap={lap_var:.1f})"
         elif hue_std < FOG_HUE_STD_MAX and lap_var < FOG_HUE_LAP_MAX:
             why = f"flat hue with no detail (hue_std={hue_std:.2f})"
-        elif sat < FOG_SAT_MAX:
-            why = f"colourless (sat={sat:.1f})"
+        elif sat < FOG_SAT_MAX and lap_var < FOG_SAT_LAP_MAX:
+            why = f"colourless with no detail (sat={sat:.1f})"
         else:
             return False
         logger.info("fog: %s [lap=%.1f sat=%.1f hue_std=%.2f]",

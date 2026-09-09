@@ -11,15 +11,18 @@ import random
 import threading
 import time
 
+import cv2
 import numpy as np
 
 from anti_detection.player_actions import _try_resize_game
 from vision.color_filter import normalize_frame
 
 from rok_farm import config as cfg
-from rok_farm.config import (GEM_ICON_THRESHOLD, GEM_ICON_THRESHOLD_NIGHT,
-                             TARGET_CONTENT_W, TITLE_BAR_H)
-from rok_farm.logging_setup import INFO, WARN
+from rok_farm.config import (DELAY_AFTER_SCROLL, GEM_ICON_THRESHOLD,
+                             GEM_ICON_THRESHOLD_NIGHT, TARGET_CONTENT_W,
+                             TITLE_BAR_H, ZOOM_OUT_POLL, ZOOM_OUT_QUIET_DIFF,
+                             ZOOM_OUT_QUIET_POLLS, ZOOM_OUT_SETTLE_CAP)
+from rok_farm.logging_setup import INFO, WARN, logger
 
 
 class CaptureMixin:
@@ -82,6 +85,69 @@ class CaptureMixin:
             print(f"  [{INFO}] Night mode detected -- normalizing frames")
             self._night_logged = True
         return normalized
+
+    @staticmethod
+    def _settle_patch(frame) -> np.ndarray | None:
+        """Small gray crop of the play area, for frame-to-frame motion checks.
+
+        Deliberately the CENTRE only: the chat box and the HUD animate on their
+        own, and including them makes "has the map stopped moving" unanswerable.
+        """
+        fh, fw = frame.shape[:2]
+        roi = frame[int(fh * 0.25):int(fh * 0.72), int(fw * 0.20):int(fw * 0.80)]
+        if roi.size == 0:
+            return None
+        small = cv2.resize(roi, (160, 90), interpolation=cv2.INTER_AREA)
+        return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+    def _wait_zoom_settled(self) -> float:
+        """Human pause after a zoom-out, extended only while the map still moves.
+
+        The fixed pause stays and is drawn exactly as before -- it is what makes
+        the bot's timing look human, and measurement said it is long enough
+        almost always (see ZOOM_OUT_* in config). What it could not do is notice
+        the rare draw that lands under the animation, which hands the first scan
+        of a mine a smeared frame. So: pause, look once, and only keep waiting
+        if the picture is genuinely still changing.
+
+        Returns the extra seconds spent beyond the normal pause (0.0 when the
+        map had already settled, which is the common case).
+        """
+        self._wait(DELAY_AFTER_SCROLL)
+
+        start = time.monotonic()
+        prev = None
+        quiet = 0
+        saw_motion = False
+        while time.monotonic() - start < ZOOM_OUT_SETTLE_CAP:
+            frame = self._grab()
+            if frame is None:
+                self._wait(ZOOM_OUT_POLL)
+                continue
+            cur = self._settle_patch(frame)
+            if cur is None:
+                break
+            if prev is not None:
+                diff = float(np.mean(cv2.absdiff(prev, cur)))
+                if diff < ZOOM_OUT_QUIET_DIFF:
+                    # Already still on the first look: nothing to wait for.
+                    if not saw_motion:
+                        prev = None
+                        break
+                    quiet += 1
+                    if quiet >= ZOOM_OUT_QUIET_POLLS:
+                        break
+                else:
+                    saw_motion = True
+                    quiet = 0
+            prev = cur
+            self._wait(ZOOM_OUT_POLL)
+
+        extra = time.monotonic() - start
+        if saw_motion:
+            logger.debug("zoom-out was still animating after the pause; "
+                         "waited %.3fs more", extra)
+        return extra
 
     def _gem_icon_threshold(self) -> float:
         """At night the gem_icon template (captured by day) only matches ~0.65-0.71
@@ -154,3 +220,78 @@ class CaptureMixin:
         x = max(wl + int(ww * 0.12), min(wl + int(ww * 0.88), sx))
         y = max(wt + int(wh * 0.22), min(wt + int(wh * 0.70), sy))
         return x, y
+
+    # --- Absolute zoom control -------------------------------------------
+    # Every world-map path only ever scrolled OUT, with no reference for what
+    # "right" is, so the level ratcheted away until icons rendered at a third
+    # of template size and nothing could ever match again (measured 2026-09-09:
+    # best-matching scale 0.35-0.40 against a production ladder whose floor is
+    # 0.7 -- physically unmatchable, so the bot pans blind and calls it empty
+    # ground). A streak counter on ONE of the three zoom-out sites did not stop
+    # it, because the other two kept ratcheting.
+    #
+    # The template ladder itself is the missing instrument: the scale at which
+    # gem_icon matches best IS the zoom level. Measure it and correct toward
+    # 1.0, one notch at a time, re-measuring after each -- a closed loop needs
+    # no per-notch constant and cannot ratchet.
+    ZOOM_PROBE_SCALES = [0.35, 0.45, 0.55, 0.7, 0.85, 1.0, 1.15, 1.3]
+    ZOOM_OK_RANGE = (0.85, 1.2)
+
+    def _icon_scale(self, frame) -> float | None:
+        """Scale at which the gem icon matches best -- i.e. the zoom level."""
+        if frame is None:
+            return None
+        tpl = self.cache.get("resources/gem_icon") if self.cache else None
+        if tpl is None:
+            return None
+        fh, fw = frame.shape[:2]
+        roi = frame[int(fh * 0.12):int(fh * 0.85), int(fw * 0.10):int(fw * 0.90)]
+        if roi.size == 0:
+            return None
+        best_v, best_s = 0.0, None
+        for sc in self.ZOOM_PROBE_SCALES:
+            r = cv2.resize(tpl, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
+            if r.shape[0] > roi.shape[0] or r.shape[1] > roi.shape[1]:
+                continue
+            _, v, _, _ = cv2.minMaxLoc(cv2.matchTemplate(roi, r,
+                                                         cv2.TM_CCOEFF_NORMED))
+            if v > best_v:
+                best_v, best_s = v, sc
+        # A weak best match says nothing about zoom -- it just means there was
+        # no icon in view. Only trust a reading with some signal behind it.
+        return best_s if best_v >= 0.62 else None
+
+    def _correct_zoom_level(self, max_steps: int = 9) -> bool:
+        """DEPRECATED as a controller -- see _reset_zoom_to_reference.
+
+        Kept only as an observation. Driving the zoom from `_icon_scale` cannot
+        work: on a frame with no gem icon in it the "best matching scale" is the
+        template matching terrain noise, and a 0.35x template is 13x17 px, small
+        enough to score over the gate on almost anything. So the reading is
+        biased small exactly when the bot is lost, and the loop scrolled in
+        forever without the number ever climbing (measured: 0.35, 0.45, 0.35,
+        0.55, 0.45, 0.35 while scrolling in every time). A gauge that only reads
+        correctly once you can already see what you are looking for is not a
+        gauge.
+        """
+        return True
+
+    # Notches to reach the zoom-in clamp from anywhere. The game stops zooming
+    # at its own limit, so overshooting is free and lands on a KNOWN state --
+    # which is the whole point: an absolute reference needs no measurement, and
+    # measurement is what kept failing here.
+    ZOOM_CLAMP_NOTCHES = 10
+
+    def _reset_zoom_to_reference(self) -> None:
+        """Zoom fully IN (hits the game's clamp), then out to icon zoom.
+
+        Replaces both the blind zoom-out and the measured loop. Deterministic:
+        wherever the level had drifted to, this ends at the same place.
+        """
+        out = cfg.ICON_ZOOM_SCROLLS if cfg.ICON_ZOOM_SCROLLS > 0 else 3
+        print(f"  [{INFO}] Zoom reset: in to the clamp, then out {out}")
+        logger.info("Zoom reset via clamp, then out %d", out)
+        self._scroll_at_center(+1, self.ZOOM_CLAMP_NOTCHES)
+        self._wait_zoom_settled()
+        self._scroll_at_center(-1, out)
+        self._wait_zoom_settled()

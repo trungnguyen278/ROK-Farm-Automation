@@ -11,6 +11,7 @@ from __future__ import annotations
 import random
 import threading
 import time
+import zlib
 
 import numpy as np
 
@@ -42,7 +43,10 @@ from rok_farm.input_hid import HidInputMixin
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
 from rok_farm.persona import PersonaMixin
 from rok_farm.phases import PhasesMixin
-from rok_farm.queue_ocr import QueueMixin, _OCR_BACKEND
+from rok_farm.map_memory import MapMemory
+from rok_farm.queue_ocr import (DeployPanelMixin, GatherModelMixin,
+                                MapPositionMixin, QueueMixin,
+                                _OCR_BACKEND)
 from rok_farm.recovery import RecoveryMixin
 from rok_farm.screenshots import save_screenshot
 from rok_farm.state_probe import StateProbeMixin
@@ -50,7 +54,9 @@ from rok_farm.vision_llm import VisionOracle, build_oracle
 
 
 class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
-                    StateProbeMixin, DismissMixin, QueueMixin, RecoveryMixin,
+                    StateProbeMixin, DismissMixin, QueueMixin,
+                    MapPositionMixin, DeployPanelMixin,
+                    GatherModelMixin, RecoveryMixin,
                     GameLifecycleMixin, GemFlowMixin, PhasesMixin):
     """Live gem farm runner."""
 
@@ -66,7 +72,8 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                  launcher_path: str | None = None,
                  oracle_provider: str | None = None,
                  oracle_models: list[str] | None = None,
-                 use_oracle: bool = True):
+                 use_oracle: bool = True,
+                 profile_name: str | None = None):
         self.port = port
         self.count = count
         self.auto_learn = auto_learn
@@ -127,7 +134,7 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         self._capture_paused = False
 
         loader = ProfileLoader()
-        self._profile = loader.load_random() if loader.list_profiles() else DEFAULT_PROFILE.copy()
+        self._profile = self._pick_profile(loader, profile_name, account_id)
 
         self._persona = self._load_or_create_persona()
         self._apply_persona()
@@ -139,9 +146,41 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         if actions_override:
             self._actions._preferred = list(actions_override)
         self._notif = NotificationWatcher()
+        # Learned world-map book; the real one is opened lazily once the
+        # HUD tells us which map we are standing on (home kingdom vs KvK).
+        self.mapmem: MapMemory | None = None
 
         self._scroll_overshoot_chance = self._jitter(
             self._persona["scroll_overshoot"], 0.08)
+
+    @staticmethod
+    def _pick_profile(loader, name: str | None, account_id: str) -> dict:
+        """One account, one set of habits.
+
+        `load_random()` re-rolled the behaviour profile on EVERY launch, so the
+        same account played as `aggressive` (07:00-01:00, 10h/day, 1.5min
+        breaks) in one session and `cautious` (09:00-22:00, 4h/day) in the next.
+        Nobody resamples their daily routine at each login, and an account whose
+        playing hours and session lengths jump between three different patterns
+        is describing a program, not a person.
+
+        It also explains 2026-08-18: the run that stayed logged in for ~10 hours
+        had rolled `aggressive`, so every limit it "respected" was the loosest
+        one available -- and that is the day the account was warned for
+        scripting.
+
+        An explicit name always wins. Otherwise the choice is derived from the
+        account id, so it is still varied ACROSS accounts but stable FOR one.
+        """
+        names = loader.list_profiles()
+        if not names:
+            return DEFAULT_PROFILE.copy()
+        if name:
+            if name not in names:
+                print(f"  [{WARN}] Profile '{name}' not found; have {names}")
+            return loader.load(name)
+        stable = names[zlib.crc32(account_id.encode()) % len(names)]
+        return loader.load(stable)
 
     # --- Setup ---
 
@@ -353,11 +392,24 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                             self._phase_full_cycle()
                             continue
                         self.mines_completed = used
+                        # Remember what the badge said BEFORE this mine, so the
+                        # march step can prove troops actually left (see
+                        # _verify_march_fired). Cleared when OCR fails, because
+                        # a stale "before" would turn into a false verdict.
+                        self._queue_before_mine = used
+                        # The badge is the authority on how many marches are
+                        # still out; keep the prediction bookkeeping in step.
+                        self.sync_open_marches(used)
                         print(f"  [{INFO}] Queue: {used}/{total}, {total - used} slot(s) free")
                     elif self.mines_completed >= self.max_marches:
                         print(f"\n  [{INFO}] Queue likely full ({self.mines_completed}/{self.max_marches} by counter) -- burst done, city + wait for return")
+                        self._queue_before_mine = None
                         self._phase_full_cycle()
                         continue
+                    else:
+                        # No reading this time: forget the last one rather than
+                        # measure this mine's march against a stale number.
+                        self._queue_before_mine = None
 
                 status = self._check_session()
                 if status == "break":
