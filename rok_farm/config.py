@@ -63,10 +63,21 @@ GEM_ICON_THRESHOLD_NIGHT = 0.70
 # only means out-of-kingdom when there is also nothing THERE, so that branch
 # carries a detail ceiling. True flat-hue fog peaked at lap_var 191; the false
 # alarm sat at 467; 250 splits them with room on both sides.
+#
+# The colourless branch then made the SAME mistake, live, on 2026-08-18 07:45:
+# snowy mountains at X:7 Y:43 -- inside the kingdom, green land and the territory
+# border plainly visible -- read sat 26.2 and were abandoned, because that branch
+# had no detail ceiling at all. Snow is pale and enormously textured (lap 1186).
+# Re-fitted over 156 frames from five runs (41 out-of-kingdom, 115 terrain):
+# among fog frames with sat < 30 the detail tops out at lap_var 415, while the
+# one terrain frame that gets that colourless sits at 1186 -- a clean 3x gap.
+# 600 splits it with ~1.4x headroom under the fog max and ~2x over the terrain
+# case, and keeps every frame the old rule caught (37/41) with zero false alarms.
 FOG_LAP_VAR_MAX = 50.0
 FOG_HUE_STD_MAX = 4.0
 FOG_HUE_LAP_MAX = 250.0
 FOG_SAT_MAX = 30.0
+FOG_SAT_LAP_MAX = 600.0
 BUTTON_THRESHOLD = 0.70
 GATHER_BTN_THRESHOLD = 0.65
 WORLD_MAP_BTN_THRESHOLD = 0.75
@@ -92,6 +103,13 @@ OCCUPIED_THRESHOLD = 0.62
 # wrong/missed click here marches nothing while looking like success.
 NEW_TROOP_BTN_PCT = (0.852, 0.294)   # "Quan moi" (new troop), right side
 MARCH_BTN_PCT = (0.656, 0.763)       # "Hanh quan" (march), in the commander panel
+# How far a March-button template match may sit from MARCH_BTN_PCT and still
+# count as "the panel is ready". Measured 2026-08-18 over 39 deploys: real
+# matches land 0.006 away, while every LOST march passed the gate on a match
+# 0.505 away (`march_btn` false-matching inside the troop list while the real
+# button was still fading in). Two orders of magnitude apart, so this radius is
+# deliberately loose -- it only has to reject the other side of the panel.
+MARCH_BTN_MAX_OFFSET = 0.12
 # Bottom-right corner toggles city <-> world. Clicked at this FIXED spot: the
 # template-matched position can land just off the hit-area (observed: matched
 # click didn't toggle, fixed corner did), and detection is flaky at night.
@@ -128,6 +146,33 @@ DELAY_ZOOM_IN = (1.5, 0.3)
 # instead of always paying the full DELAY_ZOOM_IN sleep.
 DELAY_ZOOM_IN_POLL = (0.45, 0.12)
 ZOOM_POLL_MAX = 3
+
+# --- Zoom-OUT settle (measured 2026-08-18: 30 trials, daylight, icon zoom,
+# capture at 36 fps) ---
+# The animation starts 0.051-0.129s after the last wheel notch and is finished
+# by 0.201s in the worst of the 29 trials that moved at all (median 0.167s).
+# So DELAY_AFTER_SCROLL's 0.30s centre is usually enough -- the premise that the
+# first scan always lands mid-animation did not survive measurement. But that
+# delay is lognormal (sigma 0.33), so it draws under 0.20s a few percent of the
+# time, and those draws do capture a smeared frame. Hence: keep the human pause
+# exactly as it was, then check ONCE whether the map is still moving and only
+# keep waiting if it is. Common case costs one poll; the bad tail disappears.
+# One trial in 30 produced no animation at all (already at the zoom-out limit),
+# which this also handles -- there is simply nothing to wait for.
+# Quiet test runs on the central play area, NOT the whole window: over 785 idle
+# samples that region measured EXACTLY 0.0000 frame-to-frame while the full
+# frame reached 0.0357 (chat scrolling, units moving). Animation peaks were
+# 0.76-9.31, so 0.15 sits orders of magnitude clear of both sides.
+# Raised from 1.0 after production data: the controlled measurement sent 3 clean
+# notches, but `_scroll_at_center` can add an overshoot burst plus a 0.4-1.0s
+# pause and a correction, so real zoom-outs ran PAST the old cap -- logged
+# overruns reached 1.14s and were censored by it. 2.5 leaves room to see the
+# true tail; the poll exits as soon as the map is still, so a fast zoom pays
+# nothing for the headroom.
+ZOOM_OUT_SETTLE_CAP = 2.5
+ZOOM_OUT_POLL = (0.08, 0.02)
+ZOOM_OUT_QUIET_DIFF = 0.15
+ZOOM_OUT_QUIET_POLLS = 2         # consecutive quiet polls once motion was seen
 DELAY_MINE_CLICK = (0.30, 0.10)
 DELAY_RECHECK = (0.15, 0.05)
 DELAY_VERIFY = (0.35, 0.12)
@@ -137,6 +182,19 @@ DELAY_BETWEEN_MINES = (1.0, 0.4)
 DELAY_DRAG_PRE = (0.08, 0.04)
 DELAY_DRAG_POST = (0.25, 0.10)
 DELAY_MICRO_PAUSE = (0.40, 0.15)
+
+# --- Waiting for troops, now that the return time is computable ---
+# The gather time comes from the deploy panel and the operator's base rate
+# (20 gems/hour at 0%), so the bot knows roughly when troops get home instead of
+# listening for a toast. That makes the WAIT a choice rather than a vigil:
+#   * a long wait is when a real player closes the game and goes away
+#   * a short one is an alt-tab, or just sitting there
+# Waiting alt-tabbed for exactly the march duration, every single cycle, is the
+# pattern worth breaking -- not the notification API, which runs in this process
+# and is invisible to the game.
+WAIT_QUIT_MINUTES = 8.0      # expected wait above this -> quit the client
+WAIT_EARLY_MARGIN = 90.0     # come back this many seconds early
+WAIT_STAY_SECONDS = 120.0    # below this, do not even alt-tab; just wait
 
 # --- Game process lifecycle ---
 # The game client is only quit/relaunched for recovery or a LONG break. The
