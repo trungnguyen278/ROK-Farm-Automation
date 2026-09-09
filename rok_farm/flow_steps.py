@@ -346,8 +346,18 @@ class GemFlowMixin:
         drag_dy = sy - cy
         drag_dx = sx - cx
         print(f"  [{INFO}] Icon at ({sx},{sy}) in no-click zone, dragging map to recenter")
-        self._human_drag(cx - drag_dx // 3, cy - drag_dy // 3,
-                         cx + drag_dx, cy + drag_dy)
+        # The drag vector is the NEGATIVE of the icon's offset. Map content
+        # follows the finger, so an icon sitting to the LEFT is brought to the
+        # middle by dragging RIGHTWARDS. The old vector was
+        # end - start = (4/3) * offset, i.e. the same sign as the offset, so a
+        # gem 455px left of centre was pushed a further 607px left and off the
+        # screen -- the icon was never recentred, it was thrown away, and the
+        # scans that followed found nothing because the thing they were looking
+        # for was no longer on screen.
+        start_x = cx + drag_dx // 3
+        start_y = cy + drag_dy // 3
+        self._human_drag(start_x, start_y,
+                         start_x - drag_dx, start_y - drag_dy)
         time.sleep(random.uniform(0.3, 0.6))
         frame = self._grab()
         if frame is None:
