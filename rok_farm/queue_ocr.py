@@ -102,7 +102,13 @@ class QueueMixin:
 # Crop chosen by measurement, not by eye: three candidates were scored against
 # 60 saved frames and this one read 60/60 while being the smallest, so it is the
 # cheapest to OCR inside the scan loop.
-POS_ROI = (0.02, 0.000, 0.22, 0.035)
+# Right edge widened from 0.22. The world-map HUD puts the coordinates hard
+# against the left, but the gather view adds a power counter in front of
+# them and pushed "Y:191" out of the crop -- the OCR then returned Y:1 and
+# the deposit was recorded at 180:1. Swept over real frames of both layouts:
+# 0.22 read a complete X and Y on 4 of 7, 0.26 on 6 of 7, and the only miss
+# at 0.26 is the deploy panel, which genuinely covers the corner.
+POS_ROI = (0.02, 0.000, 0.26, 0.035)
 # Anchored on the "#" and tolerant of a letter prefix: the KvK map prints
 # "#S11465 X:227 Y:155" while the home kingdom prints "#3560 X:7 Y:86", and
 # keeping the letter is what stops two different maps sharing one book.
