@@ -242,7 +242,9 @@ class PhasesMixin:
         question is simpler and available EVERY cycle: we waited until troops
         were supposed to be home, so did the queue actually drop?
 
-        Purely observational. The queue reading stays the authority either way.
+        Not purely observational any more: the badge reading taken here also
+        retires marches that are already home (see below). The queue reading
+        stays the authority either way.
         """
         # Give the client time to finish drawing. Scoring right after a
         # relaunch read an empty ROI and recorded "unreadable" for a wait that
@@ -259,6 +261,22 @@ class PhasesMixin:
             logger.info("Wait check (%s): predicted %.0fmin, queue unreadable",
                         how, predicted_s / 60)
             return
+
+        # Retire the marches this reading proves are home, before scoring.
+        #
+        # A march that came back EARLY is invisible to the clock -- its
+        # estimate still sits in the future -- so the slot count is the only
+        # thing that can retire it. Waking for march 1 and finding march 2 home
+        # too has to skip the wait straight to march 3, or the next wait is
+        # computed from a march that is already in the city.
+        #
+        # This reading cost four retries and a repaint wait; it is the freshest
+        # badge the bot sees all cycle. Spending it on a log verdict alone left
+        # reconciliation to the NEXT read, and badge OCR fails 42% of the time
+        # (822 of 1932 reads in the log) -- so the stale record could survive
+        # for several cycles.
+        self.sync_open_marches(after[0])
+
         dropped = before[0] - after[0]
         # HOW MANY came home is the honest measure, not merely whether any did.
         # "ON TIME" cannot tell a tight estimate from a wildly long one: if the
