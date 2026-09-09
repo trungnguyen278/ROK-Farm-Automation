@@ -196,9 +196,6 @@ def idle_seconds():
         return -1.0
 
 
-QUIT_WAIT = 45.0
-
-
 def _quit_game_gracefully(cmd):
     """Close the client the way the farm does: focus it, then ALT+F4.
 
@@ -213,6 +210,7 @@ def _quit_game_gracefully(cmd):
     """
     import win32gui
 
+    from rok_farm.config import QUIT_TIMEOUT
     from rok_farm.game_process import focus_window, taskkill
 
     g = game_proc()
@@ -233,15 +231,21 @@ def _quit_game_gracefully(cmd):
         return "Game: could not focus it, so ALT+F4 would hit the wrong window -- killed instead."
 
     time.sleep(random.uniform(0.5, 1.2))
+    t0 = time.time()
     cmd.send("COMBO", "ALT", "F4", random.randint(50, 120))
-    deadline = time.time() + QUIT_WAIT
+    # Poll tightly so this returns the moment the client is gone rather
+    # than on a fixed beat: ALT+F4 has closed it on every occasion in the
+    # log (no "did not close" line has ever been printed), so the timeout
+    # is only a backstop. QUIT_TIMEOUT is the project's own value for this
+    # same wait, reused rather than picking a second number for it.
+    deadline = time.time() + QUIT_TIMEOUT
     while time.time() < deadline:
-        time.sleep(1.0)
+        time.sleep(0.4)
         if game_proc() is None:
-            return "Game closed (ALT+F4)."
+            return f"Game closed (ALT+F4, {time.time() - t0:.1f}s)."
     taskkill("MASS.exe")
     time.sleep(3.0)
-    return f"Game did not close in {QUIT_WAIT:.0f}s -- killed."
+    return f"Game did not close in {QUIT_TIMEOUT:.0f}s -- killed."
 
 
 def shutdown_board(close_game):
