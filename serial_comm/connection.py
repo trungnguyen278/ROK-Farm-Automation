@@ -33,15 +33,47 @@ class SerialConnection:
     def is_connected(self) -> bool:
         return self._connected.is_set()
 
+    # The board's UART bridge is a CH340. Matching its VID:PID identifies the
+    # right device positively, instead of hoping the description string is
+    # distinctive -- "USB" alone matches any USB-serial adapter on the machine.
+    _CH340_VID_PID = (0x1A86, 0x7523)
+
     @staticmethod
     def auto_detect_port() -> str | None:
-        for p in serial.tools.list_ports.comports():
+        ports = list(serial.tools.list_ports.comports())
+        vid, pid = SerialConnection._CH340_VID_PID
+        for p in ports:
+            if p.vid == vid and p.pid == pid:
+                logger.info("Auto-detected board on %s (CH340 %04X:%04X)",
+                            p.device, vid, pid)
+                return p.device
+        for p in ports:                      # looser fallback, unchanged
             if "ESP32" in (p.description or "") or "USB" in (p.description or ""):
+                logger.info("Auto-detected %s by description %r",
+                            p.device, p.description)
                 return p.device
         return None
 
     def connect(self) -> bool:
-        port = self._port or self.auto_detect_port()
+        # A port named on the command line is a HINT, not a promise. Windows
+        # reassigns COM numbers across reboots and re-plugs, so a hard-coded
+        # COM13 that was right three weeks ago can quietly be someone else's
+        # device today. If the named port is not present, fall back to finding
+        # the board rather than failing the whole run.
+        port = self._port
+        if port:
+            present = {p.device for p in serial.tools.list_ports.comports()}
+            if port not in present:
+                found = self.auto_detect_port()
+                if found:
+                    logger.warning("%s is gone; using %s instead", port, found)
+                    port = found
+                else:
+                    logger.error("%s is gone and no board found on %s",
+                                 port, sorted(present) or "no ports at all")
+                    return False
+        else:
+            port = self.auto_detect_port()
         if not port:
             logger.error("No serial port specified and auto-detect failed")
             return False
