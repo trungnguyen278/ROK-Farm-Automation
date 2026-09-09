@@ -7,13 +7,23 @@ import sys
 from pathlib import Path
 
 LOG = Path(r"d:\ROK Farm Automation\logs\overnight\farm_run.log")
-_fh = open(LOG, "w", encoding="utf-8", buffering=1)
+LOG.parent.mkdir(parents=True, exist_ok=True)
+# APPEND, never truncate. The watchdog restarts this script when the farm gets
+# stuck, and "w" meant every restart erased the log that showed WHY -- the one
+# artefact worth keeping at that exact moment. Appending also keeps the
+# watchdog's cumulative counters monotonic across a restart.
+_fh = open(LOG, "a", encoding="utf-8", buffering=1)
+_fh.write(f"\n{'=' * 62}\n=== farm start {__import__('datetime').datetime.now():%Y-%m-%d %H:%M:%S}\n")
 sys.stdout = _fh
 sys.stderr = _fh
 
 PROJECT = r"d:\ROK Farm Automation"
 sys.path.insert(0, PROJECT)
-sys.argv = ["run_farm.py", "--port", "COM13", "--loop", "--max-marches", "5"]
+# Pin the profile. It used to be re-rolled at random every launch, and the
+# 2026-08-18 run that drew "aggressive" (07:00-01:00, 10h/day, 1.5min breaks)
+# is the one that stayed logged in ~10 hours and earned a scripting warning.
+sys.argv = ["run_farm.py", "--port", "COM13", "--loop", "--max-marches", "5",
+            "--profile", "cautious"]
 
 import runpy
 try:

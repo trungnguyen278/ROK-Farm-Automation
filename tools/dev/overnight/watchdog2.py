@@ -31,8 +31,14 @@ RESTART_LIMIT = 5
 # killed a perfectly healthy farm at the boundary; give it real headroom.
 SILENT_LIMIT = 1500
 STUCK_MINUTES = 75          # no mine started or finished for this long
-SUMMARY_EVERY = 180         # every 3 min: the recurring faults move fast
-ORACLE_EVERY = 300          # 12/hr, inside this watchdog's own 20/hr budget
+# Reporting cadence, NOT detection cadence -- POLL below stays at 15s, so a hang
+# is still caught within seconds. These only control how often the watchdog
+# TALKS. Dropped from 3min/5min once the run went hours without a fault: at that
+# error rate a summary every 3 minutes is noise that hides the lines that matter,
+# and the 5-minute oracle burned real API budget (it was already hitting
+# OpenRouter 429s). Raise the frequency again if faults start clustering.
+SUMMARY_EVERY = 3600        # hourly summary
+ORACLE_EVERY = 3600         # hourly screen check (was 12/hr)
 POLL = 15
 RETRY_ALERT = 3             # attempts on one mine before it reads as circling
 
@@ -50,11 +56,19 @@ PATTERNS = {
     "gather_miss":  r"gather_btn not found",
     "refused":      r"Refusing click",
     "march_sent":   r"March sent",
-    "restart":      r"Restarting the game",
+    # Only FAULT restarts. The farm now quits the client on purpose while
+    # troops are out ("waiting Nmin for troops"), and counting those as
+    # failures would trip the 5-per-hour halt on a perfectly healthy run.
+    "restart":      r"Restarting the game: (?!waiting )",
     "world_fail":   r"Not on world map after toggling",
     "recovery":     r"attempting recovery",
     "skip_clicked": r"Skip already-clicked icon",
     "occupied":     r"occupied \(",
+    # A PLANNED wait: the farm quit the client on purpose and is sleeping
+    # out a gather. It produces no mines and no flow steps BY DESIGN, so
+    # every "is it stuck" clock must count it as activity. Three separate
+    # thresholds tripped on this before it was handled.
+    "planned_wait": r"Staying out for|Still out, \d+ min to go",
 }
 
 
@@ -141,6 +155,23 @@ def counts(text):
     return {k: len(re.findall(p, text)) for k, p in PATTERNS.items()}
 
 
+# Lines the CAPTURE THREAD emits. It is a daemon that grabs frames forever,
+# entirely independently of whether the flow is making progress, so its output
+# is not evidence of life -- and counting it as such is what blinded the silence
+# check on 2026-08-18: the main thread sat in a 1025s sleep in front of a
+# reconnect dialog, the client died underneath it, and the log still grew by a
+# "Window 'Rise of Kingdoms' not found" line every 10s for 17 minutes. Byte
+# growth said healthy the whole time. Silence is now judged on everything else.
+CAPTURE_NOISE = re.compile(
+    r"^.*(?:capture\.screen_capture|vision\.template_cache):.*$",
+    re.MULTILINE)
+
+
+def flow_size(text):
+    """Length of the log with capture-thread chatter removed."""
+    return len(CAPTURE_NOISE.sub("", text))
+
+
 # --- optional: ask the project's oracle what the screen shows ---
 _oracle = None
 _grab_err_logged = False
@@ -185,6 +216,7 @@ def screen_state():
         with mss.mss() as sct:
             shot = sct.grab({"left": ox, "top": oy, "width": w, "height": h})
         frame = np.array(shot, dtype=np.uint8)[:, :, :3]
+        grabbed_at = time.time()
 
         if _oracle is None:
             from rok_farm.vision_llm import build_oracle
@@ -192,10 +224,18 @@ def screen_state():
         if not _oracle.enabled:
             return "oracle unavailable"
         v = _oracle.classify_state(frame)
+        age = time.time() - grabbed_at
         if v is None:
-            return "oracle gave no answer (budget/timeout)"
+            return f"oracle gave no answer (budget/timeout, {age:.0f}s spent)"
+        # Say how old the FRAME is, not just what was in it. The provider chain
+        # can burn minutes on 429s and 504s before an answer lands, and a line
+        # stamped with the completion time reads as "this is the screen now".
+        # On 2026-08-18 it reported a healthy city view at 07:30:19 from a frame
+        # grabbed at 07:27:13 -- the client had already been dead for 2 minutes.
+        stale = "  <-- STALE" if age > 60 else ""
         return (f"view={v.view} overlay={v.overlay} covers_hud={v.covers_hud} "
-                f"conf={v.confidence:.2f} via {v.source}")
+                f"conf={v.confidence:.2f} via {v.source} "
+                f"(frame {age:.0f}s old){stale}")
     except Exception as e:
         if not _grab_err_logged:
             _grab_err_logged = True
@@ -238,11 +278,11 @@ while True:
     except Exception:
         continue
 
-    size = len(text)
+    size = flow_size(text)
     if size != last_size:
         last_size, last_change = size, time.time()
     elif time.time() - last_change > SILENT_LIMIT:
-        restarted = restart_farm(f"no log output for {int(time.time()-last_change)}s (hung)")
+        restarted = restart_farm(f"no flow output for {int(time.time()-last_change)}s (hung)")
         if restarted:
             continue
         break
@@ -277,7 +317,13 @@ while True:
     # A dead command channel is the failure this missed the first time: the
     # farm stayed alive, the capture thread kept logging, but nothing clicked
     # again. Watch for the serial exception directly -- it is unambiguous.
-    if re.search(r"SerialException|Serial lost during|Access is denied", text):
+    # Only the RECENT tail. The farm log is append-mode now (deliberately -- a
+    # truncating log erases the evidence of why it restarted), so searching the
+    # whole file means one serial hiccup hours ago keeps re-raising this alert
+    # for the rest of the run, and across every future run too. Boolean searches
+    # over a cumulative log are alerts with no expiry date.
+    if re.search(r"SerialException|Serial lost during|Access is denied",
+                 text[-20000:]):
         if not serial_flagged:
             serial_flagged = True
             log("!! serial error seen in farm log -- command channel may be dead")
@@ -296,6 +342,14 @@ while True:
         prev_progress_done = cur["mine_done"]
         prev_progress_failed = cur["mine_failed"]
         last_progress_at = time.time()
+
+    # Mines cannot start while the client is deliberately closed, so
+    # counting "no mines" as a fault during a planned wait measures the
+    # wrong thing. This also covers the serial rule, which shares the
+    # same clock.
+    if cur["planned_wait"] > prev.get("planned_wait", 0):
+        last_progress_at = time.time()
+        last_done_at = time.time()
 
     # Stuck check must NOT require scans to keep growing: a paralysed bot stops
     # producing them entirely, which is precisely the case worth catching.
