@@ -348,16 +348,23 @@ class DeployPanelMixin:
                 out["load"] = int(m.group(1).replace(".", "").replace(",", ""))
             except ValueError:
                 pass
-        # Keep the raw text when the load looks nothing like the others. Over
-        # 173 readings it was exactly 30 in 167 of them and six or seven digits
-        # in five; those five are what produced the twelve-year gather estimate.
+        # ANSWERED 2026-09-11, and the OCR was never at fault. The captured
+        # text reads "Doi quan:178.000/178.000  Trong tai:2.144.010", so the
+        # number is exactly what the panel showed -- the panel itself was
+        # different. Over 188 readings:
         #
-        # The obvious theory -- the regex swallowing the number printed beside
-        # it -- does not survive reading it: \D{0,4} cannot cross the letters of
-        # "Tong suc manh", so a captured 1272602 means the load's own digits
-        # were MISSING and the pattern reached the next number along. Which
-        # number, and why it went missing, needs the text that produced it, and
-        # none of the five was ever kept. Logged rather than guessed at.
+        #   ~800-1400 troops of ~180.000   -> load 30      (181 times)
+        #   178.000 of 178.000, all of it  -> load ~1-2M   (6 times)
+        #
+        # 30 is the GEM carrying capacity, which is tiny (about 30 for a
+        # thousand troops). The outliers are panels opened with the whole army
+        # selected, where "Trong tai" is the ordinary-resource capacity of
+        # roughly 12 per troop. Same field, two different marches.
+        #
+        # So this stays a warning rather than becoming a repair: nothing here
+        # is misread, and the estimate built on it is refused downstream. What
+        # it is really flagging is a march that went out with the entire army
+        # on it, which is worth seeing.
         if out.get("load", 0) > 1000:
             logger.warning("Implausible load %s from panel text: %r",
                            out["load"], text[:300])
@@ -486,13 +493,20 @@ class GatherModelMixin:
             return
         self._open_marches = getattr(self, "_open_marches", [])
         est = self.predict_gather_seconds(info)
-        # A single bad OCR must not be able to park the farm. On 2026-09-10 the
-        # load field read 2144010 instead of 30 -- the regex swallowed the
-        # number printed next to it -- and the gathering buff read 0.0, so the
-        # estimate came out at 386 million seconds and the restart path would
-        # have quit the client and slept for twelve years. Across 139 panel
-        # readings the load was exactly 30 in 134 of them and garbage in the
-        # millions in the other five; there is no middle ground to preserve.
+        # A single odd panel must not be able to park the farm. On 2026-09-10
+        # the load field read 2144010 against the usual 30 and the gathering
+        # buff read 0.0, so the estimate came out at 386 million seconds and
+        # the restart path would have quit the client and slept for twelve
+        # years.
+        #
+        # It was called an OCR failure at the time. It is not: the captured
+        # panel text (see the note by the warning in _read_deploy_panel) shows
+        # the game really did print 2.144.010, because that march had the whole
+        # army on it and "Trong tai" was then the ordinary-resource capacity
+        # rather than the gem one. Six of 188 readings look like this. The
+        # guard is still exactly right -- an estimate built on it is
+        # meaningless either way -- but it is guarding against an unusual
+        # MARCH, not an unusual reading.
         #
         # An implausible estimate is dropped rather than clamped: the march IS
         # out, we simply cannot time it, and est_home=None already means
