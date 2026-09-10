@@ -20,9 +20,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2]))
 
-from rok_farm import PROJECT_ROOT, roles, session_control as sc
+from rok_farm import PROJECT_ROOT, session_control as sc
 from tools.dev.overnight.logscan import (circling_evidence, counts,
-                                         current_run, flow_size)
+                                         current_run, flow_size,
+                                         max_attempt_index)
 
 LOGDIR = PROJECT_ROOT / "logs" / "overnight"
 FARM_LOG = LOGDIR / "farm_run.log"
@@ -380,7 +381,7 @@ while True:
             f"skip={d['skip_clicked']} | clf_rej={d['clf_reject']} "
             f"col_rej={d['color_reject']} gather_miss={d['gather_miss']} "
             f"refused={d['refused']} world_fail={d['world_fail']} "
-            f"| max_retry={retries} | TOTAL done={cur['mine_done']} "
+            f"| max_retry={max_attempt_index(text)} | TOTAL done={cur['mine_done']} "
             f"fail={cur['mine_failed']} empty={cur['empty_scan']} "
             f"fog={cur['fog_bail']}")
         # A burst of empties with nothing to show for it is the pattern that

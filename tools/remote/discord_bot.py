@@ -373,24 +373,11 @@ def newest_saved_shot():
     return pics[-1] if pics else None
 
 
-# --------------------------------------------------------------------------
-# actions
-
-
-HELP = """```
-!status          farm/watchdog/game state + counters for the current run
-!shot            screenshot of the game right now (falls back to newest saved)
-!log [n]         last n interesting log lines (default 25, debug stripped)
-!report          full run report from report.py
-!feed on|off     live progress: mines, marches, queue, gather-time maths
-!check           stop waiting and look at the queue now (troops home early)
-!start           start farm + watchdog
-!start solo      start the farm with no watchdog
-!start force     start even if someone is using the machine
-!stop            stop farm + watchdog, close the game, ESP32 jitter off
-!stop keep       ...but leave the game running
-!help            this
-```"""
+# HELP used to be defined again here, byte-identical to the one imported from
+# session_control at the top, and the local copy silently won. Two copies of the
+# command list is one copy too many: the packaged app's menu reads the
+# session_control one, so they would have drifted the first time a command was
+# added to only one of them.
 
 
 # --------------------------------------------------------------------------
