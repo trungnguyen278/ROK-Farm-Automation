@@ -104,7 +104,6 @@ class SessionManager:
         self._farm_std = s.get("farm_duration_std", 8)
         self._break_mean = s.get("break_duration_mean", 8)
         self._break_std = s.get("break_duration_std", 3)
-        self._daily_max = s.get("daily_hours_max", 6)
         self._active_window = s.get("active_window", ["08:00", "23:00"])
         self._idle_chance = s.get("idle_action_chance", 0.08)
         # A break long enough that a real player would CLOSE the game rather
@@ -156,12 +155,6 @@ class SessionManager:
         dur = max(60, random.gauss(self._break_mean * 60, self._break_std * 60))
         return dur
 
-    def should_stop_daily(self) -> bool:
-        self._update_daily_active()
-        if self._daily_active_seconds / 3600.0 >= self._daily_max:
-            return True
-        return not self._in_active_window()
-
     _DAY_IDLE_ACTIONS = [
         IdleAction.PAN_MAP, IdleAction.ZOOM_IN, IdleAction.ZOOM_OUT,
         IdleAction.CHECK_ALLIANCE, IdleAction.ALT_TAB,
@@ -184,7 +177,6 @@ class SessionManager:
         return {
             "session_minutes": round(self.elapsed_minutes, 1),
             "daily_active_hours": round(self._daily_active_seconds / 3600.0, 2),
-            "daily_max_hours": self._daily_max,
             "on_break": self._on_break,
             "action_count": self._action_count,
             "current_farm_target_min": round(self._current_farm_duration, 1),
@@ -216,10 +208,10 @@ class SessionManager:
     def in_active_window(self) -> bool:
         """Public: is now inside the persona's declared playing hours?
 
-        `should_stop_daily` already answered this but was never called from
-        anywhere -- so the profile advertised 09:00-22:00 while the bot farmed
-        straight through the night. A persona whose stated habits and actual
-        habits disagree is worse than no persona at all.
+        Not called from anywhere either, so the playing hours are still only
+        declared, never observed. Kept because the persona may yet want them;
+        the daily-hours cap that sat beside it is gone, since quitting the
+        client for every gather already fragments the online record.
         """
         return self._in_active_window()
 

@@ -32,7 +32,6 @@ DEFAULT_PROFILE: dict = {
         "farm_duration_std": 8,
         "break_duration_mean": 8,
         "break_duration_std": 3,
-        "daily_hours_max": 6,
         "active_window": ["08:00", "23:00"],
         "idle_action_chance": 0.08,
     },

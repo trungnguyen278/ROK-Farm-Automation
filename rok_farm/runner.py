@@ -304,10 +304,6 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
               f"(+/-{p['timing']['action_delay_std']}ms)")
         print(f"  [{INFO}] Micro-pause: {p['timing']['micro_pause_chance']*100:.0f}% chance, "
               f"{p['timing']['micro_pause_range'][0]}-{p['timing']['micro_pause_range'][1]}ms")
-        print(f"  [{INFO}] Session: farm {p['session']['farm_duration_mean']}min "
-              f"-> break {p['session']['break_duration_mean']}min")
-        print(f"  [{INFO}] Daily limit: {p['session']['daily_hours_max']}h, "
-              f"window {p['session']['active_window'][0]}-{p['session']['active_window'][1]}")
         print(f"  [{INFO}] Mouse: overshoot {p['mouse']['overshoot_chance']*100:.0f}%, "
               f"spread +/-{p['mouse']['click_spread']}px, "
               f"hold {p['mouse']['hold_ms'][0]}-{p['mouse']['hold_ms'][1]}ms")

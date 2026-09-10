@@ -62,7 +62,6 @@
     "farm_duration_std": 20,
     "break_duration_mean": 2,
     "break_duration_std": 0.5,
-    "daily_hours_max": 6,
     "active_window": ["08:00", "23:00"],
     "idle_action_chance": 0.08
   },
