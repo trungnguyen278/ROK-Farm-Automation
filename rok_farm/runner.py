@@ -45,8 +45,8 @@ from rok_farm.persona import PersonaMixin
 from rok_farm.phases import PhasesMixin
 from rok_farm.map_memory import MapMemory
 from rok_farm.queue_ocr import (DeployPanelMixin, GatherModelMixin,
-                                MapPositionMixin, QueueMixin,
-                                _OCR_BACKEND)
+                                GemCounterMixin, MapPositionMixin,
+                                QueueMixin, _OCR_BACKEND)
 from rok_farm.recovery import RecoveryMixin
 from rok_farm.screenshots import save_screenshot
 from rok_farm.state_probe import StateProbeMixin
@@ -56,7 +56,7 @@ from rok_farm.vision_llm import VisionOracle, build_oracle
 
 class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                     StateProbeMixin, DismissMixin, QueueMixin,
-                    MapPositionMixin, DeployPanelMixin,
+                    MapPositionMixin, DeployPanelMixin, GemCounterMixin,
                     GatherModelMixin, RecoveryMixin,
                     GameLifecycleMixin, GemFlowMixin, PhasesMixin):
     """Live gem farm runner."""
@@ -341,6 +341,13 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         """Countdown so the user can get ready, then (optionally) alt-tab to the
         game. Launched from a terminal, the terminal is the foreground window, so
         the first clicks would land on it -- one ALT+TAB brings the game forward."""
+        # Baseline before anything is farmed. The city always shows
+        # the resource bar; at icon zoom the top right is the minimap
+        # instead, so this is the one moment a reading is certain.
+        start_gems = self.note_gem_count()
+        if start_gems is not None:
+            print(f"  [{INFO}] Gems at start: {start_gems:,}")
+
         for n in range(COUNTDOWN_SECONDS, 0, -1):
             print(f"  [{INFO}] Starting in {n}...")
             time.sleep(1.0)
@@ -540,4 +547,7 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
             print(f"  [{WARN}] {self.mines_completed}/{self.count} mines done")
         else:
             print(f"  [{FAIL}] No mines completed")
+        gems = self.gem_session_summary()
+        if gems:
+            print(f"  Gems: {gems}")
         print(f"\n  Screenshots: {SCREENSHOT_DIR}\n")

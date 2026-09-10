@@ -156,6 +156,9 @@ STAT = {
     "restart":    re.compile(r"Restarting the game: (?!waiting )"),
     "recovery":   re.compile(r"attempting recovery"),
 }
+# The farm's own memory is not reachable from here, so the gem total comes back
+# out of the log it writes on every reading.
+GEMS = re.compile(r"Gems now (\d+) \(([+-]\d+) since start\)")
 # The flow prints the queue five different ways. Matching only "Queue: N/M"
 # made status report 4/5 for a burst the log had already reconciled to 5/5.
 # "Queue OCR (try 1/3)" is a retry counter, not a queue, and must NOT match.
@@ -284,6 +287,11 @@ def build_status():
     q = [m for ln in lines for m in [QUEUE.search(ln)] if m]
     if q:
         out.append(f"queue    : last {q[-1].group(1)}/{q[-1].group(2)}")
+
+    gems = [m for ln in lines for m in [GEMS.search(ln)] if m]
+    if gems:
+        now_v, delta = gems[-1].group(1), gems[-1].group(2)
+        out.append(f"gems     : {int(now_v):,}  ({delta} this run)")
 
     last = last_mine_time(lines)
     if last:

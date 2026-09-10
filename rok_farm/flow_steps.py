@@ -193,6 +193,10 @@ class GemFlowMixin:
                   f"({len(self._marched_sites)} deposit(s) this session)")
             logger.info("Marched to deposit %s %d:%d", mid, sx, sy)
             self._pending_site = None
+        # Right after a march the view is at close zoom, which is exactly when
+        # the resource bar is on screen -- a free reading rather than a
+        # navigation of its own. Once per mine is cadence enough.
+        self.note_gem_count()
 
         # Step 7: prep for the next march by re-zooming to icon level on the
         # world map -- but only if a slot is still free. If this march just

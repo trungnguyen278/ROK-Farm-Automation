@@ -116,6 +116,116 @@ _POS_RE = re.compile(r"#\s*([A-Za-z]{0,2}\d{3,6})\D{0,3}X[:\s]*(\d{1,4})"
                      r"\D{0,3}Y[:\s]*(\d{1,4})", re.IGNORECASE)
 
 
+# --- Gem counter (right-most value in the top resource bar) ---------------
+# Cropped WIDE and read right-to-left rather than sized to today's number.
+# "52.531" fits a narrow slot, but the moment it grows a digit a tight crop
+# clips the leading one and still parses -- 152.531 would come back as 52.531
+# and the session total would be quietly wrong. Sized-to-fit is exactly how the
+# map position crop started returning Y:1 for Y:191. Measured over saved
+# frames: left edges of 0.88 and 0.90 both read the value on every frame that
+# has the bar, 0.92 clipped it to "531" on three of four.
+GEM_ROI = (0.88, 0.000, 0.995, 0.040)
+# Values print with dots as thousands separators ("52.531") and switch to a
+# K/M/B suffix once large ("45.5M"), so both forms have to parse or the counter
+# silently starts reading 45.5M as 455.
+_GEM_RE = re.compile(r"(\d[\d.,]*)\s*([KMB])?\s*$", re.IGNORECASE)
+
+
+def _parse_amount(text: str) -> int | None:
+    m = _GEM_RE.search(text.strip())
+    if not m:
+        return None
+    body, suffix = m.group(1), (m.group(2) or "").upper()
+    if suffix:
+        try:
+            return int(float(body.replace(",", ".")) *
+                       {"K": 1e3, "M": 1e6, "B": 1e9}[suffix])
+        except ValueError:
+            return None
+    digits = body.replace(".", "").replace(",", "")
+    return int(digits) if digits.isdigit() else None
+
+
+class GemCounterMixin:
+    """Reads the gem total off the HUD. Mixed into GemFarmRunner.
+
+    The bar is not always on screen -- at icon zoom the top right is the
+    minimap instead -- so this never demands a reading. It records whatever it
+    happens to see and the report works from the first and last it got, which
+    means a failed read at either end costs accuracy rather than the whole
+    number.
+    """
+
+    def _read_gem_count(self, frame=None) -> int | None:
+        if _OCR_BACKEND != "rapidocr" or _ocr_engine is None:
+            return None
+        if frame is None:
+            frame = self._grab()
+        if frame is None:
+            return None
+        fh, fw = frame.shape[:2]
+        x1, y1, x2, y2 = GEM_ROI
+        roi = frame[int(fh * y1):int(fh * y2), int(fw * x1):int(fw * x2)]
+        if roi.size == 0:
+            return None
+        try:
+            result, _ = _ocr_engine(roi)
+            if not result:
+                return None
+            ordered = sorted(result, key=lambda r: r[0][0][0])
+        except Exception as e:
+            logger.debug("Gem counter OCR error: %s", e)
+            return None
+        # Right-most box first; fall back to the tail of everything joined.
+        for text in (ordered[-1][1], "".join(r[1] for r in ordered)):
+            value = _parse_amount(text)
+            if value is not None:
+                return value
+        return None
+
+    def note_gem_count(self, frame=None) -> int | None:
+        """Record a reading if one is available. Cheap to call and safe to fail."""
+        value = self._read_gem_count(frame)
+        if value is None:
+            return None
+        now = time.time()
+        # A clipped read is the realistic failure: dropping a leading digit
+        # turns 52.531 into 531, which parses perfectly and would wreck the
+        # session total. One mine yields a few hundred gems, so two readings
+        # minutes apart cannot honestly halve or double -- that is a misread,
+        # not a windfall.
+        prev = getattr(self, "_gem_last", None)
+        if prev and not (prev[0] * 0.5 <= value <= prev[0] * 2):
+            logger.warning("Ignoring gem reading %d (last was %d) -- "
+                           "too big a jump to be real", value, prev[0])
+            return None
+        if getattr(self, "_gem_first", None) is None:
+            self._gem_first = (value, now)
+            logger.info("Gem counter starts at %d", value)
+        self._gem_last = (value, now)
+        # Logged every time, not just the first: the log is the only place a
+        # remote !status can see this from, and the farm's memory is not
+        # reachable from another process.
+        logger.info("Gems now %d (%+d since start)", value,
+                    value - self._gem_first[0])
+        return value
+
+    def gem_session_summary(self) -> str | None:
+        """"52,531 -> 53,120  (+589 over 2.4h)", or None if never read."""
+        first = getattr(self, "_gem_first", None)
+        last = getattr(self, "_gem_last", None)
+        if not first or not last:
+            return None
+        (v0, t0), (v1, t1) = first, last
+        hours = max(0.0, t1 - t0) / 3600.0
+        line = f"{v0:,} -> {v1:,}  ({v1 - v0:+,})"
+        if hours >= 0.05:
+            line += f" over {hours:.1f}h"
+            if v1 > v0:
+                line += f", {(v1 - v0) / hours:,.0f}/h"
+        return line
+
+
 class MapPositionMixin:
     """Reads where on the world map the camera is. Mixed into GemFarmRunner."""
 
