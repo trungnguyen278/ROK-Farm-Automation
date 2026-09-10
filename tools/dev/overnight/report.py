@@ -156,8 +156,12 @@ def main():
         if mins > 5 and done:
             print(f"  throughput : {done / (mins / 60.0):.1f} mines/hour "
                   f"(wall clock, includes waiting for troops)")
-        print(f"  marches    : {counts['march_ok']} confirmed, "
-              f"{counts['march_unver']} unverified, "
+        sent = (counts['march_ok'] + counts['march_unver']
+                + counts['march_fixed'])
+        print(f"  marches    : {sent} sent "
+              f"({counts['march_fixed']} fixed-position, "
+              f"{counts['march_ok']} queue-confirmed, "
+              f"{counts['march_unver']} unverified), "
               f"{counts['march_fail']} DID NOT FIRE")
         print(f"  fog saved  : {counts['fog_prevented']} false bail(s) blocked "
               f"by the second-frame check; {counts['retreat']} edge retreat(s)")
@@ -188,9 +192,15 @@ def main():
     attempts = tot["done"] + tot["failed"]
     print(f"  mines: {tot['done']} done / {tot['failed']} failed"
           + (f"   ({100.0 * tot['done'] / attempts:.0f}% success)" if attempts else ""))
-    print(f"  marches: {tot['march_ok']} confirmed / {tot['march_fail']} did not fire"
-          + (f"   ({100.0 * tot['march_fail'] / (tot['march_ok'] + tot['march_fail']):.0f}% lost)"
-             if (tot['march_ok'] + tot['march_fail']) else ""))
+    # Every variant counts as a march. Reporting only march_ok made the loss
+    # rate a ratio of 15 failures against 33 "confirmed" -- 31% -- while the
+    # 303 marches that used the fixed-position path sat in a bucket nothing
+    # printed. The denominator has to be every march actually attempted.
+    sent = tot['march_ok'] + tot['march_unver'] + tot['march_fixed']
+    total_tries = sent + tot['march_fail']
+    print(f"  marches: {sent} sent / {tot['march_fail']} did not fire"
+          + (f"   ({100.0 * tot['march_fail'] / total_tries:.1f}% lost)"
+             if total_tries else ""))
     print(f"  fog bails: {tot['fog']}   empty scans: {tot['empty_scan']}   "
           f"giveups: {tot['scan_giveup']}")
     print(f"  fog FALSE bails prevented: {tot['fog_prevented']}   "
