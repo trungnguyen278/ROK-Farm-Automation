@@ -82,25 +82,55 @@ def scan() -> tuple[list[Board], list[Board]]:
 
 
 def hid_present() -> bool:
-    """True when a device with the firmware's spoofed HID identity is attached.
+    """True when a device with the firmware's spoofed HID identity is attached
+    RIGHT NOW.
 
     This is the only proof the board is acting as a mouse. UART can answer PONG
     while the HID half never enumerated -- that exact split is what the
     usb_reattach() in the firmware's setup() works around, and it is worth
     reporting separately rather than folding into one "works" flag.
+
+    "Right now" is the whole difficulty. Reading
+    HKLM\\SYSTEM\\CurrentControlSet\\Enum\\USB\\VID_046D&PID_C52B looks like the
+    answer and is not: Windows keeps that key for every device it has EVER
+    seen, so it returns True for a board that is unplugged or, as happened on
+    2026-09-10, sitting in a boot loop with no USB at all. That false positive
+    is expensive here -- the GUI uses this to decide whether to tell someone
+    their second USB cable is missing, and it was confidently telling them it
+    was fine.
+
+    cfgmgr32's CM_Get_Device_ID_List with CM_GETIDLIST_FILTER_PRESENT asks the
+    question actually meant: which devices are enumerated at this moment.
     """
+    import ctypes
+    from ctypes import wintypes
+
+    CM_GETIDLIST_FILTER_ENUMERATOR = 0x1
+    CM_GETIDLIST_FILTER_PRESENT = 0x100
+    CR_SUCCESS = 0
+
     try:
-        import winreg
-    except ImportError:
-        return False
-    key_path = r"SYSTEM\CurrentControlSet\Enum\USB\VID_{:04X}&PID_{:04X}".format(
-        HID_VID, HID_PID)
-    try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as k:
-            n_sub = winreg.QueryInfoKey(k)[0]
-            return n_sub > 0
+        cfgmgr = ctypes.WinDLL("cfgmgr32")
     except OSError:
         return False
+
+    flags = CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT
+    filt = ctypes.create_unicode_buffer("USB")
+    size = wintypes.ULONG(0)
+    if cfgmgr.CM_Get_Device_ID_List_SizeW(
+            ctypes.byref(size), filt, flags) != CR_SUCCESS or not size.value:
+        return False
+
+    buf = ctypes.create_unicode_buffer(size.value)
+    if cfgmgr.CM_Get_Device_ID_ListW(filt, buf, size.value, flags) != CR_SUCCESS:
+        return False
+
+    # A REG_MULTI_SZ-style buffer: ids separated by NULs, terminated by an
+    # empty one. ctypes gives back only the first string, so split the raw
+    # buffer instead.
+    raw = buf[:size.value]
+    needle = "VID_{:04X}&PID_{:04X}".format(HID_VID, HID_PID).upper()
+    return any(needle in dev_id.upper() for dev_id in raw.split("\0") if dev_id)
 
 
 def firmware_alive(port: str) -> bool:

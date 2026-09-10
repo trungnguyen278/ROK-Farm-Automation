@@ -202,3 +202,37 @@ def test_shipped_firmware_manifest_matches_its_images():
     # missing boot_app0 (0xe000) leaves the bootloader pointing at a stale
     # slot on a board that was flashed before -- it went missing once.
     assert offsets == {0x0, 0x8000, 0xe000, 0x10000}
+
+
+def test_hid_present_agrees_with_windows():
+    """hid_present() must answer "attached now", not "seen once".
+
+    The obvious implementation reads the Enum/USB/VID_xxxx&PID_xxxx registry
+    key, which Windows keeps for every device it has EVER seen. That returned
+    True for a board sitting in a boot loop with no USB at all, and the GUI
+    used it
+    to tell the user their cabling was fine.
+    """
+    import subprocess
+
+    from tools.flash_board import HID_PID, HID_VID, hid_present
+
+    q = ("if (Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | "
+         f"Where-Object {{$_.InstanceId -like '*VID_{HID_VID:04X}&PID_{HID_PID:04X}*'}}) "
+         "{ 'YES' } else { 'NO' }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", q],
+                             capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        pytest.skip("powershell unavailable")
+    if out.returncode != 0:
+        pytest.skip("Get-PnpDevice unavailable")
+    assert hid_present() is (out.stdout.strip() == "YES")
+
+
+def test_hid_present_is_false_for_a_device_that_cannot_exist(monkeypatch):
+    from tools import flash_board
+
+    monkeypatch.setattr(flash_board, "HID_VID", 0xDEAD)
+    monkeypatch.setattr(flash_board, "HID_PID", 0xBEEF)
+    assert flash_board.hid_present() is False
