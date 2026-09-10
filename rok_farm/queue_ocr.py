@@ -325,6 +325,19 @@ class DeployPanelMixin:
                 out["load"] = int(m.group(1).replace(".", "").replace(",", ""))
             except ValueError:
                 pass
+        # Keep the raw text when the load looks nothing like the others. Over
+        # 173 readings it was exactly 30 in 167 of them and six or seven digits
+        # in five; those five are what produced the twelve-year gather estimate.
+        #
+        # The obvious theory -- the regex swallowing the number printed beside
+        # it -- does not survive reading it: \D{0,4} cannot cross the letters of
+        # "Tong suc manh", so a captured 1272602 means the load's own digits
+        # were MISSING and the pattern reached the next number along. Which
+        # number, and why it went missing, needs the text that produced it, and
+        # none of the five was ever kept. Logged rather than guessed at.
+        if out.get("load", 0) > 1000:
+            logger.warning("Implausible load %s from panel text: %r",
+                           out["load"], text[:300])
         return out or None
 
     def _log_deploy_panel(self, tag: str):
