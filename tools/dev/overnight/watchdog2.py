@@ -20,7 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2]))
 
-from rok_farm import PROJECT_ROOT, roles
+from rok_farm import PROJECT_ROOT, roles, session_control as sc
 
 LOGDIR = PROJECT_ROOT / "logs" / "overnight"
 FARM_LOG = LOGDIR / "farm_run.log"
@@ -109,12 +109,26 @@ supervisor_restarts = 0
 
 
 def kill_farm(reason):
+    """Kill every farm process, not just the pid we happen to remember.
+
+    farm_full.py re-execs itself, so a run is two processes, and the pid a
+    detached launch hands back is not reliably the parent. Killing one of the
+    pair leaves the other alive, and the next relaunch then runs a SECOND farm
+    on top of it -- two bots sharing one client, which is worse than none.
+    Ask the project's own matcher who is running instead of guessing.
+    """
     log(f"!! HALTING FARM: {reason}")
+    pids = {FARM_PID}
     try:
-        subprocess.run(["taskkill", "/PID", str(FARM_PID), "/F", "/T"],
-                       capture_output=True, timeout=30)
+        pids |= {p.pid for p in sc.farm_procs()}
     except Exception as e:
-        log(f"   taskkill failed: {e}")
+        log(f"   could not enumerate farm processes: {e}")
+    for pid in pids:
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"],
+                           capture_output=True, timeout=30)
+        except Exception as e:
+            log(f"   taskkill {pid} failed: {e}")
 
 
 def restart_farm(reason):
@@ -134,14 +148,20 @@ def restart_farm(reason):
         log(f"   {supervisor_restarts - 1} restarts already -- not restarting again")
         return False
     time.sleep(5)
+    # Detached, not a child. A plain Popen made the farm a child of the
+    # watchdog, so tree-killing the watchdog -- to restart it, to load new
+    # code, by any supervisor above it -- silently took the running farm with
+    # it. The bot hit exactly this and grew spawn_detached; the watchdog was
+    # left spawning the old way.
     try:
-        proc = subprocess.Popen(roles.command("farm"),
-                                cwd=str(PROJECT_ROOT),
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        pid = sc.spawn_detached("farm")
     except Exception as e:
         log(f"   relaunch failed: {e}")
         return False
-    FARM_PID = proc.pid
+    if pid is None:
+        log("   relaunch produced no farm process")
+        return False
+    FARM_PID = pid
     log(f"   farm relaunched as pid={FARM_PID} "
         f"(supervisor restart {supervisor_restarts}/{MAX_SUPERVISOR_RESTARTS})")
     time.sleep(20)                      # let it write its first lines
