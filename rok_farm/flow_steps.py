@@ -714,6 +714,12 @@ class GemFlowMixin:
                 logger.warning("Off home map %s -> %s; retreating and marking "
                                "the border cell", self._home_map_id, gone)
                 back = wander_heading + math.pi + random.uniform(-0.35, 0.35)
+                # Store it, do not merely walk it. _wander_heading is only
+                # written on the success and scan-exhausted paths, both of
+                # which are past this return -- so the heading that walked into
+                # the edge survived the bail and the next mine set off along it
+                # again. Retreating moved the camera; nothing moved the plan.
+                self._wander_heading = back
                 self._retreat_from_edge(back)
                 self._step_return_city(tag)
                 return None
@@ -747,6 +753,11 @@ class GemFlowMixin:
                     # the bot re-enters at the same edge pointing the same way
                     # and burns another mine discovering the same fog.
                     back = wander_heading + math.pi + random.uniform(-0.35, 0.35)
+                    # Store it, do not merely walk it -- see the note on the
+                    # off-map bail above. The comment here already said the
+                    # heading persists across mines; retreating never changed
+                    # the stored one, so it kept pointing at the fog.
+                    self._wander_heading = back
                     self._retreat_from_edge(back)
                     self._step_return_city(tag)
                     return None
