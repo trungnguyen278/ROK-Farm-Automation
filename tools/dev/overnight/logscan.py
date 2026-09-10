@@ -55,6 +55,21 @@ CAPTURE_NOISE = re.compile(
     r"^.*(?:capture\.screen_capture|vision\.template_cache):.*$\n?",
     re.MULTILINE)
 
+# A dead command channel means the farm stays alive and stops clicking, so it
+# is worth watching for directly. But "Access is denied" on its own is a
+# GENERIC Windows error string, and on this machine it is overwhelmingly
+# SetForegroundWindow being refused -- which is expected here, because the
+# foreground lock timeout is effectively infinite so a background process can
+# never take focus. Measured over the whole log: 13 lines matched the old
+# pattern and 12 of them were SetForegroundWindow, one was a real serial fault.
+# A 92% false-positive rate on a rule that can trigger a farm restart.
+#
+# So: the serial exceptions by name, plus an access denial only when it comes
+# from the serial subsystem itself -- which is the case that matters, a COM
+# port held by another process.
+SERIAL_FAULT = re.compile(
+    r"SerialException|Serial lost during|serial_comm\.[\w.]+:.*Access is denied")
+
 CLICK_RE = re.compile(
     r"\[(\d+)\] Clicking icon conf=[\d.]+ at \((\d+), (\d+)\)")
 

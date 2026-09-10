@@ -126,3 +126,46 @@ def test_capture_chatter_adds_no_bytes_at_all(real_log):
     for n in (10, 100, len(capture_lines)):
         assert logscan.flow_size("\n".join(capture_lines[:n]) + "\n") == 0, \
             f"{n} pure-capture lines still measured as flow output"
+
+
+def test_a_refused_foreground_is_not_a_serial_fault():
+    """"Access is denied" is a generic Windows error, not a dead command channel.
+
+    On this machine the foreground lock timeout is effectively infinite, so a
+    background process can never take focus and SetForegroundWindow is refused
+    routinely. The old pattern matched the bare string and so read every one of
+    those as the ESP32 link dying -- a rule that can trigger a farm restart.
+    """
+    foreground = ("2026-09-11 03:57:32,850 [DEBUG  ] gem_farm_test: "
+                  "SetForegroundWindow failed: (5, 'SetForegroundWindow', "
+                  "'Access is denied.')")
+    assert not logscan.SERIAL_FAULT.search(foreground)
+
+
+def test_real_serial_faults_still_match():
+    real = [
+        ("2026-09-09 01:05:25,972 [WARNING] serial_comm.command_buffer: "
+         "Serial lost during MOVE (attempt 1): Write timeout"),
+        ("2026-09-09 01:05:25,972 [ERROR  ] serial_comm.connection: "
+         "SerialException: could not open port"),
+        # the access denial that DOES matter: the port held by someone else
+        ("2026-09-09 01:05:25,972 [ERROR  ] serial_comm.connection: "
+         "could not open COM13: Access is denied"),
+    ]
+    for line in real:
+        assert logscan.SERIAL_FAULT.search(line), line
+
+
+def test_the_scoped_pattern_drops_the_false_positives_in_the_real_log(real_log):
+    """Measured, not asserted: 12 of 13 old matches were the foreground lock."""
+    import re as _re
+    old = _re.compile(r"SerialException|Serial lost during|Access is denied")
+    old_hits = [ln for ln in real_log.splitlines() if old.search(ln)]
+    new_hits = [ln for ln in real_log.splitlines()
+                if logscan.SERIAL_FAULT.search(ln)]
+    assert old_hits, "no serial-ish lines in this log; nothing is being proved"
+    assert len(new_hits) < len(old_hits), (
+        "the scoped pattern matches as much as the old one -- it has not "
+        "narrowed anything")
+    assert not [ln for ln in new_hits if "SetForegroundWindow" in ln], \
+        "a SetForegroundWindow line still reads as a serial fault"

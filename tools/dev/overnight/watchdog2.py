@@ -21,8 +21,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2]))
 
 from rok_farm import PROJECT_ROOT, session_control as sc
-from tools.dev.overnight.logscan import (circling_evidence, counts,
-                                         current_run, flow_size,
+from tools.dev.overnight.logscan import (SERIAL_FAULT, circling_evidence,
+                                         counts, current_run, flow_size,
                                          max_attempt_index)
 
 LOGDIR = PROJECT_ROOT / "logs" / "overnight"
@@ -327,8 +327,7 @@ while True:
     # whole file means one serial hiccup hours ago keeps re-raising this alert
     # for the rest of the run, and across every future run too. Boolean searches
     # over a cumulative log are alerts with no expiry date.
-    if re.search(r"SerialException|Serial lost during|Access is denied",
-                 text[-20000:]):
+    if SERIAL_FAULT.search(text[-20000:]):
         if not serial_flagged:
             serial_flagged = True
             log("!! serial error seen in farm log -- command channel may be dead")
