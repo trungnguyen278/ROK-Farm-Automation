@@ -33,7 +33,7 @@ from rok_farm.config import (AUTO_LAUNCH_GAME, COUNTDOWN_SECONDS,
                              DELAY_AFTER_CLICK, DELAY_BETWEEN_MINES,
                              FRAME_STALL_TIMEOUT, MAX_MARCH_MINUTES,
                              OCCUPIED_TEMPLATES, RESTART_AFTER_FAILS,
-                             RESTART_BREAK_MINUTES, RESTART_ON_RECOVERY,
+                             RESTART_ON_RECOVERY,
                              SCREENSHOT_DIR, TEMPLATE_DIR, WINDOW_LOST_TIMEOUT)
 from rok_farm.detect import DetectMixin
 from rok_farm.dismiss import DismissMixin
@@ -420,24 +420,23 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                         # measure this mine's march against a stale number.
                         self._queue_before_mine = None
 
-                status = self._check_session()
-                if status == "break":
-                    dur = self.session.get_break_duration()
-                    logger.info("Taking break for %.0fs", dur)
-                    print(f"\n  [{INFO}] Session break: {dur / 60:.1f} min")
-                    # A long break is when a real player actually quits the game
-                    # instead of leaving it running behind other windows. Short
-                    # breaks stay an alt-tab (cheap, and keeps the client warm).
-                    if (dur >= RESTART_BREAK_MINUTES * 60
-                            and self._restart_game(
-                                f"long break {dur / 60:.0f}min",
-                                extra_wait=dur)):
-                        continue
-                    self._tab_away()
-                    time.sleep(dur)
-                    self._tab_back()
-                    continue
-
+                # The scheduled session break is gone. It existed so the account
+                # would not sit logged in for hours at a stretch, and back then
+                # it genuinely did: three sessions on 2026-08-18/19 ran 228, 256
+                # and 239 minutes with the client open 100% of the time.
+                #
+                # Waiting out a gather by quitting the client already does this,
+                # and far more thoroughly. Measured over the 609-minute run on
+                # 2026-09-09: the client was CLOSED for 458 minutes across 21
+                # separate stretches -- online only 25% of the night -- and not
+                # one of those was a session break. From the game's side a
+                # 30-minute logout is a 30-minute logout; nothing distinguishes
+                # the two.
+                #
+                # It was not merely redundant but expensive: it fired on a queue
+                # that had just freed four slots and sat out 49 minutes, which
+                # is four marches thrown away for a pattern the gather waits
+                # were already producing.
                 label = f"{i}" if self.loop else f"{i}/{self.count}"
                 print(f"\n{'*' * 60}")
                 print(f"  *** MINE {label} ***")

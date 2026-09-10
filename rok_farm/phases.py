@@ -94,16 +94,6 @@ class PhasesMixin:
             self._click_pct(*self._X_CLOSE_POS[panel], jitter_px=3)
             time.sleep(random.uniform(0.4, 0.8))
 
-    def _check_session(self) -> str | None:
-        # No active-window gate: the operator runs this when they choose, and a
-        # bot that refuses to start before 09:00 is a scheduling nuisance, not a
-        # safety feature. The realism that mattered here was CLOSING the client
-        # between sessions, and that lives in the long-break roll instead (see
-        # SessionManager.get_break_duration).
-        if self.session.should_take_break():
-            return "break"
-        return None
-
     def _phase_full_cycle(self):
         """All march slots are full. Behave like a real player between bursts:
         drop back to the city for a light idle, then wait out the gather --

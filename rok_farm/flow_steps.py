@@ -599,9 +599,6 @@ class GemFlowMixin:
         while scan_count < max_scans and attempt < max_attempts:
             scan_count += 1
 
-            if self._check_session() == "break":
-                return None
-
             turn = random.gauss(0, 0.4)
             if random.random() < 0.15:
                 turn = random.uniform(-math.pi / 2, math.pi / 2)
