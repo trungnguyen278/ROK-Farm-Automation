@@ -15,7 +15,7 @@ also where every guardrail lives. The rules, in the order they are applied:
      If it does not, stop -- never click around looking for the button.
   6. On success, save the crop so the next occurrence is handled locally.
 
-Measured before building any of this (see SPEC_STATE_ORACLE.md): a
+Measured before building any of this (see docs/SPEC_STATE_ORACLE.md): a
 grounding-capable model put the close button within ~1% of the frame, while
 Google Search AI Mode was 15.5% out and would have clicked a research node.
 """

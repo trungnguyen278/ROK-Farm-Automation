@@ -1,0 +1,33 @@
+{
+  "board": "esp32-s3-devkitc-1",
+  "chip": "esp32s3",
+  "flash_mode": "qio",
+  "flash_freq": "80m",
+  "flash_size": "16MB",
+  "parts": [
+    {
+      "offset": "0x0000",
+      "file": "bootloader.bin",
+      "size": 19968,
+      "sha256": "31b3c1be45dc5a76aa85c82540d6787b675e711eaf11021a5eea7e36f469c6de"
+    },
+    {
+      "offset": "0x8000",
+      "file": "partitions.bin",
+      "size": 3072,
+      "sha256": "bd0f7954aca2ef7d925ee21aaa1f3dc8822d1d6ce5cbbd26a135e5886bfff6ce"
+    },
+    {
+      "offset": "0xe000",
+      "file": "boot_app0.bin",
+      "size": 8192,
+      "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+    },
+    {
+      "offset": "0x10000",
+      "file": "firmware.bin",
+      "size": 394032,
+      "sha256": "7a0303ecc278780c79d373312386e41143cec5f254ab452d36528db49dad077b"
+    }
+  ]
+}

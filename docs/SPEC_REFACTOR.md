@@ -5,7 +5,7 @@ Two changes, one pass:
 1. Break the 2500-line `run_farm.py` god class into a `rok_farm/` package of mixins.
 2. Add game process control: auto-launch at start, restart on recovery / long break.
 
-Decisions taken 2026-08-14 (see PLAN.md > Decisions).
+Decisions taken 2026-08-14 (see docs/PLAN.md > Decisions).
 
 ---
 

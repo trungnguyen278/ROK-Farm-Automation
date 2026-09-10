@@ -2,8 +2,8 @@
 
 ## Workflow Rules
 
-1. Read `PLAN.md` before starting any task.
-2. Update `PLAN.md` after finishing a task.
+1. Read `docs/PLAN.md` before starting any task.
+2. Update `docs/PLAN.md` after finishing a task.
 3. Communicate with the user in Vietnamese.
 4. Keep code and code comments in English.
 5. Treat `run_farm.py` (repo root) as the primary entry point unless the user explicitly says otherwise. It only parses CLI args; the runner lives in `rok_farm/`.
@@ -24,6 +24,12 @@ There is no tkinter UI and no `main.py` orchestrator. The old state-machine/dash
 
 ```text
 run_farm.py                        - entry point, CLI args only (repo root)
+app/                               - packaged app: menu, first-run wizard, console I/O
+packaging/                         - PyInstaller spec + build script
+firmware/                          - prebuilt board images + manifest.json (committed)
+tools/flash_board.py               - detect and flash a board, no PlatformIO needed
+rok_farm/roles.py                  - how to start farm/watchdog/bot, source or frozen
+rok_farm/session_control.py        - start/stop/find a run; menu and Discord share it
 rok_farm/config.py                 - constants + runtime knobs
 rok_farm/logging_setup.py          - logger + console colour tokens
 rok_farm/screenshots.py            - debug frame dumps

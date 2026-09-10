@@ -16,13 +16,13 @@ CLI-first gem farm runner. The source of truth is `run_farm.py` at the repo root
 - [x] README/AGENTS/PLAN rewritten to match the current CLI workflow.
 - [x] Python syntax compile check passes for retained `.py` files.
 - [x] Repo restructured 2026-08-14: runner moved to `run_farm.py`, dev scripts to `tools/dev/`, logs/screenshots purged.
-- [x] Spec written for the module split + game lifecycle: `SPEC_REFACTOR.md` (2026-08-14).
+- [x] Spec written for the module split + game lifecycle: `docs/SPEC_REFACTOR.md` (2026-08-14).
 - [x] Part 1: `run_farm.py` split into the `rok_farm/` mixin package (2026-08-14). 2491 lines -> 16 modules, largest 482.
 - [x] Part 2: game lifecycle wired (auto-launch at setup, restart on recovery / long break, `--no-auto-launch` / `--no-restart` / `--launcher-path`).
 - [x] Launcher Play button captured by the user (2026-08-14): `templates/launcher/play_btn.png` 358x115 + `play_btn_pct` [0.8655, 0.8299].
 - [ ] Optional: capture the in-game exit confirm (`tools\capture_launcher_btn.py --exit-confirm`) so quitting is graceful instead of taskkill.
 - [ ] Live pass on the lifecycle: one cold start from the launcher, one mid-run restart.
-- [x] Spec written for screen-state detection: `SPEC_STATE_ORACLE.md` (2026-08-14). Layer 1 local CV, layer 2 vision-model oracle behind an escalation gate.
+- [x] Spec written for screen-state detection: `docs/SPEC_STATE_ORACLE.md` (2026-08-14). Layer 1 local CV, layer 2 vision-model oracle behind an escalation gate.
 - [x] `tools/dev/measure_state_signals.py` written (liveness, modal dim, view discriminators).
 - [x] `ai_mode_web` proven working end to end (2026-08-14): `tools/dev/probe_ai_mode.py` returns correct structured JSON for a real game screenshot, free, headless, no login.
 - [x] Calibrated on the live client at 1533x863 (`logs/state_signals.json`), six states: world map near and at icon zoom, city, gather popup, alliance panel, bag panel. Numbers and their consequences are in `rok_farm/config.py`.

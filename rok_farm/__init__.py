@@ -39,8 +39,22 @@ except Exception:
     except Exception:
         pass
 
+# Where the project's files live. Everything else derives its paths from this,
+# so it is the one place that has to know whether we are running from a source
+# checkout or from the packaged app.
+#
+# Packaged (PyInstaller onedir), the exe sits at the top of the portable folder
+# with templates/, profiles/, data/ and firmware/ beside it as plain directories
+# -- deliberately NOT bundled into _internal/, so the runner writes learned
+# templates and personas exactly where it does from source, and the user can
+# see and edit those files. That keeps this the only frozen-aware line in the
+# codebase.
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # Allow `import capture`, `import vision`, ... regardless of the cwd the runner
-# was launched from.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
+# was launched from. Frozen, the packages are already inside the exe.
+if not getattr(sys, "frozen", False) and str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))

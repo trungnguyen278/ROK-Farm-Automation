@@ -17,10 +17,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, r"d:\ROK Farm Automation")
-
-LOGDIR = Path(r"d:\ROK Farm Automation\logs\overnight")
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[2]))
+
+from rok_farm import PROJECT_ROOT, roles
+
+LOGDIR = PROJECT_ROOT / "logs" / "overnight"
 FARM_LOG = LOGDIR / "farm_run.log"
 WD_LOG = LOGDIR / "watchdog.log"
 
@@ -103,8 +105,7 @@ def farm_alive():
 
 MAX_SUPERVISOR_RESTARTS = 6
 supervisor_restarts = 0
-PYTHON = r"d:\ROK Farm Automation\.venv\Scripts\python.exe"
-FARM_SCRIPT = str(HERE / "farm_full.py")
+
 
 
 def kill_farm(reason):
@@ -134,8 +135,8 @@ def restart_farm(reason):
         return False
     time.sleep(5)
     try:
-        proc = subprocess.Popen([PYTHON, FARM_SCRIPT],
-                                cwd=r"d:\ROK Farm Automation",
+        proc = subprocess.Popen(roles.command("farm"),
+                                cwd=str(PROJECT_ROOT),
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as e:
         log(f"   relaunch failed: {e}")

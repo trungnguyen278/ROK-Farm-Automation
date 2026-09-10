@@ -53,3 +53,8 @@ data/button_registry.json
 data/map_knowledge/
 data/open_marches.json
 data/wake.flag
+
+# Packaging output. dist/ and build/ are already covered by the Python block
+# above; these are the PlatformIO and PyInstaller leftovers beside them.
+*.spec.bak
+packaging/__pycache__/

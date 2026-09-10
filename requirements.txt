@@ -1,3 +1,4 @@
+# Core runtime -- the farm will not start without these.
 mss>=9.0.0
 opencv-python>=4.8.0
 numpy>=1.24.0
@@ -7,4 +8,16 @@ pywin32>=306
 windows-capture>=2.0.0
 winsdk>=1.0.0b10
 rapidocr_onnxruntime>=1.4.4
+
+# Board flashing. Pure python, so tools/flash_board.py works without
+# PlatformIO -- an end user never installs a C++ toolchain.
+esptool>=4.7,<5
+
+# Remote control (tools/remote/discord_bot.py) and the process discovery the
+# bot and watchdog both rely on. Not optional in practice: the bot is how a
+# run is started and stopped day to day.
+discord.py>=2.3.0
+psutil>=5.9.0
+
+# Tests
 pytest>=8.0.0

@@ -11,7 +11,7 @@ Flow per mine:
 
 Everything lives in the `rok_farm` package; this file only parses CLI args.
 
-Run: .venv\Scripts\python run_farm.py --port COM27 --count 2
+Run: .venv\Scripts\python run_farm.py --count 2
 """
 
 from __future__ import annotations
@@ -30,7 +30,10 @@ from rok_farm.runner import GemFarmRunner
 
 def main():
     parser = argparse.ArgumentParser(description="ROK gem farm runner")
-    parser.add_argument("--port", default="COM27")
+    parser.add_argument("--port", default=None,
+                        help="Serial port of the ESP32 (e.g. COM13). Omit to "
+                             "auto-detect it by the bridge's VID:PID -- Windows "
+                             "reassigns COM numbers across reboots and re-plugs")
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--find-only", action="store_true",
                         help="Vision-only scan: capture current frame, run template match + color filter, no ESP32")
