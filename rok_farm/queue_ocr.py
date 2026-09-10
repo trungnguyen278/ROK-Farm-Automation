@@ -270,6 +270,13 @@ GEM_BASE_PER_HOUR = 20.0
 
 OPEN_MARCHES = PROJECT_ROOT / "data" / "open_marches.json"
 
+# Above this, a gather estimate is an OCR accident rather than a long mine.
+# The longest wait the farm has ever actually planned is 49 minutes, so three
+# hours is nearly four times anything legitimate -- while the readings this
+# rejects were 386 million seconds, five orders of magnitude out. The gap is
+# wide enough that the exact figure does not matter.
+MAX_GATHER_SECONDS = 3 * 3600.0
+
 
 class GatherModelMixin:
     """Learns how long a mine actually takes. Mixed into GemFarmRunner."""
@@ -327,6 +334,22 @@ class GatherModelMixin:
             return
         self._open_marches = getattr(self, "_open_marches", [])
         est = self.predict_gather_seconds(info)
+        # A single bad OCR must not be able to park the farm. On 2026-09-10 the
+        # load field read 2144010 instead of 30 -- the regex swallowed the
+        # number printed next to it -- and the gathering buff read 0.0, so the
+        # estimate came out at 386 million seconds and the restart path would
+        # have quit the client and slept for twelve years. Across 139 panel
+        # readings the load was exactly 30 in 134 of them and garbage in the
+        # millions in the other five; there is no middle ground to preserve.
+        #
+        # An implausible estimate is dropped rather than clamped: the march IS
+        # out, we simply cannot time it, and est_home=None already means
+        # exactly that to seconds_until_first_return().
+        if est is not None and est > MAX_GATHER_SECONDS:
+            logger.warning("Ignoring absurd gather estimate %.0fs "
+                           "(load=%s bonus=%s) -- march kept, but untimed",
+                           est, info.get("load"), (info.get("bonus_pct") or [None])[0])
+            est = None
         self._open_marches.append({
             "t_sent": time.time(),
             "est_home": (time.time() + 2 * info["march_seconds"] + est)

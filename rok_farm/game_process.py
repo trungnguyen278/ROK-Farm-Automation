@@ -41,7 +41,8 @@ from rok_farm.config import (CITY_READY_TIMEOUT, GAME_LAUNCH_TIMEOUT,
                              GAME_PROCESS_NAME, GAME_WINDOW_TITLE,
                              LAUNCHER_PROCESS_NAME, LAUNCHER_UAC_TIMEOUT,
                              LAUNCHER_WINDOW_TIMEOUT, MAX_RESTARTS_PER_HOUR,
-                             MODAL_RATIO_MIN, PATHS_FILE, QUIT_TIMEOUT,
+                             MAX_PLANNED_WAIT, MODAL_RATIO_MIN,
+                             PATHS_FILE, QUIT_TIMEOUT,
                              RESTART_COOLDOWN, WORLD_MAP_BTN_THRESHOLD)
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
 from rok_farm.state_probe import dim_ratio
@@ -561,7 +562,14 @@ class GameLifecycleMixin:
         time.sleep(0.5)  # let an in-flight grab finish before ScreenCapture swaps
         try:
             self.game.quit_game(self)
-            cooldown = random.uniform(*RESTART_COOLDOWN) + max(0.0, extra_wait)
+            # Belt and braces on the caller's number. Nothing upstream should
+            # ask for a wait of days, but on 2026-09-10 a mis-read deploy panel
+            # produced an estimate of 386 million seconds and this line would
+            # have added it to the cooldown verbatim, leaving the client shut
+            # for twelve years. Capped where a "wait for the gather" stops
+            # being that: the longest genuine one on record is 49 minutes.
+            extra_wait = min(max(0.0, extra_wait), MAX_PLANNED_WAIT)
+            cooldown = random.uniform(*RESTART_COOLDOWN) + extra_wait
             print(f"  [{INFO}] Staying out for {cooldown / 60:.1f} min")
             # Say something while sleeping. A planned wait can now run past 30
             # minutes (waiting out a gather), which is LONGER than the
