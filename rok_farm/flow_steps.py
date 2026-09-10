@@ -124,6 +124,19 @@ class GemFlowMixin:
             print(f"  [{INFO}] Map book opened -- {self.mapmem.stats()}")
         self.mapmem.note_position(x, y)
         self.mapmem.record_scan(x, y, found)
+        # How far the camera claims to have moved since the last reading.
+        # Measurement only, for now: a misread coordinate ("Y:214" coming back
+        # as "Y:2144") can only be told from a real move by how far it says it
+        # travelled, and the sample available when this was written was twelve
+        # pairs -- too thin to set a threshold on, and drawn from frames whose
+        # filename order turned out not to be their capture order. Logging it
+        # on every accepted read is what makes that decision possible later
+        # with real numbers instead of a guess.
+        prev_xy = getattr(self, "_last_map_xy", None)
+        if prev_xy:
+            step = max(abs(x - prev_xy[0]), abs(y - prev_xy[1]))
+            logger.debug("map step: %d tiles (%d,%d -> %d,%d)",
+                         step, prev_xy[0], prev_xy[1], x, y)
         self._last_map_xy = (x, y)
         return self._last_map_xy
 
