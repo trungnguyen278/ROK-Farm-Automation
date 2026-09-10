@@ -141,7 +141,7 @@ def restart_farm(reason):
     with a cap so a genuine loop cannot bounce forever.
     """
     global FARM_PID, supervisor_restarts, last_size, last_change
-    global last_progress_at, last_done_at
+    global last_progress_at
     supervisor_restarts += 1
     kill_farm(reason)
     if supervisor_restarts > MAX_SUPERVISOR_RESTARTS:
@@ -168,7 +168,6 @@ def restart_farm(reason):
     last_size = -1
     last_change = time.time()
     last_progress_at = time.time()
-    last_done_at = time.time()
     return True
 
 
@@ -271,11 +270,15 @@ log(f"halt on: {CONSEC_FAIL_LIMIT} consec fails / {RESTART_LIMIT} restarts per h
 
 prev = counts(FARM_LOG.read_text(encoding="utf-8", errors="replace")
               if FARM_LOG.exists() else "")
+# Two baselines, because they answer different questions. `prev` is the HOURLY
+# summary baseline and only moves once an hour. `poll_prev` is last poll, and
+# is the only correct thing to compare against when asking "did something new
+# just happen" -- see the edge detection below.
+poll_prev = dict(prev)
 last_size = -1
 last_change = time.time()
 last_summary = time.time()
 last_oracle = 0.0
-last_done_at = time.time()
 last_progress_at = time.time()
 prev_progress_done = prev["mine_done"]
 prev_progress_failed = prev["mine_failed"]
@@ -315,8 +318,16 @@ while True:
         break
 
     cur = counts(text)
-    if cur["mine_done"] > prev["mine_done"]:
-        last_done_at = time.time()
+    # Edge detection against the PREVIOUS POLL. Comparing with `prev` looked
+    # right and was silently catastrophic: `prev` is only refreshed by the
+    # hourly summary, so one increment made `cur > prev` true on EVERY poll for
+    # the rest of the hour. The planned-wait guard below refreshes the stuck
+    # clock, and the farm now takes a planned wait every gather cycle -- far
+    # more often than hourly -- so the condition was effectively always true
+    # and the 75-minute stuck detector could never fire at all. A watchdog that
+    # cannot time out is not a watchdog.
+    new_planned_wait = cur["planned_wait"] > poll_prev["planned_wait"]
+    poll_prev = cur
 
     # consecutive failures (tail run of FAILED with no DONE after it)
     # Count failures within the CURRENT farm run only. The log is appended
@@ -395,9 +406,8 @@ while True:
     # counting "no mines" as a fault during a planned wait measures the
     # wrong thing. This also covers the serial rule, which shares the
     # same clock.
-    if cur["planned_wait"] > prev.get("planned_wait", 0):
+    if new_planned_wait:
         last_progress_at = time.time()
-        last_done_at = time.time()
 
     # Stuck check must NOT require scans to keep growing: a paralysed bot stops
     # producing them entirely, which is precisely the case worth catching.
