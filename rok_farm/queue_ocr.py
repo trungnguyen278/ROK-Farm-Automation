@@ -250,11 +250,34 @@ class MapPositionMixin:
             result, _ = _ocr_engine(roi)
             if not result:
                 return None
-            text = "".join(r[1] for r in sorted(result, key=lambda r: r[0][0][0]))
+            boxes = sorted(result, key=lambda r: r[0][0][0])
+            pieces = [r[1] for r in boxes]
+            text = "".join(pieces)
         except Exception as e:
             logger.debug("Map position OCR error: %s", e)
             return None
-        m = _POS_RE.search(text)
+
+        # Read the coordinates out of a SINGLE detection box if one holds them,
+        # and only fall back to the concatenation of all boxes if none does.
+        #
+        # Joining first is what put a Y of 2155 and 5240 into the map book. The
+        # engine returns the HUD as several boxes and they can overlap: measured
+        # on the frames that produced bad readings, the box after the
+        # coordinates began 8-10px to the LEFT of where the coordinate box
+        # ended, so the boundary glyph was decoded twice --
+        #   '#S11465X:193Y:182' + '2Q'  ->  'Y:1822'
+        #   '#S11465X:149Y:194' + '4Q'  ->  'Y:1944'
+        # -- always Y, because Y is the last number before the trailing icon,
+        # and never X, which has no neighbour to collide with. The healthy
+        # frames had gaps of +6 and +21px and joined cleanly. In every frame
+        # examined the coordinate box was already complete on its own, so
+        # preferring it costs nothing and the join stays for a genuine split.
+        for piece in pieces:
+            m = _POS_RE.search(piece)
+            if m:
+                break
+        else:
+            m = _POS_RE.search(text)
         if not m:
             logger.debug("Map position unparsed: %r", text[:40])
             return None
