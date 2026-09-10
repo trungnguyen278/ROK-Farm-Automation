@@ -50,6 +50,7 @@ class PhasesMixin:
         # game frame either way, so an unnoticed miss means every click for the
         # rest of the burst goes to whatever window is really in front.
         self._ensure_game_focused("after alt-tab back")
+        self._client_just_returned = True
         self._refresh_window()
         if self._check_reconnect_popup():
             logger.info("tab_back: dismissed reconnect popup")

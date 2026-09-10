@@ -18,7 +18,8 @@ from anti_detection.player_actions import _try_resize_game
 from vision.color_filter import normalize_frame
 
 from rok_farm import config as cfg
-from rok_farm.config import (DELAY_AFTER_SCROLL, GEM_ICON_THRESHOLD,
+from rok_farm.config import (CLIENT_READY_TIMEOUT, DELAY_AFTER_SCROLL,
+                             GEM_ICON_THRESHOLD,
                              GEM_ICON_THRESHOLD_NIGHT, TARGET_CONTENT_W,
                              TITLE_BAR_H, ZOOM_OUT_POLL, ZOOM_OUT_QUIET_DIFF,
                              ZOOM_OUT_QUIET_POLLS, ZOOM_OUT_SETTLE_CAP)
@@ -85,6 +86,53 @@ class CaptureMixin:
             print(f"  [{INFO}] Night mode detected -- normalizing frames")
             self._night_logged = True
         return normalized
+
+    def _wait_client_ready(self, reason: str) -> bool:
+        """Block until the client is in front AND actually drawing again.
+
+        Two separate failures cost mines before this, both from starting one
+        the instant the client came back:
+
+          * the window had not taken the foreground yet, so every click went to
+            whatever was in front. Three of twelve gather waits on 2026-09-09
+            lost their first mine that way, with four more warned and recovered.
+          * the client was up but not yet redrawing, so WGC handed back the
+            same frame for about 75 seconds and three mines failed in a row on
+            an identical 0.561 template score.
+
+        Liveness is judged on the WHOLE frame, not _settle_patch. That crop
+        deliberately excludes the HUD because the chat and the counters animate
+        on their own -- which is exactly what makes them the honest answer to
+        "is this client drawing at all", where a world map at icon zoom is
+        legitimately still.
+
+        Two changes are required, not one: _grab() alternates between two
+        buffers, so a frozen capture can still hand back a different stale
+        image once. Frozen reads A, B, B, B...; live keeps changing.
+        """
+        self._ensure_game_focused(reason)
+        started = time.time()
+        deadline = started + CLIENT_READY_TIMEOUT
+        prev, changes = None, 0
+        while time.time() < deadline:
+            frame = self._grab()
+            if frame is not None:
+                if prev is not None and not np.array_equal(frame, prev):
+                    changes += 1
+                    if changes >= 2:
+                        waited = time.time() - started
+                        if waited > 2.0:
+                            print(f"  [{INFO}] Client ready after {waited:.1f}s "
+                                  f"({reason})")
+                        logger.info("Client ready after %.1fs (%s)", waited, reason)
+                        return True
+                prev = frame
+            time.sleep(0.5)
+        print(f"  [{WARN}] Client still not drawing after "
+              f"{CLIENT_READY_TIMEOUT:.0f}s ({reason}) -- going ahead anyway")
+        logger.warning("Client not ready after %.0fs (%s)",
+                       CLIENT_READY_TIMEOUT, reason)
+        return False
 
     @staticmethod
     def _settle_patch(frame) -> np.ndarray | None:

@@ -437,6 +437,7 @@ class GameLifecycleMixin:
             return False
         if not self._wait_for_game_window():
             return False
+        self._client_just_returned = True
         return self._wait_until_in_city()
 
     def _wait_for_game_window(self, timeout: float = GAME_LAUNCH_TIMEOUT) -> bool:
@@ -596,6 +597,9 @@ class GameLifecycleMixin:
         self._view_is_world = False
         self._last_frame_ok = time.time()
         self._window_lost_since = None
+        # The client is back but not necessarily in front or drawing yet. The
+        # next mine waits for both instead of clicking into whatever is there.
+        self._client_just_returned = True
         queue = self._detect_march_queue() if self.loop else None
         if queue:
             self.mines_completed = queue[0]

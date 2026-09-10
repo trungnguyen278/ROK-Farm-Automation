@@ -159,7 +159,14 @@ class GemFlowMixin:
         # 08:31, three "City -> world map" toggles in a row that changed nothing
         # because the game was behind the window the human had switched to.
         # Checking only in _tab_back and before the deploy chain was too narrow.
-        self._ensure_game_focused(f"start of mine {idx}")
+        if getattr(self, "_client_just_returned", False):
+            # Only after the client has actually been away. Paying the liveness
+            # check on every mine would cost a second or two each time for a
+            # state that cannot have changed since the last one.
+            self._client_just_returned = False
+            self._wait_client_ready(f"start of mine {idx}")
+        else:
+            self._ensure_game_focused(f"start of mine {idx}")
 
         # Step 1: Get to world map at icon-zoom level
         # If already on world map (from previous mine), skip city detour

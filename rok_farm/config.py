@@ -217,6 +217,11 @@ RESTART_COOLDOWN = (20.0, 60.0)  # random pause between quit and relaunch
 # Hard ceiling on a planned wait, so no single bad reading can shut the
 # client for days. The longest genuine gather wait on record is 49 min.
 MAX_PLANNED_WAIT = 3 * 3600.0
+# How long to wait for the client to start drawing again after it comes
+# back, before giving up and mining anyway. The longest stall measured is
+# about 76s (2026-09-09, attaching to a backgrounded client), so this
+# clears it with margin. Only paid when the client has just returned.
+CLIENT_READY_TIMEOUT = 90.0
 
 # --- Layer 1: local screen-state probe ---
 # Measured on the live client at 1533x863, 2026-08-14
