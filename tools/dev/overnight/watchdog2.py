@@ -21,6 +21,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2]))
 
 from rok_farm import PROJECT_ROOT, roles, session_control as sc
+from tools.dev.overnight.logscan import (circling_evidence, counts,
+                                         current_run, flow_size)
 
 LOGDIR = PROJECT_ROOT / "logs" / "overnight"
 FARM_LOG = LOGDIR / "farm_run.log"
@@ -42,50 +44,14 @@ STUCK_MINUTES = 75          # no mine started or finished for this long
 SUMMARY_EVERY = 3600        # hourly summary
 ORACLE_EVERY = 3600         # hourly screen check (was 12/hr)
 POLL = 15
-RETRY_ALERT = 3             # attempts on one mine before it reads as circling
+# How long before the same circling evidence is worth saying again. The old
+# alert used a high-water mark that was never reset, so once it had seen a 7
+# it went silent for the rest of the run -- an alert that disarms itself
+# permanently after one busy hour.
+RETRY_COOLDOWN = 900
 
 FARM_PID = int(sys.argv[1])
 DEADLINE = datetime.strptime(sys.argv[2], "%Y-%m-%d %H:%M") if len(sys.argv) > 2 else None
-
-PATTERNS = {
-    "mine_done":    r"Mine \d+ DONE",
-    "mine_failed":  r"Mine \d+ FAILED",
-    "empty_scan":   r"no icons",
-    "scan_giveup":  r"consecutive empty scans",
-    "fog_bail":     r"FOG \(out of kingdom\)",
-    "clf_reject":   r"Classifier reject|Classifier REJECT",
-    "color_reject": r"Color reject|color REJECT",
-    "gather_miss":  r"gather_btn not found",
-    "refused":      r"Refusing click",
-    "march_sent":   r"March sent",
-    # Only FAULT restarts. The farm now quits the client on purpose while
-    # troops are out ("waiting Nmin for troops"), and counting those as
-    # failures would trip the 5-per-hour halt on a perfectly healthy run.
-    "restart":      r"Restarting the game: (?!waiting )",
-    "world_fail":   r"Not on world map after toggling",
-    "recovery":     r"attempting recovery",
-    "skip_clicked": r"Skip already-clicked icon",
-    "occupied":     r"occupied \(",
-    # A PLANNED wait: the farm quit the client on purpose and is sleeping
-    # out a gather. It produces no mines and no flow steps BY DESIGN, so
-    # every "is it stuck" clock must count it as activity. Three separate
-    # thresholds tripped on this before it was handled.
-    "planned_wait": r"Staying out for|Still out, \d+ min to go",
-}
-
-
-def max_attempt_index(text, tail_chars=6000):
-    """Highest per-mine attempt number seen recently.
-
-    The flow prints "[3] gather_btn ..." where the bracket is the attempt
-    counter within one mine, so a high number means it kept going back to the
-    same area -- the circling the player spotted by eye. Only the tail is
-    scanned so an old spike does not shadow the current state.
-    """
-    hits = re.findall(r"\[(\d+)\] (?:gather_btn|re-check|after mine click)",
-                      text[-tail_chars:])
-    return max((int(h) for h in hits), default=0)
-
 
 def log(msg):
     line = f"{datetime.now():%H:%M:%S}  {msg}"
@@ -169,27 +135,6 @@ def restart_farm(reason):
     last_change = time.time()
     last_progress_at = time.time()
     return True
-
-
-def counts(text):
-    return {k: len(re.findall(p, text)) for k, p in PATTERNS.items()}
-
-
-# Lines the CAPTURE THREAD emits. It is a daemon that grabs frames forever,
-# entirely independently of whether the flow is making progress, so its output
-# is not evidence of life -- and counting it as such is what blinded the silence
-# check on 2026-08-18: the main thread sat in a 1025s sleep in front of a
-# reconnect dialog, the client died underneath it, and the log still grew by a
-# "Window 'Rise of Kingdoms' not found" line every 10s for 17 minutes. Byte
-# growth said healthy the whole time. Silence is now judged on everything else.
-CAPTURE_NOISE = re.compile(
-    r"^.*(?:capture\.screen_capture|vision\.template_cache):.*$",
-    re.MULTILINE)
-
-
-def flow_size(text):
-    """Length of the log with capture-thread chatter removed."""
-    return len(CAPTURE_NOISE.sub("", text))
 
 
 # --- optional: ask the project's oracle what the screen shows ---
@@ -283,7 +228,7 @@ last_progress_at = time.time()
 prev_progress_done = prev["mine_done"]
 prev_progress_failed = prev["mine_failed"]
 serial_flagged = False
-last_retry_alert = 0
+last_retry_alert = 0.0
 # Baselined, like every other counter here. The farm log is append-mode on
 # purpose, so counts() returns totals over EVERY run in the file; starting this
 # at 0 meant the first poll saw the whole file's history as one fresh restart
@@ -337,7 +282,7 @@ while True:
     # halted again 40 seconds after coming back, then again, burning all six
     # supervisor restarts in four minutes without the new process ever getting
     # a chance. The start banner is the boundary the log already provides.
-    run = text[text.rfind("=== farm start "):] if "=== farm start " in text else text
+    run = current_run(text)
     events = re.findall(r"Mine \d+ (FAILED|DONE)", run)
     consec = 0
     for e in reversed(events):
@@ -421,11 +366,10 @@ while True:
 
     # Circling one mine is a ban-shaped behaviour, so surface it as soon as it
     # appears rather than waiting for the next summary.
-    retries = max_attempt_index(text)
-    if retries >= RETRY_ALERT and retries > last_retry_alert:
-        last_retry_alert = retries
-        log(f"!! {retries} attempts within one mine -- check it is not circling "
-            f"the same node")
+    why = circling_evidence(text)
+    if why and time.time() - last_retry_alert > RETRY_COOLDOWN:
+        last_retry_alert = time.time()
+        log(f"!! possible circling: {why}")
 
     if time.time() - last_summary >= SUMMARY_EVERY:
         d = {k: cur[k] - prev[k] for k in cur}
