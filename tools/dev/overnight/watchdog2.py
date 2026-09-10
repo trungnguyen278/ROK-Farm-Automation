@@ -292,7 +292,15 @@ while True:
         last_done_at = time.time()
 
     # consecutive failures (tail run of FAILED with no DONE after it)
-    events = re.findall(r"Mine \d+ (FAILED|DONE)", text)
+    # Count failures within the CURRENT farm run only. The log is appended
+    # across restarts on purpose, so counting over the whole file meant the 14
+    # failures that triggered a relaunch were still the newest events a second
+    # later -- the freshly started farm had produced none of its own yet. It
+    # halted again 40 seconds after coming back, then again, burning all six
+    # supervisor restarts in four minutes without the new process ever getting
+    # a chance. The start banner is the boundary the log already provides.
+    run = text[text.rfind("=== farm start "):] if "=== farm start " in text else text
+    events = re.findall(r"Mine \d+ (FAILED|DONE)", run)
     consec = 0
     for e in reversed(events):
         if e == "FAILED":

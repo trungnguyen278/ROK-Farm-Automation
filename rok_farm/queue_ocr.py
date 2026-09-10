@@ -316,8 +316,14 @@ class GatherModelMixin:
             logger.warning("Could not read open marches: %s", e)
             return
         now = time.time()
+        # The same ceiling note_march_sent applies. Guarding only the creation
+        # of estimates left the door open at the other end: a record written
+        # before that guard existed was reloaded intact after every restart,
+        # still claiming to be twelve years out. Anything further away than a
+        # gather could possibly be is not a march we can time.
         live = [m for m in data
-                if isinstance(m, dict) and (m.get("est_home") or 0) > now]
+                if isinstance(m, dict)
+                and now < (m.get("est_home") or 0) <= now + MAX_GATHER_SECONDS]
         self._open_marches = live
         if data:
             logger.info("Restored %d outstanding march(es) from disk "
