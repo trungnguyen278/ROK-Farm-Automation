@@ -4,7 +4,8 @@ Double-clicked with no arguments it shows a menu. Given a role it becomes that
 role, which is how the farm, the watchdog and the Discord bot start each other
 without a venv or a .py file on disk:
 
-    ROK Farm.exe                 -> menu
+    ROK Farm.exe                 -> the window (four tabs, big buttons)
+    ROK Farm.exe menu            -> the old text menu, for a terminal
     ROK Farm.exe farm            -> the overnight farm loop
     ROK Farm.exe watchdog <pid>  -> the supervisor for that farm
     ROK Farm.exe bot             -> the Discord remote control
@@ -79,6 +80,22 @@ def role_menu(args):
     return menu.run()
 
 
+def role_gui(args):
+    """The window. Default, because this is what a non-technical user wants.
+
+    Falls back to the text menu rather than dying if tkinter is unavailable --
+    a stripped Python, or a build that excluded it.
+    """
+    try:
+        from app import gui
+    except Exception as e:
+        ui.warn(t(f"Không mở được cửa sổ ({type(e).__name__}), dùng menu chữ.",
+                  f"Could not open the window ({type(e).__name__}); using the "
+                  f"text menu."))
+        return role_menu(args)
+    return gui.run()
+
+
 ROLES = {
     "farm": role_farm,
     "watchdog": role_watchdog,
@@ -87,12 +104,13 @@ ROLES = {
     "flash": role_flash,
     "setup": role_setup,
     "menu": role_menu,
+    "gui": role_gui,
 }
 
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    role = argv[0] if argv else "menu"
+    role = argv[0] if argv else "gui"
     if role in ("-h", "--help"):
         ui.say(__doc__)
         return 0

@@ -20,7 +20,14 @@ import statistics
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_LOG = Path(r"d:\ROK Farm Automation\logs\overnight\farm_run.log")
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from rok_farm import PROJECT_ROOT
+
+# Derived, never a drive letter: this ships to other machines.
+DEFAULT_LOG = PROJECT_ROOT / "logs" / "overnight" / "farm_run.log"
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 TS = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
@@ -30,6 +37,12 @@ PATTERNS = {
     "failed":        re.compile(r"Mine (\d+) FAILED"),
     "march_ok":      re.compile(r"March sent \(queue confirmed\)"),
     "march_unver":   re.compile(r"March sent \(unverified\)"),
+    # The commonest march line by far, and it was matched by NOTHING: over
+    # 71 runs this counted 303 marches to march_ok's 33, so every report so
+    # far understated throughput about tenfold. The three variants are
+    # mutually exclusive (verified: no line matches two) and there is exactly
+    # one per mine, immediately before "Mine N DONE".
+    "march_fixed":   re.compile(r"March sent \(fixed"),
     "march_fail":    re.compile(r"March did NOT fire"),
     "fog":           re.compile(r"FOG \(out of kingdom\)"),
     "empty_scan":    re.compile(r"no icons"),

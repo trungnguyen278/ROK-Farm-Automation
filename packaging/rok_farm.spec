@@ -22,7 +22,8 @@ ROOT = Path(SPECPATH).parent          # noqa: F821  (SPECPATH is injected)
 # rok_farm/roles.py or something a role reaches for lazily.
 hiddenimports = [
     "run_farm",
-    "app.main", "app.menu", "app.wizard", "app.ui",
+    "app.main", "app.menu", "app.wizard", "app.ui", "app.gui", "app.stats",
+    "tkinter", "tkinter.ttk", "tkinter.messagebox",
     "rok_farm.roles", "rok_farm.session_control",
     "tools.flash_board",
     "tools.dev.overnight.farm_full",
@@ -61,7 +62,8 @@ a = Analysis(                                                   # noqa: F821
     runtime_hooks=[],
     # PlatformIO's toolchain, the test suite and the dev probes have no place
     # in a user's download.
-    excludes=["tkinter", "pytest", "playwright", "PyInstaller"],
+    # tkinter is NOT excluded: app/gui.py is the whole point of the build.
+    excludes=["pytest", "playwright", "PyInstaller"],
     noarchive=False,
 )
 
@@ -77,7 +79,12 @@ exe = EXE(                                                      # noqa: F821
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,          # UPX-packed exes are a reliable antivirus false positive
-    console=True,       # it is a text menu; a windowed build would show nothing
+    # Windowed. A console build flashes a black window every time the GUI
+    # spawns a role (farm, watchdog, bot are all `cmd /c start` of this same
+    # exe), and closing that window would look like the way to stop a run.
+    # Every role already writes to logs/overnight/*.log, and builtins.print()
+    # is a no-op when sys.stdout is None, so nothing is lost.
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

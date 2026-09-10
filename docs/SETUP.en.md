@@ -24,15 +24,23 @@ reports when nothing is plugged in at all.
 
 **If the app says it cannot find the board, change the cable first.**
 
-### ⚠️ The ESP32-S3 has TWO USB sockets
+### ⚠️ The ESP32-S3 has TWO USB sockets — farming needs BOTH
 
-Read the silkscreen next to each socket:
+Read the silkscreen. The two sockets do different jobs:
 
-- **UART** or **COM** — use this one
-- **USB** or **OTG** — the other one; the app **cannot flash** through it
+| Socket | Job | To flash | To farm |
+|---|---|---|---|
+| **UART** / **COM** | Carries commands from the PC | **Required** | **Required** |
+| **USB** / **OTG** | *Is* the mouse and keyboard | not needed | **Required** |
 
-Get it wrong and the app says so: *"Found the board's native USB socket — move
-the cable to the UART/COM socket."*
+- **Flashing** only needs UART/COM. Use the other one and the app says
+  *"Wrong USB socket"* and refuses.
+- **Farming** needs **both plugged into the PC**. Without the native USB the
+  board still answers PING perfectly and **the cursor never moves** — the
+  hardest failure to guess at, because everything looks fine.
+
+The native socket also **needs a data cable**. A charge-only one powers the
+board, PING works, and the HID never appears.
 
 ---
 
@@ -56,37 +64,54 @@ Right-click `ROK Farm.exe` → **Run as administrator**.
 > shows a UAC prompt — and the **bot cannot click it for you**, because
 > Windows' secure desktop is invisible to every screen-capture method.
 
-### Step 3. Pick item 1 — First-run setup
+### Step 3. Four tabs — work left to right
 
-Five steps. Each one reports what it found before changing anything, so
-**re-running it is safe** — that is also how you fix a step that went wrong.
+| Tab | What it is for |
+|---|---|
+| **1. ESP32 board** | See whether the board was found, and press **Flash the board** |
+| **2. Run the farm** | **Start farming** / **Stop farming** |
+| **3. Discord** | Paste the token + IDs, **Save settings**, then **Start the bot** |
+| **4. Statistics** | Mines farmed, marches sent, success rate, what failed |
 
-| Step | What it does | What you do |
-|---|---|---|
-| 1 | Check libraries | Nothing (the packaged build always has them) |
-| 2 | Find the board, flash it | Plug the board into the UART/COM socket |
-| 3 | Find Rise of Kingdoms | Paste the path if it cannot find it |
-| 4 | Configure Discord | Paste a token + your user ID (see below) |
-| 5 | Summary | Read which steps did not finish |
+The status box at the top of each tab refreshes every two seconds, so plugging
+a cable in changes it on its own — nothing to press.
 
-**Step 2 is the important one — and you build nothing.** The prebuilt firmware
-ships in the `firmware/` folder. The app finds the board, checks whether it is
-already flashed, and only writes when it needs to:
+### Step 4. Tab 1 — flash the board
 
-- Already flashed → it asks PING, the board answers PONG, flashing is skipped
-- Blank board → it flashes, waits for the reboot, then verifies
+**You build nothing.** The prebuilt firmware ships in the `firmware/` folder,
+and the app works out by itself whether the board already has it.
 
-Do not unplug it while it is writing.
+The tab shows one of three states, each with its own instructions underneath:
 
-### Step 4. Start farming
+- **Board found on COMxx** → press **Flash the board** (~15 s, do not unplug).
+  If it already runs the firmware you do not need to press anything.
+- **Wrong USB socket** → it can see the native USB, not the UART bridge. Move
+  the cable.
+- **No board found** → it lists four things to check in order: the cable, both
+  sockets plugged in, the right board (ESP32-**S3** N16R8 — a plain ESP32 will
+  not work), and holding BOOT if flashing keeps failing.
 
-Back at the menu → **item 2**.
+### Step 5. Tab 2 — run the farm
+
+Press **Start farming**.
 
 > **Prefer the game CLOSED before you press it.** The bot launches it itself.
 > Attaching to a client already running in the background **costs the first
 > three mines**: ROK stops redrawing when it is not in front, the capture layer
 > keeps handing back the last frame it got, and the flow fails mine after mine
 > for about 75 seconds.
+
+It will ask again if you have touched the mouse in the last five minutes,
+because the board would fight you for it.
+
+**Closing the app window does NOT stop the farm.** It runs detached on purpose,
+so restarting the app cannot take a live run down. To really stop it, press
+**Stop farming**.
+
+### Step 6. Tab 3 — Discord control (optional)
+
+Skip it if you like; the farm still runs from tab 2. See the Discord section
+below.
 
 ---
 
@@ -109,7 +134,8 @@ Flash the board (uses the prebuilt images, no PlatformIO needed):
 Run:
 
 ```powershell
-.venv\Scripts\python -m app.main            # the menu
+.venv\Scripts\python -m app.main            # the window (GUI)
+.venv\Scripts\python -m app.main menu       # text menu, for a terminal
 .venv\Scripts\python run_farm.py --count 2  # straight to the farm
 ```
 
@@ -166,7 +192,11 @@ Discord → **Settings** → **Advanced** → turn on **Developer Mode**. Then:
 
 ### Start the bot
 
-Menu → **item 4**. It posts "Bot online" in the pinned channel.
+The **3. Discord** tab: paste the three values, press **Save settings**, then
+**Start the bot**. It posts "Bot online" in the pinned channel.
+
+Those three boxes are the `.env` file next to `ROK Farm.exe`. It **holds your
+token** — do not share it.
 
 ### Commands
 
@@ -197,10 +227,10 @@ Menu → **item 4**. It posts "Bot online" in the pinned channel.
 | Flashed but no answer | Unplug and replug once. |
 | Flashing keeps failing | Hold the **BOOT** button while plugging the cable in. |
 | Answers PING but Windows shows no mouse | Unplug and replug. |
-| Farm runs but the mouse never moves | An older farm process still holds the COM port. Menu item 3 stops everything. |
+| Farm runs but the mouse never moves | **The second USB socket is not plugged in** (USB/OTG). The board still answers PING, so everything looks fine. Plug it in. If both are in: an older farm process holds the COM port — tab 2, Stop farming. |
 | Loses the first three mines every run | You started with the game already open. Close it and start again. |
 | A UAC prompt appears and nothing happens | Run the app with **Run as administrator**. |
-| Closing the menu leaves the farm running | By design. It runs detached. Stop it with **item 3** or `!stop`. |
+| Closing the app leaves the farm running | By design. It runs detached. Stop it with **Stop farming** on tab 2, or `!stop`. |
 | The Discord bot ignores commands in a server | **MESSAGE CONTENT INTENT** is off. |
 
 ### Where the logs are

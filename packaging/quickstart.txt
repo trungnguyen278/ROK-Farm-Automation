@@ -1,0 +1,43 @@
+ROK FARM -- BAT DAU O DAY
+=========================
+
+1. Nhay CHUOT PHAI vao 'ROK Farm.exe' -> Run as administrator
+2. Cua so co 4 the. Lam tu trai sang phai:
+
+     The 1 - Mach ESP32 : bam 'Nap firmware vao mach'
+     The 2 - Chay farm  : bam 'Bat dau farm'
+     The 3 - Discord    : dan token + ID, de dieu khien tu dien thoai
+     The 4 - Thong ke   : so mo da farm, ti le thanh cong
+
+
+QUAN TRONG -- mach ESP32-S3 co HAI cong USB-C
+---------------------------------------------
+
+     Luc NAP  : chi can cong UART/COM
+     Luc CHAY : phai cam CA HAI cong vao may tinh.
+
+Thieu cong thu hai thi mach van tra loi binh thuong nhung con tro chuot
+KHONG he nhuc nhich -- day la loi kho doan nhat, vi moi thu trong nhu
+dang chay dung.
+
+
+CAP USB
+-------
+
+Phai dung cap TRUYEN DU LIEU. Cap chi-de-sac trong y het nhung khong chay.
+Neu app bao khong thay mach, viec DAU TIEN la doi cap khac.
+
+
+LOAI MACH
+---------
+
+Can ESP32-S3 DevKitC-1, ban N16R8 (16MB flash).
+ESP32 thuong (khong phai S3) KHONG chay duoc: no khong co USB goc nen
+khong gia lam chuot duoc.
+
+
+HUONG DAN DAY DU
+----------------
+
+Tieng Viet : docs\SETUP.vi.md
+English    : docs\SETUP.en.md

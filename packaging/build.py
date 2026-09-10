@@ -34,6 +34,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+CRLF = chr(13) + chr(10)   # spelled this way: see write_readme()
 DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 APP = DIST / "ROK Farm"
@@ -98,17 +99,22 @@ def stage_data() -> list[str]:
 
 
 def write_readme() -> None:
-    (APP / "DOC DAY TRUOC.txt").write_text(
-        "ROK FARM -- BAT DAU O DAY\r\n"
-        "=========================\r\n\r\n"
-        "1. Nhay dup vao 'ROK Farm.exe'\r\n"
-        "2. Chon muc 1 (Cai dat lan dau) va lam theo huong dan tren man hinh\r\n"
-        "3. Xong thi chon muc 2 de bat dau farm\r\n\r\n"
-        "Huong dan day du: mo thu muc docs\\ -> SETUP.vi.md\r\n"
-        "Full guide in English: docs\\SETUP.en.md\r\n\r\n"
-        "Luu y: cam mach ESP32 vao cong USB co chu UART/COM, va phai dung\r\n"
-        "cap TRUYEN DU LIEU (cap chi de sac trong y het nhung khong chay).\r\n",
-        encoding="utf-8")
+    """Copy the quick-start note to the top of the folder.
+
+    The text lives in packaging/quickstart.txt rather than in this file: it is
+    prose for a user, it gets edited far more often than the build does, and
+    keeping it out of Python source means no one has to think about escaping
+    a Windows path inside a string literal.
+
+    Unaccented on purpose -- it is opened in Notepad on machines whose default
+    encoding is anyone's guess, and a mojibake quick-start is worse than a
+    plain one. CRLF for the same reason.
+    """
+    src = Path(__file__).resolve().parent / "quickstart.txt"
+    text = src.read_text(encoding="utf-8")
+    with (APP / "DOC DAY TRUOC.txt").open("w", encoding="utf-8",
+                                          newline=CRLF) as fh:
+        fh.write(text)
     log("staged DOC DAY TRUOC.txt")
 
 

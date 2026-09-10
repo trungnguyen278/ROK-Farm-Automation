@@ -24,15 +24,23 @@ bạn chưa cắm gì.
 
 **Nếu app báo không thấy mạch, việc đầu tiên là đổi cáp khác.**
 
-### ⚠️ Mạch ESP32-S3 có HAI cổng USB
+### ⚠️ Mạch ESP32-S3 có HAI cổng USB — khi chạy farm phải cắm CẢ HAI
 
-Nhìn kỹ chữ in cạnh cổng trên bo mạch:
+Nhìn chữ in cạnh cổng trên bo mạch. Hai cổng làm hai việc khác nhau:
 
-- **UART** hoặc **COM** — cắm vào cổng này
-- **USB** hoặc **OTG** — cổng còn lại, app **không nạp** được qua cổng này
+| Cổng | Việc | Lúc nạp | Lúc chạy farm |
+|---|---|---|---|
+| **UART** / **COM** | Nhận lệnh từ máy tính | **Bắt buộc** | **Bắt buộc** |
+| **USB** / **OTG** | Đóng vai chuột + bàn phím thật | không cần | **Bắt buộc** |
 
-Cắm nhầm thì app sẽ nói ra: *"Thấy cổng USB gốc của mạch — hãy chuyển cáp sang
-cổng UART/COM"*.
+- **Nạp firmware**: chỉ cần cổng UART/COM. Cắm vào cổng kia thì app báo
+  *"Sai cổng USB"* và không nạp được.
+- **Chạy farm**: phải cắm **cả hai cổng vào máy tính**. Thiếu cổng USB gốc thì
+  mạch vẫn trả lời PING bình thường nhưng **con trỏ chuột không hề nhúc nhích** —
+  đây là lỗi khó đoán nhất, vì mọi thứ trông như đang hoạt động.
+
+Cổng USB gốc cũng **bắt buộc dùng cáp truyền dữ liệu**. Cáp sạc để nó có điện,
+trả lời PING, mà HID không bao giờ hiện ra.
 
 ---
 
@@ -57,36 +65,51 @@ Nhấp phải `ROK Farm.exe` → **Run as administrator**.
 > Windows hiện hộp thoại UAC — và **bot không bấm hộ được**, vì màn hình bảo
 > mật của Windows vô hình với mọi cách chụp màn hình.
 
-### Bước 3. Chọn mục 1 — Cài đặt lần đầu
+### Bước 3. Cửa sổ có 4 thẻ — làm từ trái sang phải
 
-App sẽ dẫn qua 5 bước. Mỗi bước đều nói rõ nó tìm thấy gì trước khi thay đổi
-gì, nên **chạy lại nhiều lần vẫn an toàn** — đó cũng là cách sửa một bước bị lỗi.
+| Thẻ | Việc |
+|---|---|
+| **1. Mạch ESP32** | Xem đã thấy mạch chưa, và bấm **Nạp firmware vào mạch** |
+| **2. Chạy farm** | **Bắt đầu farm** / **Dừng farm** |
+| **3. Discord** | Dán token + ID, **Lưu cài đặt**, rồi **Bật bot** |
+| **4. Thống kê** | Số mỏ đã farm, lượt hành quân, tỉ lệ thành công, vì sao hỏng |
 
-| Bước | App làm gì | Bạn làm gì |
-|---|---|---|
-| 1 | Kiểm tra thư viện | Không cần làm gì (bản đóng gói luôn đủ) |
-| 2 | Tìm mạch, nạp firmware | Cắm mạch vào cổng UART/COM |
-| 3 | Tìm Rise of Kingdoms | Dán đường dẫn nếu app không tự tìm ra |
-| 4 | Cấu hình Discord | Dán token + user ID (xem phần dưới) |
-| 5 | Tổng kết | Đọc xem có bước nào chưa xong |
+Ô trạng thái trên cùng mỗi thẻ tự cập nhật 2 giây một lần, nên bạn cứ cắm cáp
+vào là thấy nó đổi ngay, không cần bấm gì.
 
-**Bước 2 quan trọng nhất — và bạn không phải build gì cả.** Firmware đã được
-dựng sẵn nằm trong thư mục `firmware/`. App tự tìm mạch, tự kiểm tra xem mạch
-đã có firmware chưa, và chỉ nạp khi cần:
+### Bước 4. Thẻ 1 — nạp mạch
 
-- Mạch đã có firmware → app hỏi PING, mạch trả PONG, app bỏ qua bước nạp
-- Mạch còn trắng → app nạp, chờ mạch khởi động lại, rồi kiểm tra lại
+**Bạn không phải build gì cả.** Firmware dựng sẵn nằm trong thư mục `firmware/`.
+App tự tìm mạch và tự biết mạch đã có firmware hay chưa.
 
-Đừng rút cáp trong lúc nó đang nạp.
+Thẻ này cho một trong ba trạng thái, và trạng thái nào cũng kèm hướng dẫn ngay
+bên dưới:
 
-### Bước 4. Bắt đầu farm
+- **Đã thấy mạch ở COMxx** → bấm **Nạp firmware vào mạch** (khoảng 15 giây,
+  đừng rút cáp). Nếu mạch đã chạy đúng rồi thì bạn không cần bấm.
+- **Sai cổng USB** → app thấy cổng USB gốc chứ không phải cổng UART. Chuyển cáp.
+- **Không thấy mạch** → app liệt kê 4 thứ cần kiểm tra theo thứ tự: cáp, cắm đủ
+  hai cổng, đúng loại mạch (ESP32-**S3** N16R8, ESP32 thường không chạy được),
+  và cách giữ nút BOOT nếu nạp mãi vẫn lỗi.
 
-Về menu chính → chọn **mục 2**.
+### Bước 5. Thẻ 2 — chạy farm
+
+Bấm **Bắt đầu farm**.
 
 > **Nên ĐÓNG Rise of Kingdoms trước khi bấm.** Bot tự mở game lấy. Nếu bám vào
 > một client đang chạy sẵn ở chế độ nền, bot sẽ **hỏng 3 mỏ đầu tiên**: ROK
 > ngừng vẽ lại màn hình khi không ở tiền cảnh, hệ thống chụp màn hình cứ trả
 > về đúng khung hình cũ, và bot thất bại liên tiếp khoảng 75 giây.
+
+App sẽ hỏi lại nếu bạn vừa dùng chuột trong 5 phút qua — vì mạch sẽ giành chuột
+với bạn.
+
+**Đóng cửa sổ app KHÔNG dừng farm.** Farm chạy tách rời, cố ý như vậy để tắt/mở
+app không giết một phiên đang chạy. Muốn dừng hẳn thì bấm **Dừng farm**.
+
+### Bước 6. Thẻ 3 — điều khiển bằng Discord (tuỳ chọn)
+
+Bỏ qua cũng được, farm vẫn chạy bằng thẻ 2. Xem phần hướng dẫn Discord ở dưới.
 
 ---
 
@@ -109,7 +132,8 @@ Nạp mạch (dùng firmware dựng sẵn, không cần PlatformIO):
 Chạy:
 
 ```powershell
-.venv\Scripts\python -m app.main            # menu
+.venv\Scripts\python -m app.main            # cua so (GUI)
+.venv\Scripts\python -m app.main menu       # menu chu, cho terminal
 .venv\Scripts\python run_farm.py --count 2  # chạy thẳng
 ```
 
@@ -162,7 +186,11 @@ Discord → **Settings** → **Advanced** → bật **Developer Mode**. Rồi:
 
 ### Bật bot
 
-Menu → **mục 4**. Bot sẽ nhắn "Bot online" vào kênh đã ghim.
+Thẻ **3. Discord** trong app: dán 3 giá trị vào ô, bấm **Lưu cài đặt**, rồi bấm
+**Bật bot**. Bot sẽ nhắn "Bot online" vào kênh đã ghim.
+
+Ba ô đó chính là file `.env` cạnh `ROK Farm.exe`. File này **chứa token** — đừng
+gửi cho ai.
 
 ### Các lệnh
 
@@ -193,10 +221,10 @@ Menu → **mục 4**. Bot sẽ nhắn "Bot online" vào kênh đã ghim.
 | Nạp xong nhưng không trả lời | Rút ra cắm lại một lần. |
 | Nạp thất bại liên tục | Giữ nút **BOOT** trên mạch trong lúc cắm cáp. |
 | Mạch trả PING nhưng Windows chưa thấy chuột | Rút ra cắm lại. |
-| Farm chạy nhưng chuột không nhúc nhích | Còn tiến trình farm cũ đang giữ cổng COM. Menu mục 3 → dừng hết. |
+| Farm chạy nhưng chuột không nhúc nhích | **Chưa cắm cổng USB thứ hai** (cổng USB/OTG). Mạch vẫn trả lời PING nên mọi thứ trông bình thường. Cắm nốt là chạy. Nếu đã cắm đủ: còn tiến trình farm cũ giữ cổng COM — thẻ 2 → Dừng farm. |
 | Hỏng 3 mỏ đầu mỗi lần chạy | Bạn bật farm khi game đã mở sẵn. Đóng game rồi bật lại. |
 | Windows hiện hộp thoại UAC rồi đứng im | Chạy app bằng **Run as administrator**. |
-| Đóng cửa sổ menu mà farm vẫn chạy | Đúng như thiết kế. Farm chạy tách rời. Dừng bằng **mục 3** hoặc `!stop`. |
+| Đóng cửa sổ app mà farm vẫn chạy | Đúng như thiết kế. Farm chạy tách rời. Dừng bằng **Dừng farm** ở thẻ 2, hoặc `!stop`. |
 | Bot Discord không phản hồi trong server | Chưa bật **MESSAGE CONTENT INTENT**. |
 
 ### Chỗ xem log
