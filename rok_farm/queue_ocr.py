@@ -176,6 +176,13 @@ class GemCounterMixin:
         except Exception as e:
             logger.debug("Gem counter OCR error: %s", e)
             return None
+        # Keep what the engine actually returned, so a rejected reading can be
+        # explained instead of guessed at. The map-position field had a fault
+        # of exactly this shape -- boxes that split or overlap where the code
+        # assumed one box per number -- and it was only solvable once the raw
+        # boxes were in the log.
+        self._gem_pieces = [(round(r[0][0][0], 1), r[1]) for r in ordered]
+
         # Right-most box first; fall back to the tail of everything joined.
         for text in (ordered[-1][1], "".join(r[1] for r in ordered)):
             value = _parse_amount(text)
@@ -197,7 +204,8 @@ class GemCounterMixin:
         prev = getattr(self, "_gem_last", None)
         if prev and not (prev[0] * 0.5 <= value <= prev[0] * 2):
             logger.warning("Ignoring gem reading %d (last was %d) -- "
-                           "too big a jump to be real", value, prev[0])
+                           "too big a jump to be real; boxes=%r", value,
+                           prev[0], getattr(self, "_gem_pieces", None))
             return None
         if getattr(self, "_gem_first", None) is None:
             self._gem_first = (value, now)
