@@ -320,7 +320,18 @@ while True:
         log(f"game restart #{restart_seen}")
     recent = [t for t in restart_times if t > time.time() - 3600]
     if len(recent) >= RESTART_LIMIT:
-        kill_farm(f"{len(recent)} game restarts within an hour")
+        # Relaunch, do not merely kill. This branch called kill_farm and broke
+        # out of the loop, so a farm that restarted its client too often was
+        # killed and left dead -- the exact failure the supervisor exists to
+        # prevent, and the one that cost a whole night when a designed quiet
+        # period was read as a hang. The consecutive-failure branch above has
+        # always relaunched; this one never did.
+        #
+        # restart_farm carries its own cap, so a genuine loop still stops after
+        # MAX_SUPERVISOR_RESTARTS instead of bouncing for ever.
+        restart_times.clear()
+        if restart_farm(f"{len(recent)} game restarts within an hour"):
+            continue
         break
 
     # A dead command channel is the failure this missed the first time: the
