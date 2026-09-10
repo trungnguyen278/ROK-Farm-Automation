@@ -13,6 +13,7 @@ import time
 
 from rok_farm.config import (MAX_MARCH_MINUTES, WAIT_EARLY_MARGIN,
                              WAIT_QUIT_MINUTES)
+from rok_farm import wake
 from rok_farm.logging_setup import INFO, WARN, logger
 
 # What one alt-tab out-and-back costs before any waiting happens: _tab_back()
@@ -121,6 +122,32 @@ class PhasesMixin:
         if random.random() < 0.3:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
+    def _sleep_until_woken(self, seconds: float, reason: str) -> bool:
+        """Sleep, but stop early if the remote control asks.
+
+        The alt-tab wait was a single time.sleep, which nothing could reach
+        into. The player watches the same account on their phone and often
+        knows troops are home before the estimate does; the only way to act on
+        that was to stop the farm and start it again, losing the march
+        bookkeeping and paying for a client restart.
+
+        Returns True if the full time elapsed, False if it was cut short.
+        """
+        deadline = time.time() + max(0.0, seconds)
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return True
+            time.sleep(min(5.0, remaining))
+            note = wake.consume()
+            if note:
+                waited = seconds - max(0.0, deadline - time.time())
+                print(f"  [{INFO}] Woken {waited / 60:.1f}min into "
+                      f"{seconds / 60:.1f}min ({reason}) -- {note}")
+                logger.info("Wake request during %s after %.0fs of %.0fs",
+                            reason, waited, seconds)
+                return False
+
     def _phase_wait_return(self):
         """Phase 3: alt-tab out and wait for the 'troops returned' toast.
 
@@ -162,7 +189,7 @@ class PhasesMixin:
                       f"alt-tab out for {plan / 60:.1f}min")
                 self._capture_paused = True
                 self._tab_out()
-                time.sleep(plan)
+                self._sleep_until_woken(plan, "alt-tab wait")
                 self._capture_paused = False
                 self._tab_back()
                 self._view_is_world = False
@@ -186,6 +213,14 @@ class PhasesMixin:
         try:
             while time.time() - start < cap:
                 time.sleep(random.uniform(4.0, 8.0))
+                note = wake.consume()
+                if note:
+                    elapsed = (time.time() - start) / 60.0
+                    print(f"  [{INFO}] Woken after {elapsed:.1f}min of waiting "
+                          f"-- {note}")
+                    logger.info("Wake request during toast vigil after %.1fmin",
+                                elapsed)
+                    break
                 if self._notif.available:
                     n = self._notif.check_returned()
                     if n > 0:

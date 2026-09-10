@@ -50,6 +50,7 @@ from rok_farm.queue_ocr import (DeployPanelMixin, GatherModelMixin,
 from rok_farm.recovery import RecoveryMixin
 from rok_farm.screenshots import save_screenshot
 from rok_farm.state_probe import StateProbeMixin
+from rok_farm import wake
 from rok_farm.vision_llm import VisionOracle, build_oracle
 
 
@@ -158,6 +159,10 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         # against the queue badge on the first read, so a stale file can only
         # make the bot behave as it did before, never worse.
         self.load_open_marches()
+        # A request written while the last farm was dying would otherwise be
+        # the first thing this one finds, and it would skip a wait it never
+        # actually made.
+        wake.clear()
 
         self._scroll_overshoot_chance = self._jitter(
             self._persona["scroll_overshoot"], 0.08)

@@ -45,6 +45,7 @@ from rok_farm.config import (CITY_READY_TIMEOUT, GAME_LAUNCH_TIMEOUT,
                              PATHS_FILE, QUIT_TIMEOUT,
                              RESTART_COOLDOWN, WORLD_MAP_BTN_THRESHOLD)
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
+from rok_farm import wake
 from rok_farm.state_probe import dim_ratio
 
 PLAY_TEMPLATE = "launcher/play_btn"
@@ -580,10 +581,19 @@ class GameLifecycleMixin:
             # without blunting the detector, which raising the limit would.
             slept = 0.0
             while slept < cooldown:
-                step = min(240.0, cooldown - slept)
+                # Short steps so a wake request is noticed promptly; the
+                # heartbeat below still only speaks every four minutes.
+                step = min(10.0, cooldown - slept)
                 time.sleep(step)
                 slept += step
-                if slept < cooldown:
+                note = wake.consume()
+                if note:
+                    print(f"  [{INFO}] Woken after {slept / 60:.1f} min of "
+                          f"{cooldown / 60:.1f} -- {note}")
+                    logger.info("Wake request during planned quit (%s) after "
+                                "%.0fs of %.0fs", note, slept, cooldown)
+                    break
+                if slept < cooldown and int(slept) % 240 < 10:
                     print(f"  [{INFO}] Still out, {(cooldown - slept) / 60:.0f} "
                           f"min to go")
             ok = self._ensure_game_running()
@@ -628,6 +638,13 @@ class GameLifecycleMixin:
             if remaining <= 0:
                 return True
             time.sleep(min(step, remaining))
+            note = wake.consume()
+            if note:
+                waited = seconds - max(0.0, deadline - time.time())
+                print(f"  [{INFO}] Woken {waited:.0f}s into {seconds:.0f}s "
+                      f"wait ({reason}) -- {note}")
+                logger.info("Wake request during %s after %.0fs", reason, waited)
+                return True
             if not self.game.is_game_running():
                 waited = seconds - max(0.0, deadline - time.time())
                 print(f"  [{WARN}] Client vanished {waited:.0f}s into "

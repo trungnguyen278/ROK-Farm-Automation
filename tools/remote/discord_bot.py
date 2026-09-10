@@ -31,25 +31,28 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-PROJECT = Path(r"D:\ROK Farm Automation")
-sys.path.insert(0, str(PROJECT))
+# The install path is not knowable in advance -- this ships to other people's
+# machines -- so derive it instead of naming it. From source that is the repo
+# root two levels up; packaged, rok_farm resolves it from the exe.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from rok_farm import PROJECT_ROOT as PROJECT
+from rok_farm import roles, wake
 
 import discord
 from discord.ext import tasks
 import psutil
 
-PYTHON = PROJECT / ".venv" / "Scripts" / "python.exe"
-OVERNIGHT = PROJECT / "tools" / "dev" / "overnight"
-FARM_SCRIPT = OVERNIGHT / "farm_full.py"
-WD_SCRIPT = OVERNIGHT / "watchdog2.py"
-REPORT_SCRIPT = OVERNIGHT / "report.py"
 LOGDIR = PROJECT / "logs" / "overnight"
 FARM_LOG = LOGDIR / "farm_run.log"
 WD_LOG = LOGDIR / "watchdog.log"
 BOT_LOG = LOGDIR / "discord_bot.log"
 SHOTS = PROJECT / "screenshots" / "gem_farm_test"
 
-SERIAL_PORT = "COM13"
+# The board's COM number is assigned by Windows and changes across reboots and
+# re-plugs, so it is detected, not configured. SerialConnection(port=None)
+# finds the CH340 bridge by its VID:PID.
+SERIAL_PORT = None
 # Below this many seconds of input idleness, assume a human is at the machine.
 # Starting the farm then means the ESP32 fights the player for the mouse.
 HUMAN_IDLE_GUARD = 300.0
@@ -125,14 +128,22 @@ def blog(msg):
 # --------------------------------------------------------------------------
 # processes
 
-def find_procs(needle):
+def find_procs(role):
+    """Every running process for `role` ("farm" / "watchdog" / "bot").
+
+    Discovery is by command line, not a remembered pid, so the bot can be
+    restarted at any time and still control a run it did not launch. From
+    source those are python processes; packaged they are copies of our own
+    exe, which is why the interpreter-name filter has to widen when frozen.
+    """
+    own = Path(sys.executable).name.lower()
     out = []
     for p in psutil.process_iter(["name", "cmdline", "create_time"]):
         try:
             name = (p.info["name"] or "").lower()
-            if "python" not in name:
+            if "python" not in name and name != own:
                 continue
-            if needle in " ".join(p.info["cmdline"] or []):
+            if roles.matches(role, p.info["cmdline"]):
                 out.append(p)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -140,11 +151,11 @@ def find_procs(needle):
 
 
 def farm_procs():
-    return find_procs("farm_full.py")
+    return find_procs("farm")
 
 
 def wd_procs():
-    return find_procs("watchdog2.py")
+    return find_procs("watchdog")
 
 
 def game_proc():
@@ -523,8 +534,8 @@ DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
-def spawn_detached(script, *args):
-    """Launch a script so it outlives this process, and return its real pid.
+def spawn_detached(role, *args):
+    """Launch a role so it outlives this process, and return its real pid.
 
     An ordinary subprocess is a child, and killing the bot's process tree kills
     it too -- restarting the bot to load new code took a live farm down with it
@@ -536,17 +547,15 @@ def spawn_detached(script, *args):
     The pid `start` hands back is cmd's, so the real one is found by watching
     for a process that was not there before.
     """
-    name = Path(script).name
-    before = {p.pid for p in find_procs(name)}
+    before = {p.pid for p in find_procs(role)}
     subprocess.Popen(
-        ["cmd", "/c", "start", "", "/b", str(PYTHON), str(script),
-         *(str(a) for a in args)],
+        ["cmd", "/c", "start", "", "/b", *roles.command(role, *args)],
         cwd=str(PROJECT),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
     deadline = time.time() + 25.0
     while time.time() < deadline:
-        fresh = {p.pid for p in find_procs(name)} - before
+        fresh = {p.pid for p in find_procs(role)} - before
         if fresh:
             return min(fresh)
         time.sleep(0.5)
@@ -556,13 +565,13 @@ def spawn_detached(script, *args):
 def do_start(with_watchdog):
     if farm_procs():
         return "Farm is already running -- !stop first."
-    pid = spawn_detached(FARM_SCRIPT)
+    pid = spawn_detached("farm")
     if pid is None:
         return ("Launched the farm but it never appeared in the process list. "
                 "Check !log.")
     msg = [f"Farm started (pid {pid}), detached -- it now survives a bot restart."]
     if with_watchdog:
-        wd = spawn_detached(WD_SCRIPT, pid)
+        wd = spawn_detached("watchdog", pid)
         msg.append(f"Watchdog started (pid {wd}), no deadline." if wd
                    else "Watchdog did NOT come up -- nothing is supervising the farm.")
     else:
@@ -594,7 +603,7 @@ def do_stop(close_game=True):
 
 def do_report():
     try:
-        r = subprocess.run([str(PYTHON), str(REPORT_SCRIPT)], cwd=str(PROJECT),
+        r = subprocess.run(roles.command("report"), cwd=str(PROJECT),
                            capture_output=True, text=True, timeout=120)
         return (r.stdout or "") + (r.stderr or "")
     except Exception as e:
@@ -607,6 +616,7 @@ HELP = """```
 !log [n]         last n interesting log lines (default 25, debug stripped)
 !report          full run report from report.py
 !feed on|off     live progress: mines, marches, queue, gather-time maths
+!check           stop waiting and look at the queue now (troops home early)
 !start           start farm + watchdog
 !start solo      start the farm with no watchdog
 !start force     start even if someone is using the machine
@@ -855,6 +865,24 @@ async def on_message(message):
                         f"progress feed **{'ON' if _feed_on else 'OFF'}** "
                         f"(checks every {FEED_POLL:.0f}s)")
 
+        elif cmd in ("check", "wake"):
+            # The player watches the same account on their phone and usually
+            # knows troops are home before the deploy-panel estimate does.
+            # Before this the only way to act on that was !stop then !start,
+            # which throws away the outstanding-march bookkeeping and pays for
+            # a client restart on top.
+            if not farm_procs():
+                await reply(message, "Farm is not running -- use `!start`.")
+            elif not await asyncio.to_thread(wake.request,
+                                             f"asked on Discord by {message.author}"):
+                await reply(message, "Could not write the wake request -- see `!log`.")
+            else:
+                await reply(message,
+                            "Asked the farm to stop waiting and re-check the "
+                            "queue. It picks this up within a few seconds of "
+                            "its next check; if it is mid-mine it will simply "
+                            "finish that first.")
+
         elif cmd == "start":
             idle = idle_seconds()
             if "force" not in args and 0 <= idle < HUMAN_IDLE_GUARD:
@@ -880,7 +908,7 @@ async def on_message(message):
 
 def main():
     if not TOKEN:
-        print("DISCORD_BOT_TOKEN missing -- put it in D:\\ROK Farm Automation\\.env")
+        print(f"DISCORD_BOT_TOKEN missing -- put it in {PROJECT / '.env'}")
         return 1
     if not (OWNER_ID or OWNER_NAME):
         print("DISCORD_OWNER_ID missing -- refusing to start an unlocked "
