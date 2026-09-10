@@ -54,7 +54,16 @@ data/map_knowledge/
 data/open_marches.json
 data/wake.flag
 
-# Packaging output. dist/ and build/ are already covered by the Python block
-# above; these are the PlatformIO and PyInstaller leftovers beside them.
+# --- Packaging output: NEVER commit any of this ---
+#
+# `packaging/build.py` writes a ~261 MB folder and a ~109 MB zip. dist/ and
+# build/ are matched by the Python block at the top of this file, which is
+# easy to mistake for setuptools leftovers and "tidy up" -- so they are named
+# again here, explicitly, with the reason.
+#
+# What IS committed on purpose: firmware/*.bin (the prebuilt board images the
+# app flashes) and packaging/ itself (the spec and the build script).
+dist/
+build/
 *.spec.bak
 packaging/__pycache__/
