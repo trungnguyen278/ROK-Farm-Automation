@@ -281,7 +281,13 @@ prev_progress_done = prev["mine_done"]
 prev_progress_failed = prev["mine_failed"]
 serial_flagged = False
 last_retry_alert = 0
-restart_seen = 0
+# Baselined, like every other counter here. The farm log is append-mode on
+# purpose, so counts() returns totals over EVERY run in the file; starting this
+# at 0 meant the first poll saw the whole file's history as one fresh restart
+# and logged "game restart #5" sixteen seconds after boot, with the farm
+# perfectly healthy. Worse, that phantom went into restart_times and counted
+# toward the five-per-hour halt. Only restarts seen AFTER we start are ours.
+restart_seen = prev["restart"]
 restart_times = []
 
 while True:
@@ -334,10 +340,12 @@ while True:
             continue
         break
 
+    if cur["restart"] < restart_seen:
+        restart_seen = cur["restart"]      # log truncated under us; re-baseline
     if cur["restart"] > restart_seen:
         restart_seen = cur["restart"]
         restart_times.append(time.time())
-        log(f"game restart #{restart_seen}")
+        log(f"game restart ({len(restart_times)} since watchdog start)")
     recent = [t for t in restart_times if t > time.time() - 3600]
     if len(recent) >= RESTART_LIMIT:
         # Relaunch, do not merely kill. This branch called kill_farm and broke
