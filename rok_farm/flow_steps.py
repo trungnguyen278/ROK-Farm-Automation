@@ -96,7 +96,27 @@ class GemFlowMixin:
             self._home_map_id = map_id
             logger.info("Home map is %s", map_id)
         self._off_home_map = map_id != self._home_map_id
+        self._off_map_id = map_id if self._off_home_map else None
 
+        if self._off_home_map:
+            # Do not open a book for a kingdom we are only passing through: it
+            # would collect scans of ground that can never be farmed, and the
+            # retreat is about to take us out of it anyway.
+            #
+            # Mark the last cell we stood on at HOME as a wall instead, so the
+            # wander steering learns where the border runs. Without this the
+            # bot detects the crossing, retreats, and wanders straight back --
+            # twice within one run before this was added. The fog bail has
+            # recorded its edge this way from the start; this branch simply did
+            # not.
+            home_xy = getattr(self, "_last_home_xy", None)
+            if (home_xy and self.mapmem is not None
+                    and self.mapmem.map_id == self._home_map_id):
+                self.mapmem.record_wall(*home_xy)
+                self.mapmem.save()
+            return getattr(self, "_last_map_xy", None)
+
+        self._last_home_xy = (x, y)
         if self.mapmem is None or self.mapmem.map_id != map_id:
             # Different map id = different world (home kingdom vs KvK), so a
             # different book. No configuration: the HUD says which one.
@@ -664,12 +684,11 @@ class GemFlowMixin:
             # Deposits over there are real, which is why the classifier keeps
             # confirming them and the gather popup then refuses to open.
             if getattr(self, "_off_home_map", False):
+                gone = getattr(self, "_off_map_id", None) or "?"
                 print(f"  [{WARN}] Left the home map ({self._home_map_id} -> "
-                      f"{self.mapmem.map_id if self.mapmem else '?'}) -- "
-                      f"cannot gather here, turning back")
-                logger.warning("Off home map %s -> %s; retreating",
-                               self._home_map_id,
-                               self.mapmem.map_id if self.mapmem else "?")
+                      f"{gone}) -- cannot gather here, turning back")
+                logger.warning("Off home map %s -> %s; retreating and marking "
+                               "the border cell", self._home_map_id, gone)
                 back = wander_heading + math.pi + random.uniform(-0.35, 0.35)
                 self._retreat_from_edge(back)
                 self._step_return_city(tag)
