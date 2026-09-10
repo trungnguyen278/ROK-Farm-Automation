@@ -914,7 +914,7 @@ class GemFlowMixin:
         # which closed whatever was left, and the March poll spent 6s staring at
         # an empty map (march_btn_TIMEOUT_125655.png). Same mistake as the March
         # button: believing a UI transition happened because we asked for it.
-        if not self._wait_for_troop_panel():
+        if not self._wait_for_troop_panel(tag=tag):
             print(f"  [{FAIL}] Deploy panel never opened after Gather -- "
                   f"not firing the chain into the map")
             self._record(f"{tag}_march", False, "deploy panel did not open")
@@ -952,19 +952,28 @@ class GemFlowMixin:
             save_screenshot(frame2, f"{tag}_after_march")
         return True
 
-    def _wait_for_troop_panel(self, timeout: float = 4.0) -> bool:
+    def _wait_for_troop_panel(self, timeout: float = 4.0, tag: str = "") -> bool:
         """Is the panel with the "Quan moi" button actually up?
 
         Position-checked like the March gate, because `new_troop_btn` can match
         weakly elsewhere on a busy map and a false pass here is exactly what
         sends the chain clicking into open ground.
+
+        On timeout the last frame is kept. This gate has refused the chain four
+        times across the whole log and not one of those refusals left anything
+        to look at, so why the panel failed to open is still unknown -- and the
+        timeout is not the reason: over 229 successes it opened in 2.30s at the
+        very worst against a 4.0s budget, so widening it would fix nothing. The
+        frame is the only thing that can say what was actually on screen.
         """
         start = time.monotonic()
+        last = None
         while time.monotonic() - start < timeout:
             self._wait((0.12, 0.04))
             frame = self._grab()
             if frame is None:
                 continue
+            last = frame
             m = self._match_verify(frame, "buttons/new_troop_btn",
                                    self.fast_matcher, 0.70)
             if m is None or m.confidence < 0.70:
@@ -981,6 +990,8 @@ class GemFlowMixin:
                         time.monotonic() - start, m.confidence)
             return True
         logger.warning("Deploy panel did not open within %.1fs", timeout)
+        if last is not None:
+            save_screenshot(last, f"{tag or 'deploy'}_troop_panel_TIMEOUT")
         return False
 
     def _wait_for_march_button(self, timeout: float = 6.0) -> float:
