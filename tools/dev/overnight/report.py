@@ -93,6 +93,12 @@ def describe(vals, unit="s"):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--log", default=str(DEFAULT_LOG))
+    ap.add_argument("--last", type=int, metavar="N",
+                    help="only report the N most recent runs. The log is "
+                         "append-mode across restarts on purpose, so it now "
+                         "holds 75 runs and reading last night off the top of "
+                         "it means scrolling past three weeks. Totals still "
+                         "cover every run in the file.")
     args = ap.parse_args()
 
     path = Path(args.log)
@@ -121,6 +127,14 @@ def main():
     tot = {k: 0 for k in PATTERNS}
     all_paint, all_zoom, all_fog = [], [], []
 
+    # Totals are accumulated over every run below; --last only decides which
+    # runs get printed in full, so a narrowed report still tells the truth
+    # about the whole log rather than quietly re-scoping the numbers.
+    shown = segments[-args.last:] if args.last else segments
+    if args.last and len(segments) > len(shown):
+        print(f"(showing the last {len(shown)} of {len(segments)} runs; "
+              f"totals below cover all of them)\n")
+
     for seg in segments:
         text_lines = seg["lines"]
         counts = {k: sum(bool(p.search(ln)) for ln in text_lines)
@@ -147,6 +161,11 @@ def main():
         all_fog += fogs
         queues = [(int(m.group(1)), int(m.group(2)))
                   for ln in text_lines for m in [QUEUE.search(ln)] if m]
+
+        # Everything above this point has already gone into the totals, so a
+        # skipped run is still counted -- it is only left unprinted.
+        if seg not in shown:
+            continue
 
         print(f"\n--- farm start {seg['start']}   {span}")
         done, failed = counts["done"], counts["failed"]
