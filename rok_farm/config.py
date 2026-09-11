@@ -135,10 +135,14 @@ GATHER_BTN_MAX_Y_OFFSET = 0.05
 # node reads 954.459 to 2.144.010. Three orders of magnitude, nothing between,
 # so the threshold sits in empty space rather than on an edge.
 #
-# The operator puts the ceiling for a gem mine at about 50, and lower again for
-# one somebody has already partly gathered -- a half-emptied node can be single
-# digits. That is the direction the threshold has to be generous in, and 1000
-# is twenty times the ceiling, so a nearly exhausted mine is never refused.
+# The log only ever shows 10 and 30, but the operator knows the field better
+# than the sample does: 40 occurs too, the ceiling is under 50 today, and under
+# 100 even if the game rebalances. Below that, a mine somebody has already
+# partly gathered can be single digits.
+#
+# So the number to be generous about is 100, not 30. 1000 is ten times the
+# ceiling that survives a game change and still a thousandth of the smallest
+# non-gem reading, which is why it needs no revisiting when the sample grows.
 #
 # This is what catches a WOOD mine taken for a gem one -- the popup is genuine
 # and the buttons are the right buttons, so nothing about the click looks

@@ -23,10 +23,13 @@ import pytest
 
 from rok_farm.config import GEM_MAX_LOAD
 
-# 10 and 30 are what the log shows. The operator puts the ceiling near 50
-# and says a partly gathered mine reads lower still, so single digits are
-# ordinary and must not be refused.
-GEM_LOADS = [1, 3, 7, 10, 30, 49]
+# 10 and 30 are all the log happens to contain. The operator knows the field
+# better than the sample: 40 occurs too, the ceiling is under 50 today, and
+# under 100 even if the game rebalances. A partly gathered mine reads lower
+# still, so single digits are ordinary and must not be refused.
+GEM_LOADS = [1, 3, 7, 10, 30, 40, 49]
+# What a gem mine could plausibly read after a game change, per the operator.
+GEM_CEILING_IF_GAME_CHANGES = 100
 OTHER_LOADS = [954459, 954479, 1272602, 1431688, 2144010]
 
 
