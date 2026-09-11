@@ -134,6 +134,12 @@ GEM_OCR_UPSCALE = 2
 # K/M/B suffix once large ("45.5M"), so both forms have to parse or the counter
 # silently starts reading 45.5M as 455.
 _GEM_RE = re.compile(r"(\d[\d.,]*)\s*([KMB])?\s*$", re.IGNORECASE)
+# The same shape, unanchored, for reading a MERGED string. The crop holds the
+# gold total and the "+" button as well as the gem count, so anchoring to the
+# end of the text throws the number away whenever the engine returns the "+"
+# as its own box -- observed live as ['32.2M', '64.022', '+'] reading as None.
+# The gem count is the right-most number, so take the last match instead.
+_GEM_ANY_RE = re.compile(r"(\d[\d.,]*)\s*([KMB])?", re.IGNORECASE)
 
 
 def _parse_amount(text: str) -> int | None:
@@ -310,10 +316,16 @@ class GemCounterMixin:
         # Measured live: boxes ['32.0M', '62.5', '.550'] for a real 62.550,
         # where the last box alone reads 550.
         merged = merge_boxes(ordered)
-        numbers = _GEM_RE.findall(merged)
+        # Search for numbers ANYWHERE, then take the right-most. _GEM_RE is
+        # anchored to the end of the string, which is right for a single box
+        # and wrong here: the crop also contains the "+" button beside the
+        # counter, and when the engine returns that as its own box the merged
+        # text ends in "+", the anchored pattern matches nothing, and a
+        # perfectly readable number is thrown away. Seen live -- three boxes,
+        # ['32.2M', '64.022', '+'], value None.
+        numbers = _GEM_ANY_RE.findall(merged)
         if numbers:
-            value = _parse_amount("".join(numbers[-1]) if isinstance(
-                numbers[-1], tuple) else numbers[-1])
+            value = _parse_amount("".join(numbers[-1]))
             if value is not None:
                 return value
 

@@ -136,3 +136,33 @@ def test_enlarging_does_not_narrow_the_crop():
     assert q.GEM_ROI[0] <= 0.88, \
         "the gem crop got narrower; a number that grows a digit will be clipped"
     assert q.GEM_ROI[2] >= 0.99
+
+
+def test_the_plus_button_does_not_swallow_the_reading(reader, monkeypatch):
+    """The crop holds the "+" button as well as the counter.
+
+    Observed live: the engine returned ['32.2M', '64.022', '+'] and the
+    reading came back None, because the pattern was anchored to the end of
+    the text and the text ended in "+". A readable number was thrown away.
+    """
+    monkeypatch.setattr(q, "_ocr_engine", lambda roi: (engine_result([
+        (11.0, 60.0, "32.2M"), (104.0, 150.0, "64.022"),
+        (160.0, 175.0, "+")]), None))
+    assert reader._read_gem_count(
+        np.zeros((862, 1533, 3), dtype=np.uint8)) == 64022
+
+
+def test_the_gold_total_is_not_mistaken_for_gems(reader, monkeypatch):
+    """Gold sits to the LEFT in the same crop; gems are the right-most number."""
+    monkeypatch.setattr(q, "_ocr_engine", lambda roi: (engine_result([
+        (11.0, 60.0, "32.2M"), (104.0, 150.0, "64.022")]), None))
+    assert reader._read_gem_count(
+        np.zeros((862, 1533, 3), dtype=np.uint8)) == 64022
+
+
+def test_a_suffixed_total_still_parses(reader, monkeypatch):
+    """Once the count passes a million the game switches to "1.5M"."""
+    monkeypatch.setattr(q, "_ocr_engine", lambda roi: (engine_result([
+        (104.0, 150.0, "1.5M")]), None))
+    assert reader._read_gem_count(
+        np.zeros((862, 1533, 3), dtype=np.uint8)) == 1500000
