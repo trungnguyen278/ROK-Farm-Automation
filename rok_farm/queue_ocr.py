@@ -178,6 +178,47 @@ def button_verdict(texts) -> str:
     return "unreadable"
 
 
+def merge_boxes(result) -> str:
+    """Join OCR detections left to right, dropping text two boxes both read.
+
+    RapidOCR does not promise one box per number, and this project has now been
+    bitten in BOTH directions by assuming it does:
+
+        map position  joined every box  '...Y:182' + '2Q'  -> Y=1822
+        gem counter   took the last box '62.5' + '.550'    -> 550
+
+    Same cause. The boxes OVERLAP -- measured at 8-10px on the frames that
+    failed, against +6 to +21px on the ones that worked -- so the glyph at the
+    seam is decoded twice. Joining duplicates it; taking one box loses the rest
+    of the number.
+
+    Overlap is decided on GEOMETRY, then the repeated text is removed. Doing it
+    on text alone would eat a real repeat: two adjacent boxes reading "11" and
+    "11" are a legitimate "1111", and only their positions can say whether the
+    pair overlaps or abuts.
+    """
+    boxes = []
+    for det in result or ():
+        pts = det[0]
+        xs = [p[0] for p in pts]
+        boxes.append((min(xs), max(xs), det[1]))
+    boxes.sort(key=lambda b: b[0])
+
+    out = ""
+    prev_right = None
+    for left, right, text in boxes:
+        if out and prev_right is not None and left < prev_right:
+            # Overlapping: strip the longest tail of what we have that the new
+            # box repeats at its head.
+            for n in range(min(len(out), len(text)), 0, -1):
+                if out[-n:] == text[:n]:
+                    text = text[n:]
+                    break
+        out += text
+        prev_right = right
+    return out
+
+
 def read_button_text(frame, x, y, w, h, pad: int = 4):
     """OCR a matched button, using its OWN box rather than a fixed position."""
     if _OCR_BACKEND != "rapidocr" or _ocr_engine is None or frame is None:
@@ -233,7 +274,20 @@ class GemCounterMixin:
         # boxes were in the log.
         self._gem_pieces = [(round(r[0][0][0], 1), r[1]) for r in ordered]
 
-        # Right-most box first; fall back to the tail of everything joined.
+        # The merged text holds every number in the crop, and the gem total is
+        # the right-most of them -- the same thing "right-most box" was reaching
+        # for, but without losing a number that got split across two boxes.
+        # Measured live: boxes ['32.0M', '62.5', '.550'] for a real 62.550,
+        # where the last box alone reads 550.
+        merged = merge_boxes(ordered)
+        numbers = _GEM_RE.findall(merged)
+        if numbers:
+            value = _parse_amount("".join(numbers[-1]) if isinstance(
+                numbers[-1], tuple) else numbers[-1])
+            if value is not None:
+                return value
+
+        # Fallbacks, unchanged.
         for text in (ordered[-1][1], "".join(r[1] for r in ordered)):
             value = _parse_amount(text)
             if value is not None:
@@ -330,12 +384,20 @@ class MapPositionMixin:
         # frames had gaps of +6 and +21px and joined cleanly. In every frame
         # examined the coordinate box was already complete on its own, so
         # preferring it costs nothing and the join stays for a genuine split.
-        for piece in pieces:
-            m = _POS_RE.search(piece)
-            if m:
-                break
-        else:
-            m = _POS_RE.search(text)
+        # Overlap-aware merge first. Preferring a single box (the earlier fix)
+        # worked while scanning but not with the gather popup open, where the
+        # panel covers part of the HUD and the boxes split differently: a
+        # deposit was still recorded at Y=1826 for a real Y of 182. Merging
+        # handles both, and the older paths stay as fallbacks so nothing that
+        # already parsed can stop parsing.
+        m = _POS_RE.search(merge_boxes(boxes))
+        if not m:
+            for piece in pieces:
+                m = _POS_RE.search(piece)
+                if m:
+                    break
+            else:
+                m = _POS_RE.search(text)
         if not m:
             logger.debug("Map position unparsed: %r", text[:40])
             return None

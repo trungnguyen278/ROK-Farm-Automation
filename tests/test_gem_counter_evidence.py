@@ -19,11 +19,9 @@ import rok_farm.queue_ocr as q
 
 
 def engine_result(pieces):
-    out = []
-    for left, text in pieces:
-        box = [[left, 0], [left + 10, 0], [left + 10, 20], [left, 20]]
-        out.append((box, text, 0.95))
-    return out
+    """Real box extents: whether two boxes OVERLAP is what decides the read."""
+    return [([[l, 0], [r, 0], [r, 20], [l, 20]], text, 0.95)
+            for l, r, text in pieces]
 
 
 class Counter(q.GemCounterMixin):
@@ -36,21 +34,32 @@ def reader(monkeypatch):
     return Counter()
 
 
-def test_a_split_number_keeps_its_boxes(reader, monkeypatch):
-    """The exact shape seen live: right-most box alone loses the leading digits."""
-    monkeypatch.setattr(q, "_ocr_engine",
-                        lambda roi: (engine_result([(10.0, "55"), (30.0, "104")]), None))
-    frame = np.zeros((862, 1533, 3), dtype=np.uint8)
-    value = reader._read_gem_count(frame)
+def test_the_real_split_that_was_caught_live(reader, monkeypatch):
+    """Verbatim from the log: 62.550 arrived as '62.5' then '.550'.
 
-    assert value == 104, "behaviour changed; this test documents the CURRENT rule"
-    assert reader._gem_pieces == [(10.0, "55"), (30.0, "104")], \
+    The boxes overlap -- 121 starts before 130 ends -- so the '.5' at the seam
+    was decoded twice. Taking the last box alone read 550, the guard rejected
+    it, and the reading was lost. Merging recovers the real number.
+    """
+    monkeypatch.setattr(q, "_ocr_engine", lambda roi: (engine_result([
+        (11.0, 60.0, "32.0M"), (103.0, 130.0, "62.5"),
+        (121.0, 160.0, ".550")]), None))
+    assert reader._read_gem_count(
+        np.zeros((862, 1533, 3), dtype=np.uint8)) == 62550
+
+
+def test_the_boxes_are_still_kept_for_evidence(reader, monkeypatch):
+    """A rejection that records nothing cannot be diagnosed later."""
+    monkeypatch.setattr(q, "_ocr_engine", lambda roi: (engine_result([
+        (10.0, 40.0, "55"), (35.0, 70.0, "104")]), None))
+    reader._read_gem_count(np.zeros((862, 1533, 3), dtype=np.uint8))
+    assert reader._gem_pieces, \
         "the raw boxes were not kept, so a rejection cannot be explained"
 
 
 def test_a_single_box_still_reads_normally(reader, monkeypatch):
     monkeypatch.setattr(q, "_ocr_engine",
-                        lambda roi: (engine_result([(10.0, "55.104")]), None))
+                        lambda roi: (engine_result([(10.0, 80.0, "55.104")]), None))
     assert reader._read_gem_count(
         np.zeros((862, 1533, 3), dtype=np.uint8)) == 55104
 
@@ -59,9 +68,9 @@ def test_the_guard_rejects_a_clipped_read_and_keeps_the_previous(reader, monkeyp
     """A clipped read must not become the new baseline, or every later
     reading is judged against a number that never existed."""
     seq = iter([
-        engine_result([(10.0, "55.040")]),      # good
-        engine_result([(10.0, "55"), (30.0, "104")]),   # clipped -> 104
-        engine_result([(10.0, "55.104")]),      # good again
+        engine_result([(10.0, 80.0, "55.040")]),            # good
+        engine_result([(10.0, 40.0, "9"), (30.0, 70.0, "99")]),  # nonsense
+        engine_result([(10.0, 80.0, "55.104")]),            # good again
     ])
     monkeypatch.setattr(q, "_ocr_engine", lambda roi: (next(seq), None))
     frame = np.zeros((862, 1533, 3), dtype=np.uint8)

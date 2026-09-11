@@ -21,32 +21,34 @@ import rok_farm.queue_ocr as q
 def engine_result(pieces):
     """Fake what RapidOCR returns: (box, text, confidence) per detection.
 
-    Only the leftmost x of each box is read by the code under test, so the box
-    is built to sort correctly and nothing else is claimed about it.
+    Box extents are the REAL ones measured off these frames, because the
+    overlap is the whole point: on the failing frames the following box began
+    8-10px to the LEFT of where the coordinate box ended, and on the healthy
+    ones it began 6-21px to the right. An earlier version of this fixture gave
+    every box a width of 10px, which reproduced no overlap at all -- so it
+    passed for the wrong reason and could not have caught a geometry bug.
     """
-    out = []
-    for left, text in pieces:
-        box = [[left, 0], [left + 10, 0], [left + 10, 30], [left, 30]]
-        out.append((box, text, 0.95))
-    return out
+    return [([[l, 0], [r, 0], [r, 30], [l, 30]], text, 0.95)
+            for l, r, text in pieces]
 
 
 # name -> (fragments as (left_x, text), true reading)
 FRAMES = {
-    # overlapping second box: '...Y:194' + '4Q' joined to 'Y:1944'
-    "m7_scan_08_023535": ([(70.0, "26.089.083"),
-                           (195.0, "#S11465X:149Y:194"),
-                           (316.0, "4Q")], ("S11465", 149, 194)),
-    "m8_scan_04_023701": ([(35.0, "#S11465X:193Y:182"),
-                           (154.0, "2Q")], ("S11465", 193, 182)),
-    "m8_scan_05_023717": ([(35.0, "#S11465X:175Y:176"),
-                           (157.0, "6Q")], ("S11465", 175, 176)),
-    # healthy frames: the trailing box does not overlap
-    "m7_scan_00_023443": ([(70.0, "26.089.083"),
-                           (195.0, "#S11465X:179Y:189"),
-                           (328.0, "Q")], ("S11465", 179, 189)),
-    "m7_scan_01_023450": ([(70.0, "26.089.083"),
-                           (195.0, "#S11465X:170Y:188")], ("S11465", 170, 188)),
+    # overlapping second box: 316 starts left of 325, so the 4 is read twice
+    "m7_scan_08_023535": ([(70.0, 174.0, "26.089.083"),
+                           (195.0, 325.0, "#S11465X:149Y:194"),
+                           (316.0, 348.0, "4Q")], ("S11465", 149, 194)),
+    "m8_scan_04_023701": ([(35.0, 164.0, "#S11465X:193Y:182"),
+                           (154.0, 202.0, "2Q")], ("S11465", 193, 182)),
+    "m8_scan_05_023717": ([(35.0, 165.0, "#S11465X:175Y:176"),
+                           (157.0, 186.0, "6Q")], ("S11465", 175, 176)),
+    # healthy frames: the trailing box starts clear of the previous one
+    "m7_scan_00_023443": ([(70.0, 174.0, "26.089.083"),
+                           (195.0, 322.0, "#S11465X:179Y:189"),
+                           (328.0, 344.0, "Q")], ("S11465", 179, 189)),
+    "m7_scan_01_023450": ([(70.0, 174.0, "26.089.083"),
+                           (195.0, 323.0, "#S11465X:170Y:188")],
+                          ("S11465", 170, 188)),
 }
 
 
@@ -78,7 +80,7 @@ def test_the_old_join_really_did_corrupt_these(reader):
     """
     corrupted = 0
     for name, (pieces, expected) in FRAMES.items():
-        joined = "".join(t for _, t in pieces)
+        joined = "".join(t for _, _, t in pieces)
         m = q._POS_RE.search(joined)
         got = (m.group(1), int(m.group(2)), int(m.group(3))) if m else None
         if got != expected:
@@ -90,7 +92,7 @@ def test_the_old_join_really_did_corrupt_these(reader):
 
 def test_a_genuine_split_still_falls_back_to_joining(reader, monkeypatch):
     """The join is not dead code: no single box holds the whole pattern here."""
-    pieces = [(35.0, "#S11465X:1"), (90.0, "70Y:188")]
+    pieces = [(35.0, 88.0, "#S11465X:1"), (90.0, 150.0, "70Y:188")]
     monkeypatch.setattr(q, "_ocr_engine",
                         lambda roi: (engine_result(pieces), None))
     import numpy as np
