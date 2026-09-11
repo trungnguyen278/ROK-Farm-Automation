@@ -389,6 +389,11 @@ client = discord.Client(intents=intents)
 
 _alert_channel = None
 _farm_was_up = False
+# When a stop was ASKED for. The watcher exists to report the farm dying on
+# its own; a stop the operator typed is not news, and reporting it back to
+# them seconds later trains them to ignore the channel.
+_stop_asked_at = 0.0
+STOP_GRACE = 120.0
 _feed_on = True
 _feed_pos = None
 
@@ -468,7 +473,10 @@ async def watcher():
     """
     global _farm_was_up
     up = bool(farm_procs())
-    if _farm_was_up and not up:
+    asked = time.time() - _stop_asked_at < STOP_GRACE
+    if _farm_was_up and not up and asked:
+        blog("farm went down as asked -- no alert")
+    elif _farm_was_up and not up:
         ch = await alert_target()
         if ch is not None:
             lines = interesting_tail(log_tail(FARM_LOG, 200000).splitlines(), 6)
@@ -649,6 +657,13 @@ async def on_message(message):
                             await asyncio.to_thread(do_start, "solo" not in args))
 
         elif cmd == "stop":
+            # Tell the watcher this one was asked for. Without it, !stop is
+            # followed seconds later by "Farm stopped" pushed to the same
+            # channel the command came from -- an alarm about the thing the
+            # operator just did. An alert channel that reports expected events
+            # is one people stop reading.
+            global _stop_asked_at
+            _stop_asked_at = time.time()
             async with message.channel.typing():
                 await reply(message,
                             await asyncio.to_thread(do_stop, "keep" not in args))
