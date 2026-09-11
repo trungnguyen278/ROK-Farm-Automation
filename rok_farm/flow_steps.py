@@ -308,7 +308,25 @@ class GemFlowMixin:
             self._scroll_at_center(-1, zs)
             self._wait_zoom_settled()
         else:
-            print(f"  [{PASS}] Already on the world map -- leaving the zoom alone")
+            # On the world map, but NOT at icon zoom -- no gems were visible
+            # above. Leaving it alone was wrong: the gather chain zooms IN on
+            # the mine it clicks, so a mine that starts here begins at whatever
+            # zoom the last gather left behind, and the icon template (captured
+            # at icon zoom) cannot match at all. Measured on 2026-09-11: every
+            # mine that took this branch and did not already see a gem failed
+            # with 18 empty scans and ZERO classifier rejects -- nothing was
+            # even detected as a candidate -- while all six that zoomed out
+            # succeeded.
+            #
+            # The old comment is still right that "no gems" must not mean "zoom
+            # out MORE": doing that ratcheted the view to 0.35x scale over a
+            # night. This does not zoom out more. It clamps fully in first and
+            # comes out a fixed number of notches, so it lands on the same
+            # absolute level however far the view had drifted, and repeating it
+            # cannot walk anywhere.
+            print(f"  [{INFO}] On the world map but no gems in view -- "
+                  f"restoring icon zoom")
+            self._reset_zoom_to_reference()
 
         frame = self._grab()
         if frame is not None:
