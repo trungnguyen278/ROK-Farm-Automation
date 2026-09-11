@@ -174,6 +174,23 @@ class PhasesMixin:
                     else min(wait_s,
                              max(TAB_CYCLE_COST, wait_s - WAIT_EARLY_MARGIN)))
             before = self._detect_march_queue()
+
+            # Shorter than the tab cycle itself? Then tabbing is pure overhead:
+            # it takes LONGER than the wait it is supposed to cover, and leaves
+            # a burst of alt-tabs that no player produces. The floor above was
+            # written for exactly this and does not reach it -- a wait under
+            # WAIT_EARLY_MARGIN takes the first branch, where plan = wait_s with
+            # no floor at all, which is how "alt-tab out for 0.0min" survived.
+            # Nine of 112 waits in the log are under six seconds.
+            if wait_s < TAB_CYCLE_COST:
+                print(f"  [{INFO}] Troops home in ~{wait_s:.0f}s -- shorter "
+                      f"than an alt-tab cycle, waiting where we are")
+                logger.info("Wait %.0fs below tab cost %.0fs -- staying put",
+                            wait_s, TAB_CYCLE_COST)
+                self._sleep_until_woken(wait_s, "short wait in place")
+                self._score_wait_prediction(before, wait_s, "in-place")
+                return
+
             if plan > WAIT_QUIT_MINUTES * 60:
                 print(f"  [{INFO}] Troops home in ~{wait_s / 60:.0f}min -- "
                       f"too long to sit here, quitting the client")
