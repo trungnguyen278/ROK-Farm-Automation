@@ -110,6 +110,24 @@ MARCH_BTN_PCT = (0.656, 0.763)       # "Hanh quan" (march), in the commander pan
 # button was still fading in). Two orders of magnitude apart, so this radius is
 # deliberately loose -- it only has to reject the other side of the panel.
 MARCH_BTN_MAX_OFFSET = 0.12
+
+# Where the gather button sits VERTICALLY on the mine popup, as a fraction of
+# window height, and how far from it a match may be.
+#
+# Measured from 9 real gather clicks that each produced a normal ~1.000-troop
+# march: y came out between 518 and 534 on an 862-high window -- a 16-pixel
+# band, because clicking a mine centres the camera on it and the popup lands in
+# the same place every time. The two clicks that instead sent 178.000 and
+# 29.921 troops matched at y=257 and y=451, well outside it.
+#
+# X is deliberately NOT checked: legitimate clicks cluster at two different x
+# positions (about 509 and 1021), so the popup evidently flips side depending
+# on where the mine sits.
+#
+# The offset is generous next to the 16px spread -- 0.05 of 862 is 43px -- so
+# this refuses a button in the wrong PLACE, not one a few pixels off.
+GATHER_BTN_Y_PCT = 0.611
+GATHER_BTN_MAX_Y_OFFSET = 0.05
 # Bottom-right corner toggles city <-> world. Clicked at this FIXED spot: the
 # template-matched position can land just off the hit-area (observed: matched
 # click didn't toggle, fixed corner did), and detection is flaky at night.

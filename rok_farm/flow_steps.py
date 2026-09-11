@@ -17,6 +17,7 @@ from vision.color_filter import is_gem_mine_color
 from vision.template_matcher import Match
 
 from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
+                             GATHER_BTN_MAX_Y_OFFSET, GATHER_BTN_Y_PCT,
                              DELAY_MINE_CLICK,
                              DELAY_RECHECK, DELAY_VERIFY, DELAY_WORLD_MAP,
                              DELAY_ZOOM_IN_POLL, GATHER_BTN_THRESHOLD,
@@ -995,6 +996,30 @@ class GemFlowMixin:
                 # Confidence cannot fix this and neither can a position check
                 # (the buttons sit in the same place). The words are the only
                 # thing that differs, so read them.
+                # WHERE it is, before WHAT it says. The text guard alone let
+                # two combat marches through -- 178.000 and 29.921 troops onto
+                # ground that was not a gem mine -- because the wrong button
+                # read as unreadable, and unreadable is allowed through on
+                # purpose so an OCR hiccup does not cost a mine.
+                #
+                # Position separates them cleanly where the text does not.
+                # Across 9 clicks that produced normal marches the button sat
+                # at y 518-534 of an 862-high window; the two that sent armies
+                # matched at y=257 and y=451.
+                y_pct = m.center[1] / max(1, frame.shape[0])
+                y_off = abs(y_pct - GATHER_BTN_Y_PCT)
+                if y_off > GATHER_BTN_MAX_Y_OFFSET:
+                    print(f"  [{FAIL}] Gather button in the wrong place "
+                          f"(y={y_pct:.3f}, expected ~{GATHER_BTN_Y_PCT:.3f}) "
+                          f"-- this popup is not a mine's; refusing")
+                    logger.warning("Refusing gather click: y=%.3f is %.3f from "
+                                   "the expected %.3f (conf=%.3f at %s)",
+                                   y_pct, y_off, GATHER_BTN_Y_PCT,
+                                   m.confidence, m.center)
+                    save_screenshot(frame, f"{tag}_WRONG_PLACE_{attempt:02d}")
+                    self._record(f"{tag}_gather", False, "button misplaced")
+                    return False
+
                 words = read_button_text(frame, m.x, m.y, m.w, m.h)
                 verdict = button_verdict(words)
                 # Log what it read EVERY time, not only when refusing. Two
