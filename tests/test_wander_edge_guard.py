@@ -99,3 +99,38 @@ def test_the_map_edge_blocks(book):
 def test_open_ground_does_not_block(book):
     assert not book.blocked(500, 500, 0.0)
     assert not book.blocked(500, 500, math.pi / 2)
+
+
+def test_the_veto_looks_further_than_the_camera_travels(book):
+    """A guard that sees less than one step checks ground already left behind.
+
+    Measured over 256 position readings, the camera moves 39 tiles between
+    reads at the median, 59 at p75 and 83 at p90. The veto used to look 48
+    tiles, so 36% of steps jumped clean over the zone it had just cleared --
+    which is how 67 real crossings into kingdom 4096 happened with the veto
+    switched on.
+    """
+    from rok_farm.map_memory import CELL, MapMemory
+
+    assert MapMemory.BLOCK_REACH_CELLS * CELL >= 83, (
+        f"the veto looks {MapMemory.BLOCK_REACH_CELLS * CELL} tiles ahead but "
+        f"the camera moves 83 tiles between reads at p90")
+
+
+def test_a_wall_beyond_the_old_reach_is_now_seen(book):
+    """The specific gap: a wall 10 cells out was invisible, and is not now."""
+    import math
+    book.record_wall(100 + 10 * CELL, 100)
+    assert book.blocked(100, 100, 0.0), \
+        "a wall ten cells ahead is still invisible to the veto"
+    assert not book.blocked(100, 100, math.pi), \
+        "the veto now fires in every direction, which would pin the wander"
+
+
+def test_scoring_still_uses_the_shorter_horizon(book):
+    """Preference and veto answer different questions and keep their own reach."""
+    import inspect
+    sig = inspect.signature(book.heading_score)
+    assert sig.parameters["reach_cells"].default == 6, (
+        "heading_score's horizon moved with the veto's; steering preference "
+        "was not what the measurement was about")

@@ -184,8 +184,21 @@ class MapMemory:
         weight = 0.5 ** (age_h / REACH_HALFLIFE_H)
         return (c.get("gem", 0) * 2.0 - c.get("empty", 0) * 0.5) * weight
 
+    # How far ahead the veto looks, in cells. Sized to how far the camera
+    # actually travels between position reads, because a guard that sees less
+    # than one step is checking ground the bot has already left: measured over
+    # 256 readings, the step is 39 tiles at the median, 59 at p75 and 83 at p90,
+    # against the 48 tiles (6 cells) this used to look. 36% of steps overshot
+    # the guarded zone entirely, which is how 67 real crossings into kingdom
+    # 4096 happened with the veto switched on.
+    #
+    # 12 cells is 96 tiles and covers 92% of steps. Scoring is left at 6 on
+    # purpose -- this is the hard veto, which should look further than the
+    # preference does.
+    BLOCK_REACH_CELLS = 12
+
     def blocked(self, x: int, y: int, heading: float,
-                reach_cells: int = 6) -> bool:
+                reach_cells: int = BLOCK_REACH_CELLS) -> bool:
         """Does this heading run into a wall, or off the map, within reach?
 
         Separate from heading_score on purpose. The score MIXES two different
