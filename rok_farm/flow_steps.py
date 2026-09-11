@@ -324,9 +324,28 @@ class GemFlowMixin:
             # comes out a fixed number of notches, so it lands on the same
             # absolute level however far the view had drifted, and repeating it
             # cannot walk anywhere.
-            print(f"  [{INFO}] On the world map but no gems in view -- "
-                  f"restoring icon zoom")
-            self._reset_zoom_to_reference()
+            if getattr(self, "_zoomed_in_by_click", False):
+                # Paired with a zoom-in that actually happened, which is what
+                # makes it safe. _reset_zoom_to_reference looked like the
+                # tidier answer and is not: it clamps fully IN and comes out
+                # the same 3 notches the CITY path uses, but the city path
+                # starts from the world map's default, which is much further
+                # out. From the clamp, 3 notches lands at 5 KM against the
+                # 77 KM of icon zoom -- close enough that plain grass has no
+                # features at all, which the fog detector then read as being
+                # out of the kingdom. It had never been called before, so the
+                # "then out to icon zoom" in its docstring was never true.
+                print(f"  [{INFO}] Undoing the gather zoom-in to get back to "
+                      f"icon level")
+                self._scroll_at_center(-1, self._zoom_scrolls())
+                self._wait_zoom_settled()
+                self._zoomed_in_by_click = False
+            else:
+                # Nothing zoomed us in, so nothing to undo. Zooming out "just
+                # in case" is what walked the view to 0.35x template scale over
+                # a night: barren ground looks exactly like wrong zoom.
+                print(f"  [{PASS}] Already on the world map -- leaving the "
+                      f"zoom alone")
 
         frame = self._grab()
         if frame is not None:
@@ -467,6 +486,10 @@ class GemFlowMixin:
         """Click an icon, wait for zoom-in, verify it's a gem mine. Returns True if gem popup opens."""
         sx, sy = self._screen_xy(*icon.center)
         print(f"  [{INFO}] [{attempt}] Clicking icon conf={icon.confidence:.3f} at {icon.center} -> screen ({sx},{sy})")
+        # Clicking an icon makes the GAME zoom in on it. Remember that, because
+        # the next mine may start from here and has to undo exactly this much
+        # -- no more, or the view ratchets outward over a night.
+        self._zoomed_in_by_click = True
 
         # Save icon patch for classifier labeling
         if icon_frame is not None:

@@ -61,15 +61,45 @@ class Runner(GemFlowMixin):
         pass
 
 
-def test_zoom_is_restored_when_no_gems_are_visible():
+def test_zoom_is_restored_when_a_click_zoomed_us_in():
     """The case that failed three mines in a row."""
-    src = (fs.__file__)
-    text = open(src, encoding="utf-8").read()
-    branch = text[text.index("Already on world map icon-zoom"):
-                  text.index("Step 2", text.index("Already on world map icon-zoom"))]
-    assert "_reset_zoom_to_reference" in branch, (
+    text = open(fs.__file__, encoding="utf-8").read()
+    start = text.index("Already on world map icon-zoom")
+    branch = text[start:text.index("Step 2", start)]
+    assert "_zoomed_in_by_click" in branch, (
         "the not-from-city branch no longer restores the zoom; a mine starting "
         "after a gather will scan at the gather's zoom and match nothing")
+    assert "_scroll_at_center(-1" in branch
+
+
+def test_the_restore_is_paired_and_bounded():
+    """Undo exactly the zoom-in that happened -- no clamping, no guessing.
+
+    _reset_zoom_to_reference looked tidier and was wrong: it clamps fully IN
+    and comes out the 3 notches the CITY path uses, but the city path starts
+    from the world map's default, far further out. From the clamp that lands at
+    5 KM against icon zoom's 77 KM -- close enough that plain grass has no
+    features, which the fog detector read as being out of the kingdom. It had
+    never been called before, so its docstring was never tested.
+    """
+    text = open(fs.__file__, encoding="utf-8").read()
+    start = text.index("Already on world map icon-zoom")
+    branch = text[start:text.index("Step 2", start)]
+    # The comments name it deliberately, to record why it is not used; only a
+    # CALL would be the bug.
+    code = "\n".join(ln.split("#", 1)[0] for ln in branch.splitlines())
+    assert "_reset_zoom_to_reference(" not in code, \
+        "back on the clamp-then-out path, which does not reach icon zoom"
+    assert "_zoomed_in_by_click = False" in code, \
+        "the flag is never cleared, so the zoom-out can repeat and ratchet"
+
+
+def test_the_flag_is_set_where_the_game_zooms_in():
+    """The pairing is only honest if the flag is set by the click itself."""
+    text = open(fs.__file__, encoding="utf-8").read()
+    click = text.index("Clicking icon conf=")
+    after = text[click:click + 500]
+    assert "_zoomed_in_by_click = True" in after,         "clicking an icon zooms the game in but no longer records it"
 
 
 def test_it_does_not_simply_zoom_out_further():
