@@ -9,6 +9,23 @@ import numpy as np
 # Linear V-scaling preserves pixel patterns for template matching.
 # (CLAHE distorts local contrast which breaks template matching.)
 NIGHT_BRIGHTNESS_THRESH = 90
+# Night on this map is a COLOUR SHIFT, not a dimming, and brightness alone
+# cannot see it. Measured over 58 scan frames spanning many runs:
+#
+#   terrain hue   day 20-39 (24 frames)   night 90-99 (34 frames)   nothing between
+#   brightness    day 128-159             night 128-159             no separation
+#
+# So every night frame was classified as day: the gate stayed at 0.72 while a
+# day-captured gem template only matches 0.65-0.71 under the cast, and real
+# mines were rejected for hours at a time. The desaturation that exists to
+# neutralise the cast never ran either.
+#
+# The band is deliberately a band, not "hue above 70": a desert or autumn map
+# sits LOW on the hue scale, and only the cyan/blue cast means night. The
+# bounds sit in a 51-wide empty gap, so this is not a tuned edge.
+NIGHT_HUE_LO = 70
+NIGHT_HUE_HI = 110
+NIGHT_MIN_SAT = 25          # a grey frame has no meaningful hue at all
 DAY_TARGET_BRIGHTNESS = 130
 # Night normalization is intentionally GENTLE. TM_CCOEFF_NORMED is already
 # brightness-invariant, so heavy V-scaling + clipping only distorts patterns,
@@ -32,6 +49,20 @@ def estimate_terrain_brightness(frame: np.ndarray) -> float:
     return float(np.median(gray))
 
 
+def terrain_hue_sat(frame: np.ndarray) -> tuple[float, float]:
+    """Median hue and saturation of the terrain band, ignoring the UI edges."""
+    fh, fw = frame.shape[:2]
+    hsv = cv2.cvtColor(frame[int(fh * 0.3):int(fh * 0.7),
+                             int(fw * 0.2):int(fw * 0.8)], cv2.COLOR_BGR2HSV)
+    return float(np.median(hsv[:, :, 0])), float(np.median(hsv[:, :, 1]))
+
+
+def has_night_cast(frame: np.ndarray) -> bool:
+    """Is the terrain washed toward cyan, the way this map renders night?"""
+    hue, sat = terrain_hue_sat(frame)
+    return sat >= NIGHT_MIN_SAT and NIGHT_HUE_LO <= hue <= NIGHT_HUE_HI
+
+
 def normalize_frame(frame: np.ndarray) -> tuple[np.ndarray, bool]:
     """Normalize frame brightness if night-time detected.
 
@@ -40,7 +71,8 @@ def normalize_frame(frame: np.ndarray) -> tuple[np.ndarray, bool]:
     Uses linear V-scaling (not CLAHE) to preserve template matching patterns.
     """
     brightness = estimate_terrain_brightness(frame)
-    is_night = brightness < NIGHT_BRIGHTNESS_THRESH
+    is_night = (brightness < NIGHT_BRIGHTNESS_THRESH
+                or has_night_cast(frame))
 
     if not is_night:
         return frame, False
