@@ -624,6 +624,14 @@ class GemFlowMixin:
         # on that mine, so coming back out by the same amount returns to icon
         # level. It is paired with a zoom-in that actually happened, which is
         # what makes it safe -- unlike the unconditional one above.
+        #
+        # THIS is where the undo happens, for both callers -- a dud icon and
+        # step 7 after a march -- so this is where the debt is cleared. Leaving
+        # the flag set meant the next mine undid the same zoom-in a second
+        # time and ended three notches too far OUT: 121 KM against icon zoom's
+        # 77 KM, where the icons render too small to match and the scan finds
+        # not one candidate in eighteen tries.
+        self._zoomed_in_by_click = False
         self._scroll_at_center(-1, self._zoom_scrolls())
         self._wait_zoom_settled()
 

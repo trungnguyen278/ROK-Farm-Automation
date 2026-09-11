@@ -126,3 +126,26 @@ def test_visible_gems_short_circuit_before_any_zooming():
     head = text[start:text.index("if toggled_from_city", start)]
     assert "return True" in head, \
         "the early return on visible gems is gone"
+
+
+def test_the_debt_is_cleared_where_the_undo_actually_happens():
+    """Two zoom-outs for one zoom-in leaves the camera too far OUT.
+
+    _return_to_icon_zoom is the real undo, and BOTH exits use it -- a dud icon
+    click and step 7 after a march. With the flag left set, the next mine undid
+    the same zoom-in again and landed three notches beyond icon zoom: 121 KM
+    against 77 KM, where icons render too small to match and a scan finds not
+    one candidate in eighteen tries. That is the failure I first blamed on the
+    map's resource filter, and then on the area having no gems.
+    """
+    text = open(fs.__file__, encoding="utf-8").read()
+    start = text.index("def _return_to_icon_zoom")
+    body = text[start:text.index("\n    def ", start + 10)]
+    assert "_zoomed_in_by_click = False" in body, (
+        "the paired undo no longer clears the flag, so the next mine will "
+        "zoom out a second time for the same zoom-in")
+    # and it must clear BEFORE scrolling, so an exception mid-scroll cannot
+    # leave the debt outstanding forever
+    assert (body.index("_zoomed_in_by_click = False")
+            < body.index("_scroll_at_center")), \
+        "the flag is cleared after the scroll, so a failure there strands it"
