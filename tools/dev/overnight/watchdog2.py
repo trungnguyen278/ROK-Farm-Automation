@@ -273,7 +273,18 @@ while True:
     # and the 75-minute stuck detector could never fire at all. A watchdog that
     # cannot time out is not a watchdog.
     new_planned_wait = cur["planned_wait"] > poll_prev["planned_wait"]
+    client_died = cur["client_dead"] > poll_prev["client_dead"]
     poll_prev = cur
+
+    # The one fault here that is terminal on its own. Every other check waits
+    # to see whether the farm recovers, because most things do; this one does
+    # not -- the client is gone, the farm cannot start a mine, and nothing it
+    # does next will bring the window back. Waiting out the 75-minute stuck
+    # clock would cost the rest of the night for no information.
+    if client_died:
+        if restart_farm("the client did not come back after a planned wait"):
+            continue
+        break
 
     # consecutive failures (tail run of FAILED with no DONE after it)
     # Count failures within the CURRENT farm run only. The log is appended

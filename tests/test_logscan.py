@@ -169,3 +169,35 @@ def test_the_scoped_pattern_drops_the_false_positives_in_the_real_log(real_log):
         "narrowed anything")
     assert not [ln for ln in new_hits if "SetForegroundWindow" in ln], \
         "a SetForegroundWindow line still reads as a serial fault"
+
+
+def test_a_dead_client_is_recognised(real_log):
+    """The night of 2026-09-11 ended with the farm alive and its client gone.
+
+    Nothing else in this module would have noticed: the log kept growing with
+    relaunch attempts, no mine was failing because none could start, and the
+    stuck clock had barely begun. It sat wedged until a human stopped it.
+    """
+    wedged = (
+        "  [FAIL] No game window after 180s\n"
+        "  [FAIL] Game did not come back up\n"
+    )
+    assert logscan.counts(wedged)["client_dead"] == 2
+
+    healthy = (
+        "  [INFO] Staying out for 9.5 min\n"
+        "  [INFO] Client ready after 1.0s (start of mine 2)\n"
+        "  [WARN] Restarting the game: waiting 9min for troops\n"
+    )
+    assert logscan.counts(healthy)["client_dead"] == 0
+
+    # and it really is present in the log that motivated it
+    assert logscan.counts(real_log)["client_dead"] >= 1
+
+
+def test_a_planned_quit_is_not_a_dead_client(real_log):
+    """The farm closes its own client constantly and by design."""
+    for line in ("  [INFO] Closing the game (ALT+F4)",
+                 "  [WARN] Restarting the game: waiting 9min for troops",
+                 "  [INFO] Troops home in ~10min -- too long to sit here, quitting"):
+        assert logscan.counts(line)["client_dead"] == 0, line

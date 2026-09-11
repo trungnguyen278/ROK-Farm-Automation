@@ -34,6 +34,17 @@ PATTERNS = {
     # every "is it stuck" clock must count it as activity. Three separate
     # thresholds tripped on this before it was handled.
     "planned_wait": r"Staying out for|Still out, \d+ min to go",
+    # The farm quit its client for a planned wait and then could not get it
+    # back: the launcher would not come to the front, the Play button matched
+    # at 0.634, and after 180s there was no game window. Terminal -- on
+    # 2026-09-11 the farm produced no mine and no client-ready line afterwards
+    # and sat there until a human stopped it by hand.
+    #
+    # Nothing else here would have caught it. The log kept growing (relaunch
+    # attempts), no mine was failing because none could start, and the
+    # 75-minute stuck clock had barely begun. Rare -- once in three weeks --
+    # but it costs the rest of the night every time.
+    "client_dead":  r"Game did not come back up|No game window after \d+s",
 }
 
 # Lines the CAPTURE THREAD emits. It is a daemon that grabs frames forever,
