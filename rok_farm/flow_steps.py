@@ -26,6 +26,7 @@ from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
                              ZOOM_POLL_MAX)
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
 from rok_farm.map_memory import MapMemory
+from rok_farm.queue_ocr import button_verdict, read_button_text
 from rok_farm.screenshots import save_annotated, save_screenshot
 
 # How close two HUD coordinate readings must be to mean the same deposit.
@@ -827,6 +828,32 @@ class GemFlowMixin:
             if m:
                 print(f"  [{PASS}] gather_btn: conf={m.confidence:.3f}")
                 save_annotated(frame, m, f"{tag}_gather_found")
+
+                # READ the button before pressing it. The popup for an EMPTY
+                # TILE carries "Dich Chuyen" and "Hanh quan" in the same chrome
+                # as "Thu thap", and template matching cannot tell them apart:
+                # on 2026-09-11 m6 matched the empty-tile popup at 0.79 while
+                # real gathers matched at 0.78 -- the wrong button scored
+                # HIGHER. It pressed "Hanh quan" and sent 178.000 troops to bare
+                # ground at 202:184. A combat march to an empty tile does not
+                # come home on its own; it holds a march slot until it is
+                # recalled by hand.
+                #
+                # Confidence cannot fix this and neither can a position check
+                # (the buttons sit in the same place). The words are the only
+                # thing that differs, so read them.
+                verdict = button_verdict(
+                    read_button_text(frame, m.x, m.y, m.w, m.h))
+                if verdict == "other":
+                    print(f"  [{FAIL}] That button is not Gather -- refusing to "
+                          f"click (this popup is an empty tile, not a mine)")
+                    logger.warning("Refusing gather click: button text says "
+                                   "%r at conf=%.3f",
+                                   read_button_text(frame, m.x, m.y, m.w, m.h),
+                                   m.confidence)
+                    save_screenshot(frame, f"{tag}_WRONG_BUTTON_{attempt:02d}")
+                    self._record(f"{tag}_gather", False, "wrong button")
+                    return False
 
                 # Identify the deposit BEFORE opening the deploy panel: that
                 # panel covers the top-left corner where the coordinates live.

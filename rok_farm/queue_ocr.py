@@ -146,6 +146,56 @@ def _parse_amount(text: str) -> int | None:
     return int(digits) if digits.isdigit() else None
 
 
+# What the popup buttons say, once OCR has flattened the diacritics. The gather
+# button is "THU THAP"; the two that must never be clicked are "DICH CHUYEN"
+# (teleport the city here) and "HANH QUAN" (march troops here), which appear on
+# the popup for an EMPTY TILE.
+_BTN_GATHER = ("thuthap", "thuhap", "thut")
+_BTN_NOT_GATHER = ("dichchuyen", "dich", "chuyen", "hanhquan", "hanh", "quan")
+
+
+def button_verdict(texts) -> str:
+    """"gather", "other", or "unreadable" for the words on a matched button.
+
+    Template matching cannot separate these buttons: they share the chrome, and
+    on 2026-09-11 an empty-tile popup matched buttons/gather_btn at 0.79 while
+    a real gather matched at 0.78 -- the wrong one scored HIGHER. The words are
+    nothing alike, so read them instead.
+
+    Deliberately three-valued. A confident "other" is the whole point, but an
+    unreadable button must stay allowed: refusing on silence would turn every
+    OCR hiccup into a lost mine, and this guard exists to stop one specific
+    catastrophe, not to become a second gate on the happy path.
+    """
+    flat = "".join(t for t in texts).lower()
+    flat = "".join(ch for ch in flat if ch.isalpha())
+    if not flat:
+        return "unreadable"
+    if any(w in flat for w in _BTN_GATHER):
+        return "gather"
+    if any(w in flat for w in _BTN_NOT_GATHER):
+        return "other"
+    return "unreadable"
+
+
+def read_button_text(frame, x, y, w, h, pad: int = 4):
+    """OCR a matched button, using its OWN box rather than a fixed position."""
+    if _OCR_BACKEND != "rapidocr" or _ocr_engine is None or frame is None:
+        return []
+    fh, fw = frame.shape[:2]
+    y0, y1 = max(0, y - pad), min(fh, y + h + pad)
+    x0, x1 = max(0, x - pad), min(fw, x + w + pad)
+    crop = frame[y0:y1, x0:x1]
+    if crop.size == 0:
+        return []
+    try:
+        result, _ = _ocr_engine(crop)
+    except Exception as e:
+        logger.debug("Button OCR error: %s", e)
+        return []
+    return [r[1] for r in result] if result else []
+
+
 class GemCounterMixin:
     """Reads the gem total off the HUD. Mixed into GemFarmRunner.
 
