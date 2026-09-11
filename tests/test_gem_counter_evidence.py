@@ -101,3 +101,38 @@ def test_both_box_edges_are_recorded(reader, monkeypatch):
         f"measured and the evidence is unusable")
     left, right, text = first
     assert right > left, "the right edge is not to the right of the left one"
+
+
+def test_the_crop_is_enlarged_before_reading():
+    """Bigger text gives the detector less reason to split the number.
+
+    Every corrupted gem reading came from the engine splitting across boxes
+    that then disagreed about the glyph in the overlap -- '63.' and '8.989' for
+    a real 63.989, the same character read as 3 in one box and 8 in the other.
+    Merging cannot repair that; the boxes share no text to align on.
+
+    Measured on the frame that produced exactly that failure: 1x gave three
+    boxes and '63.8.989'; 2x, 3x and 4x gave two boxes and '63.989'.
+    """
+    from rok_farm import PROJECT_ROOT
+    src = (PROJECT_ROOT / "rok_farm" / "queue_ocr.py").read_text(encoding="utf-8")
+    body = src[src.index("def _read_gem_count"):]
+    body = body[:body.index("\n    def ", 10)]
+    assert "GEM_OCR_UPSCALE" in body, "the gem crop is no longer enlarged"
+    assert q.GEM_OCR_UPSCALE >= 2, \
+        "below 2x the engine split the number and corrupted it"
+
+    resize = body.index("cv2.resize")
+    call = body.index("_ocr_engine(")
+    assert resize < call, "the crop is enlarged after being read, which does nothing"
+
+
+def test_enlarging_does_not_narrow_the_crop():
+    """Sizing the crop to today's number is what once clipped a leading digit.
+
+    152.531 read as 52.531 -- silently, because a clipped number still parses.
+    The fix for splitting must not reintroduce that.
+    """
+    assert q.GEM_ROI[0] <= 0.88, \
+        "the gem crop got narrower; a number that grows a digit will be clipped"
+    assert q.GEM_ROI[2] >= 0.99

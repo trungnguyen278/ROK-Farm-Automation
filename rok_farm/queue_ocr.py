@@ -125,6 +125,11 @@ _POS_RE = re.compile(r"#\s*([A-Za-z]{0,2}\d{3,6})\D{0,3}X[:\s]*(\d{1,4})"
 # frames: left edges of 0.88 and 0.90 both read the value on every frame that
 # has the bar, 0.92 clipped it to "531" on three of four.
 GEM_ROI = (0.88, 0.000, 0.995, 0.040)
+# Read the crop enlarged. Measured on the frame that produced the worst
+# corruption: at 1x the engine returned three boxes and "63.8.989" for a real
+# 63.989, at 2x/3x/4x it returned two and read it correctly. 2x is the smallest
+# that worked, and 176x34 pixels is cheap to quadruple.
+GEM_OCR_UPSCALE = 2
 # Values print with dots as thousands separators ("52.531") and switch to a
 # K/M/B suffix once large ("45.5M"), so both forms have to parse or the counter
 # silently starts reading 45.5M as 455.
@@ -259,6 +264,24 @@ class GemCounterMixin:
         roi = frame[int(fh * y1):int(fh * y2), int(fw * x1):int(fw * x2)]
         if roi.size == 0:
             return None
+        # Upscale before reading. Every corrupted gem reading so far came from
+        # the engine splitting the number across boxes that then disagreed
+        # about the glyph in the overlap -- '63.' and '8.989' for a real
+        # 63.989, where the same character reads 3 in one box and 8 in the
+        # other. Merging cannot repair that: the two boxes share no text to
+        # align on.
+        #
+        # Bigger text gives the detector less reason to split at all. Measured
+        # on the frame that produced exactly that failure: at 1x it returned
+        # THREE boxes and '63.8.989'; at 2x, 3x and 4x it returned two boxes
+        # and '63.989'. 2x is enough, and the crop is 176x34, so four times the
+        # pixels is nothing.
+        #
+        # Note this does NOT narrow the crop. Sizing it to the number is what
+        # once clipped a leading digit and read 152.531 as 52.531 -- silently,
+        # because a clipped number still parses.
+        roi = cv2.resize(roi, None, fx=GEM_OCR_UPSCALE, fy=GEM_OCR_UPSCALE,
+                         interpolation=cv2.INTER_CUBIC)
         try:
             result, _ = _ocr_engine(roi)
             if not result:
