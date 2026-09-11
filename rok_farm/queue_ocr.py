@@ -558,7 +558,17 @@ class DeployPanelMixin:
         if march:
             est = self.predict_gather_seconds(info)
             extra = f", gather bonus {info['bonus_pct']}" if info.get("bonus_pct") else ""
-            if est:
+            if est and est > MAX_GATHER_SECONDS:
+                # Say it is being thrown away, here, where it is printed. The
+                # estimate was announced as fact -- "home in ~6432044m" -- and
+                # only rejected on the NEXT line, so the log read as though the
+                # bot were about to wait twelve years. It never was: the guard
+                # below drops it and the march goes out untimed. Printing a
+                # number the code has already decided not to believe is how a
+                # healthy run comes to look alarming.
+                extra += (f" -> gather estimate implausible "
+                          f"({est / 3600:.0f}h), ignoring it")
+            elif est:
                 total = 2 * march + est
                 extra += (f" -> est. gather {est / 60:.0f}m, "
                           f"home in ~{total / 60:.0f}m")
