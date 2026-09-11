@@ -358,9 +358,33 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
             time.sleep(random.uniform(1.0, 2.0))
             self._refresh_window()
 
+    # Frames whose names mark them as evidence of a specific fault. These
+    # survive the startup sweep: they are the ones somebody will want to look
+    # at, and they are rare.
+    KEEP_FOREVER = ("WRONG_BUTTON", "WRONG_PLACE", "TIMEOUT", "MAPID")
+    KEEP_HOURS = 3.0
+
     def run(self):
+        # Prune by AGE, and never touch a named fault frame.
+        #
+        # This used to delete every screenshot at startup. That is the worst
+        # possible moment: a restart is usually how a fix gets loaded after a
+        # failure, so the wipe destroyed the evidence of the very run being
+        # investigated. Asked for the frames behind two bad marches today, I
+        # had none -- I had restarted eight times, and each restart threw them
+        # away.
+        #
+        # Shutdown already prunes anything over an hour, so bounded disk use
+        # never depended on this.
+        cutoff = time.time() - self.KEEP_HOURS * 3600
         for f in SCREENSHOT_DIR.glob("*.png"):
-            f.unlink()
+            if any(tag in f.name for tag in self.KEEP_FOREVER):
+                continue
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
 
         print("=" * 60)
         print("  GEM FARM FLOW -- E2E Test (Anti-Detection ON)")
@@ -519,8 +543,13 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         if self.sc:
             self.sc.close()
         if SCREENSHOT_DIR.exists():
-            cutoff = time.time() - 3600
+            # Same rule as startup: age only, and fault frames are kept. An
+            # hour is shorter than a night, so a fault found in the morning had
+            # already lost its evidence to this.
+            cutoff = time.time() - self.KEEP_HOURS * 3600
             for f in SCREENSHOT_DIR.glob("*.png"):
+                if any(tag in f.name for tag in self.KEEP_FOREVER):
+                    continue
                 try:
                     if f.stat().st_mtime < cutoff:
                         f.unlink()
