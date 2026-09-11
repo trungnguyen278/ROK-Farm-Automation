@@ -48,7 +48,10 @@ def test_the_vote_still_gates_the_switch():
     """Evidence must not become permission: one odd read still cannot switch."""
     src = FLOW.read_text(encoding="utf-8")
     start = src.index("self._map_id_votes.append(map_id)")
-    block = src[start:start + 1400]
+    # To the end of the branch, not a fixed number of characters: a window
+    # sized to today's code silently stops covering it the moment a comment is
+    # added, which is exactly what happened when the frame capture went in.
+    block = src[start:src.index("self._map_id_votes = []", start)]
     assert "len(self._map_id_votes) < 3" in block, \
         "the three-vote gate is gone; a single misread can now bail the mine"
 
