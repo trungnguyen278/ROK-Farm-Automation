@@ -84,9 +84,21 @@ class GemFlowMixin:
         if self.mapmem is not None and self.mapmem.map_id != map_id:
             self._map_id_votes = getattr(self, "_map_id_votes", [])
             self._map_id_votes.append(map_id)
+            # Keep the RAW text behind a disagreeing id. The vote exists
+            # because this OCR returns a structurally valid but wrong id in
+            # about 8% of reads, and the vote only helps while the misreads
+            # DIFFER -- three identical wrong reads sail through it. On
+            # 2026-09-11 the farm bailed five times for "S11465 -> 4096" while
+            # a live capture of the same HUD read S11465 perfectly, so the
+            # crossings were false and the vote did not catch them.
+            #
+            # Which means the interesting thing is not the id, it is the string
+            # it came from, and nothing was recording that.
+            logger.warning("Map id disagrees: read %s, book says %s, votes %s "
+                           "-- raw %r", map_id, self.mapmem.map_id,
+                           self._map_id_votes[-3:],
+                           getattr(self, "_last_pos_text", None))
             if len(self._map_id_votes) < 3 or len(set(self._map_id_votes[-3:])) != 1:
-                logger.debug("Ignoring map id %s (have %s, votes %s)",
-                             map_id, self.mapmem.map_id, self._map_id_votes[-3:])
                 return getattr(self, "_last_map_xy", None)
             self._map_id_votes = []
         else:

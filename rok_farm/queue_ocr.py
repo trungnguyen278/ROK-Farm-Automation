@@ -398,6 +398,11 @@ class MapPositionMixin:
                     break
             else:
                 m = _POS_RE.search(text)
+        # Keep the string every read came from, not only the unparsed ones.
+        # A WRONG id parses perfectly, so the failures that matter leave no
+        # trace here -- and those are the ones that make the farm bail out of
+        # its own kingdom.
+        self._last_pos_text = text[:80]
         if not m:
             logger.debug("Map position unparsed: %r", text[:40])
             return None
