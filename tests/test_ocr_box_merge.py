@@ -45,11 +45,27 @@ def test_the_other_recorded_map_failures(y, tail):
     assert y + tail[0] not in out
 
 
-def test_a_healthy_frame_is_unchanged():
-    """Non-overlapping boxes must join exactly as before."""
+def test_separated_boxes_do_not_fuse_into_one_number():
+    """Boxes with a real gap between them are different things.
+
+    Concatenating them blindly turned '5' at x96-111 and '61.5' at x207-261 --
+    96px apart, plainly two numbers -- into "561.5", and a gem count of 61.522
+    was read as 561.522 and refused.
+    """
+    out = merge_boxes([det(23, 76, "32."), det(58, 120, ".3M"),
+                       det(96, 111, "5"), det(207, 261, "61.5"),
+                       det(242, 311, ".522")])
+    assert "61.522" in out
+    assert "561.522" not in out
+
+
+def test_a_healthy_frame_still_parses(): 
+    """The separator must not break the position read it sits inside."""
+    import rok_farm.queue_ocr as q
     out = merge_boxes([det(70, 174, "26.089.083"),
                        det(195, 322, "#S11465X:179Y:189"), det(328, 344, "Q")])
-    assert out == "26.089.083#S11465X:179Y:189Q"
+    m = q._POS_RE.search(out)
+    assert m and m.groups() == ("S11465", "179", "189"), out
 
 
 def test_abutting_boxes_keep_a_real_repeat():

@@ -18,6 +18,7 @@ from vision.template_matcher import Match
 
 from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
                              GATHER_BTN_MAX_Y_OFFSET, GATHER_BTN_Y_PCT,
+                             GEM_MAX_LOAD,
                              DELAY_MINE_CLICK,
                              DELAY_RECHECK, DELAY_VERIFY, DELAY_WORLD_MAP,
                              DELAY_ZOOM_IN_POLL, GATHER_BTN_THRESHOLD,
@@ -1147,6 +1148,33 @@ class GemFlowMixin:
             # the memorised fixed position, because template detection is flaky
             # at night and the fixed positions are what the pacing is tuned for.
             self._wait_for_march_button()
+
+            # Last chance to notice this is not a gem mine. The deploy panel is
+            # on screen NOW, and its "Trong tai" separates the cases perfectly:
+            # across 272 readings a gem mine reads 10 or 30, and everything
+            # else reads 954.459 to 2.144.010 -- three orders of magnitude
+            # apart with nothing between.
+            #
+            # The operator identified what those marches actually were: a WOOD
+            # mine, taken for a gem one. The popup was genuine and the buttons
+            # were the right buttons, so neither the text nor the position
+            # guard can see it; only the payload does. 29.921 troops went out
+            # on that one, and the record it left could not be timed, which
+            # blinded every wait that followed for up to three hours.
+            #
+            # Reading it here costs one OCR pass on a panel already open, and
+            # the mine is not lost by refusing -- it was never a gem.
+            panel = self._parse_deploy_panel(self._grab())
+            load = (panel or {}).get("load")
+            if load is not None and load > GEM_MAX_LOAD:
+                print(f"  [{FAIL}] Deploy panel says load={load:,} -- that is "
+                      f"not a gem mine (gems read 10-30); backing out instead "
+                      f"of marching")
+                logger.warning("Refusing march: load=%s means a non-gem node "
+                               "(troops=%s)", load, (panel or {}).get("troops"))
+                save_screenshot(self._grab(), f"{tag}_WRONG_NODE")
+                self._record(f"{tag}_march", False, f"non-gem node load={load}")
+                return False
 
             print(f"  [{INFO}] March (Hanh quan) at fixed pct{MARCH_BTN_PCT}")
             self._click_pct(*MARCH_BTN_PCT, jitter_px=6)

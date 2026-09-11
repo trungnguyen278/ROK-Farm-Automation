@@ -128,6 +128,23 @@ MARCH_BTN_MAX_OFFSET = 0.12
 # this refuses a button in the wrong PLACE, not one a few pixels off.
 GATHER_BTN_Y_PCT = 0.611
 GATHER_BTN_MAX_Y_OFFSET = 0.05
+
+# The deploy panel's "Trong tai" (carrying capacity) says what is being
+# gathered, and it separates gem mines from everything else completely.
+# Measured over 272 panel readings: a gem mine reads 10 or 30, and every other
+# node reads 954.459 to 2.144.010. Three orders of magnitude, nothing between,
+# so the threshold sits in empty space rather than on an edge.
+#
+# The operator puts the ceiling for a gem mine at about 50, and lower again for
+# one somebody has already partly gathered -- a half-emptied node can be single
+# digits. That is the direction the threshold has to be generous in, and 1000
+# is twenty times the ceiling, so a nearly exhausted mine is never refused.
+#
+# This is what catches a WOOD mine taken for a gem one -- the popup is genuine
+# and the buttons are the right buttons, so nothing about the click looks
+# wrong; only the payload does. It is read while the panel is open and BEFORE
+# the march is committed, because afterwards there is nothing to refuse.
+GEM_MAX_LOAD = 1000
 # Bottom-right corner toggles city <-> world. Clicked at this FIXED spot: the
 # template-matched position can land just off the hit-area (observed: matched
 # click didn't toggle, fixed corner did), and detection is flaky at night.

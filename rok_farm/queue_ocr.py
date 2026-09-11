@@ -218,13 +218,28 @@ def merge_boxes(result) -> str:
     out = ""
     prev_right = None
     for left, right, text in boxes:
-        if out and prev_right is not None and left < prev_right:
-            # Overlapping: strip the longest tail of what we have that the new
-            # box repeats at its head.
-            for n in range(min(len(out), len(text)), 0, -1):
-                if out[-n:] == text[:n]:
-                    text = text[n:]
-                    break
+        if out and prev_right is not None:
+            if left < prev_right:
+                # Overlapping: the same glyph was decoded twice, so strip the
+                # longest tail of what we have that the new box repeats.
+                for n in range(min(len(out), len(text)), 0, -1):
+                    if out[-n:] == text[:n]:
+                        text = text[n:]
+                        break
+            elif left > prev_right:
+                # Separated: two different things, not one number split in two.
+                # Without this they were concatenated into a single run of
+                # digits -- boxes '5' at x96-111 and '61.5' at x207-261, 96px
+                # apart, became "561.5" and a gem count of 61.522 was read as
+                # 561.522 and refused.
+                #
+                # The rule needs no threshold: measured on the recorded boxes,
+                # pieces of ONE number always overlap (gaps of -18, -19, -24)
+                # and separate numbers never do (+21, +43, +96). Boxes that
+                # touch EXACTLY have never been observed, so that case is left
+                # on the joining side -- two boxes reading "11" and "11" back
+                # to back are more plausibly 1111 than two numbers.
+                text = " " + text
         out += text
         prev_right = right
     return out
