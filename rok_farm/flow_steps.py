@@ -157,6 +157,23 @@ class GemFlowMixin:
                  (0.0, 0.7, -0.7, 1.4, -1.4, 2.2, -2.2, math.pi)]
         scored = [(self.mapmem.heading_score(x, y, h), h) for h in cands]
         best_score, best = max(scored, key=lambda t: t[0])
+
+        # A wall ahead is a veto, not a vote. The margin below exists so a
+        # couple of unlucky scans cannot pin the bot in one corner, and that is
+        # right for "this ground looked empty last time" -- but a NEGATIVE
+        # score means known wall or off-map, and there is no amount of
+        # curiosity that makes walking into it worthwhile. Applying the same
+        # margin to both is why the wander kept leaving the kingdom: the
+        # alternatives were unexplored and scored 0, which does not beat a wall
+        # at -10 by enough only because it does -- but when the edge itself
+        # scored 0 too, nothing ever won.
+        if scored[0][0] < 0 and best_score > scored[0][0]:
+            logger.info("steer: refusing %.0f deg (score %.1f, wall or edge "
+                        "ahead) -> %.0f deg",
+                        math.degrees(heading) % 360, scored[0][0],
+                        math.degrees(best) % 360)
+            return best
+
         if best_score > scored[0][0] + 1.0:
             logger.debug("steer: %.0f -> %.0f deg (score %.1f > %.1f)",
                          math.degrees(heading) % 360,

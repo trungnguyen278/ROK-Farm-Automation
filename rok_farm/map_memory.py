@@ -163,6 +163,18 @@ class MapMemory:
         Walls dominate: a cell known to be mountain is never worth steering
         into, however many gems once sat next to it.
         """
+        # Off the coordinate space is not "unexplored", it is impossible. The
+        # lookup below misses on a negative key and returned 0 -- NEUTRAL -- so
+        # a heading pointing straight off the edge scored exactly as safely as
+        # one pointing into open ground, and the wander walked out of the
+        # kingdom again and again. The recorded walls sit at cell y=0 (tile
+        # y 0..7), which is that edge; but the border is a long line and the
+        # book only ever knows the handful of cells already crossed at, so
+        # learning cannot close this. Bounds can.
+        #
+        # Not a tuned constant: no map has a tile at a negative coordinate.
+        if x < 0 or y < 0:
+            return -10.0
         if self.is_wall(x, y):
             return -10.0
         c = self.reach.get(_key(x, y))
