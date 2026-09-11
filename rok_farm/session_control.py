@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import ctypes
 import random
+import re
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import psutil
@@ -303,8 +305,66 @@ def do_stop(close_game=True):
     lines = [f"Stopped: {', '.join(killed)}" if killed else "Nothing was running."]
     time.sleep(2)
     lines.extend(shutdown_board(close_game))
+    lines.extend(session_summary())
     blog(" | ".join(lines))
     return "\n".join(lines)
+
+
+def session_summary():
+    """What the run actually produced: gems, how long, and the rate.
+
+    Read back out of the farm log rather than held in memory, because the
+    process that knew is the one being killed -- and because a controller can
+    be started at any time and still summarise a run it did not launch.
+
+    The gem total is the LAST accepted reading minus the first. Rejected
+    readings never enter the log as "Gems now", so a clipped OCR read cannot
+    inflate or deflate the figure; at worst the end point is a few minutes
+    stale, which the elapsed time below is measured against anyway.
+    """
+    log = LOGDIR / "farm_run.log"
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    marker = "=== farm start "
+    run = text[text.rfind(marker):] if marker in text else text
+    if not run.strip():
+        return []
+
+    gems = [int(g) for g in re.findall(r"Gems now (\d+) \(", run)]
+    stamps = re.findall(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+ ", run,
+                        re.MULTILINE)
+    done = len(re.findall(r"Mine \d+ DONE", run))
+    failed = len(re.findall(r"Mine \d+ FAILED", run))
+
+    out = []
+    hours = None
+    if len(stamps) >= 2:
+        fmt = "%Y-%m-%d %H:%M:%S"
+        span = (datetime.strptime(stamps[-1], fmt)
+                - datetime.strptime(stamps[0], fmt)).total_seconds()
+        if span > 0:
+            hours = span / 3600.0
+            h, m = divmod(int(span // 60), 60)
+            out.append(f"Ran for {h}h{m:02d}m.")
+
+    if len(gems) >= 2:
+        gained = gems[-1] - gems[0]
+        line = f"Gems: {gems[0]:,} -> {gems[-1]:,} ({gained:+,})"
+        if hours and hours >= 0.05:
+            line += f", {gained / hours:,.0f}/h"
+        out.append(line)
+    elif gems:
+        out.append(f"Gems: {gems[0]:,} (only one reading, no total)")
+
+    if done or failed:
+        pct = 100.0 * done / (done + failed)
+        line = f"Mines: {done} done / {failed} failed ({pct:.0f}%)"
+        if hours and hours >= 0.05:
+            line += f", {done / hours:.1f} done/h"
+        out.append(line)
+    return out
 
 
 def do_report():
