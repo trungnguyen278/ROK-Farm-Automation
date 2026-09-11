@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import difflib
 import io
 import os
 import random
@@ -60,6 +61,21 @@ BOT_LOG = LOGDIR / "discord_bot.log"
 SHOTS = PROJECT / "screenshots" / "gem_farm_test"
 
 WATCH_POLL = 60.0
+
+# Every verb the handler below answers to, including the short aliases.
+KNOWN_CMDS = ("help", "h", "status", "s", "shot", "pic", "live", "log",
+              "report", "feed", "check", "wake", "start", "stop")
+
+# What a typo may be pointed AT. "start" and "stop" are deliberately absent.
+#
+# Measured, not assumed: "shto" scores 0.75 against BOTH "shot" and "stop", and
+# so does "sotp". The tie is broken by list order, which is to say arbitrarily,
+# so a slip of "!shot" can be answered with "did you mean !stop?" -- and an
+# operator who takes the hint stops the farm and closes the game when they
+# wanted a screenshot. The harm is not symmetric: a missed suggestion costs one
+# retype, a wrong one costs the run. Anything state-changing has to be typed in
+# full.
+SUGGESTABLE = tuple(c for c in KNOWN_CMDS if c not in ("start", "stop"))
 
 
 # --------------------------------------------------------------------------
@@ -669,7 +685,13 @@ async def on_message(message):
                             await asyncio.to_thread(do_stop, "keep" not in args))
 
         else:
-            await reply(message, f"unknown command `{cmd}` -- try `!help`")
+            # Suggest, never run. "!stpo" is one letter from "!stop", and
+            # quietly acting on a guess would stop a farm the operator meant to
+            # leave alone. Typing these from a phone is the normal case, so a
+            # bare "unknown command" is a wasted round trip.
+            near = difflib.get_close_matches(cmd, SUGGESTABLE, n=1, cutoff=0.6)
+            hint = f" -- did you mean `!{near[0]}`?" if near else " -- try `!help`"
+            await reply(message, f"unknown command `{cmd}`{hint}")
     except Exception as e:
         blog(f"command failed: {type(e).__name__}: {e}")
         await reply(message, f"command failed: `{type(e).__name__}: {e}`")
