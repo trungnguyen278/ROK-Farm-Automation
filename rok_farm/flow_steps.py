@@ -946,8 +946,18 @@ class GemFlowMixin:
                 # Confidence cannot fix this and neither can a position check
                 # (the buttons sit in the same place). The words are the only
                 # thing that differs, so read them.
-                verdict = button_verdict(
-                    read_button_text(frame, m.x, m.y, m.w, m.h))
+                words = read_button_text(frame, m.x, m.y, m.w, m.h)
+                verdict = button_verdict(words)
+                # Log what it read EVERY time, not only when refusing. Two
+                # deploy-panel timeouts on 2026-09-11 clicked 271px right and
+                # 255px left of the same mine -- symmetric, which is what a
+                # popup with a button each side looks like -- so one of them
+                # was very likely the wrong button. The guard reported nothing,
+                # because an UNREADABLE button is allowed through by design,
+                # and without the text there is no way to tell an unreadable
+                # Gather from an unreadable something-else.
+                logger.debug("gather button reads %r -> %s (conf=%.3f at %s)",
+                             words, verdict, m.confidence, m.center)
                 if verdict == "other":
                     print(f"  [{FAIL}] That button is not Gather -- refusing to "
                           f"click (this popup is an empty tile, not a mine)")

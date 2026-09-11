@@ -80,3 +80,27 @@ def test_the_verdict_holds_on_the_real_frames():
         assert got == want, (
             f"{name}: matched at {m.confidence:.3f} and read as {got!r}, "
             f"expected {want!r}")
+
+
+def test_the_button_text_is_logged_every_time():
+    """An unreadable button is allowed through, so it must still be recorded.
+
+    Two deploy-panel timeouts on 2026-09-11 clicked 271px right and 255px left
+    of the same mine -- symmetric, the shape of a popup with a button on each
+    side -- so one was very likely the wrong button. The guard reported
+    nothing, because "unreadable" passes by design. Without the words in the
+    log there is no way to tell an unreadable Gather from an unreadable
+    something-else, and no way to know whether the guard was even consulted.
+    """
+    from pathlib import Path
+
+    from rok_farm import PROJECT_ROOT
+
+    src = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(
+        encoding="utf-8")
+    start = src.index("verdict = button_verdict")
+    block = src[start - 400:src.index("if verdict ==", start) + 60]
+    assert "logger.debug" in block or "logger.info" in block, (
+        "the button text is only recorded on a refusal, so the case that "
+        "actually fails leaves no evidence")
+    assert "words" in block, "the raw words are not what gets logged"
