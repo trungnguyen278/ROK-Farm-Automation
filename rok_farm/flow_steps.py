@@ -106,6 +106,13 @@ class GemFlowMixin:
                            "-- raw %r", map_id, self.mapmem.map_id,
                            self._map_id_votes[-3:],
                            getattr(self, "_last_pos_text", None))
+            # And keep the frame. The text alone was not enough: none of the
+            # surviving screenshots reproduces a wrong id, so there is nothing
+            # to test a fix against. This is half of all remaining failures and
+            # it has been diagnosed twice from guesswork already -- once as the
+            # camera being stuck outside the kingdom, which a live capture
+            # disproved. An image settles it.
+            save_screenshot(frame, f"MAPID_{map_id}")
             if len(self._map_id_votes) < 3 or len(set(self._map_id_votes[-3:])) != 1:
                 return getattr(self, "_last_map_xy", None)
             self._map_id_votes = []

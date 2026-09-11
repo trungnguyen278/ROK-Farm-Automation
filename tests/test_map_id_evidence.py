@@ -51,3 +51,21 @@ def test_the_vote_still_gates_the_switch():
     block = src[start:start + 1400]
     assert "len(self._map_id_votes) < 3" in block, \
         "the three-vote gate is gone; a single misread can now bail the mine"
+
+
+def test_a_disagreeing_id_also_keeps_the_frame():
+    """The text was not enough, twice over.
+
+    Half the remaining failures are a mine abandoned because the id read as
+    another kingdom. It has been explained from guesswork twice -- once as the
+    camera being stuck outside, which a live capture disproved -- and none of
+    the surviving screenshots reproduces a wrong id, so there is nothing to
+    test a fix against. The frame is what settles it.
+    """
+    src = FLOW.read_text(encoding="utf-8")
+    start = src.index("self._map_id_votes.append(map_id)")
+    block = src[start:src.index("self._map_id_votes = []", start)]
+    assert "save_screenshot" in block, \
+        "a disagreeing map id is logged but the frame is thrown away"
+    assert "MAPID" in block, \
+        "the saved frame is not named for the fault, so it cannot be found"
