@@ -68,3 +68,34 @@ def test_the_edge_penalty_reaches_before_the_camera_does(book):
         assert book.heading_score(100, y, -math.pi / 2) < 0, (
             f"standing {gap_cells} cells from the edge, heading straight at "
             f"it still scores neutral")
+
+
+def test_a_previously_empty_cell_is_not_blocked(book):
+    """The veto is about terrain, not about where gems happened to be.
+
+    The first version of this guard asked the SCORE whether the way was
+    blocked. The score adds terrain and gem history together, so a cell that
+    merely scanned empty once is negative too -- and the veto fired on nine
+    scans out of nine, refusing headings for having been unlucky. That is the
+    pinning the wander's margin exists to prevent.
+    """
+    book.record_scan(300, 300, [])          # seen, nothing there
+    book.record_scan(300, 300, [])
+    assert book.score(300, 300) < 0, "an empty cell should still score badly"
+    assert not book.blocked(292, 300, 0.0), \
+        "an empty cell must not block a heading -- only terrain does"
+
+
+def test_a_wall_blocks(book):
+    book.record_wall(300, 300)
+    assert book.blocked(300 - 6 * CELL, 300, 0.0)
+
+
+def test_the_map_edge_blocks(book):
+    assert book.blocked(10, 10, math.pi), "heading west off the map"
+    assert book.blocked(10, 10, -math.pi / 2), "heading north off the map"
+
+
+def test_open_ground_does_not_block(book):
+    assert not book.blocked(500, 500, 0.0)
+    assert not book.blocked(500, 500, math.pi / 2)

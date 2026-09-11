@@ -158,20 +158,29 @@ class GemFlowMixin:
         scored = [(self.mapmem.heading_score(x, y, h), h) for h in cands]
         best_score, best = max(scored, key=lambda t: t[0])
 
-        # A wall ahead is a veto, not a vote. The margin below exists so a
-        # couple of unlucky scans cannot pin the bot in one corner, and that is
-        # right for "this ground looked empty last time" -- but a NEGATIVE
-        # score means known wall or off-map, and there is no amount of
-        # curiosity that makes walking into it worthwhile. Applying the same
-        # margin to both is why the wander kept leaving the kingdom: the
-        # alternatives were unexplored and scored 0, which does not beat a wall
-        # at -10 by enough only because it does -- but when the edge itself
-        # scored 0 too, nothing ever won.
-        if scored[0][0] < 0 and best_score > scored[0][0]:
-            logger.info("steer: refusing %.0f deg (score %.1f, wall or edge "
-                        "ahead) -> %.0f deg",
-                        math.degrees(heading) % 360, scored[0][0],
-                        math.degrees(best) % 360)
+        # A wall ahead is a veto, not a vote -- but ONLY a wall. Asking the
+        # score whether the way is blocked was wrong: the score adds terrain
+        # and gem history together, so "known wall" (-10) and "looked empty
+        # last time" (-0.5) are both merely negative. Vetoing on that fired on
+        # nine scans out of nine and refused headings whose only sin was one
+        # empty scan -- the pinning the margin below exists to prevent.
+        #
+        # blocked() asks the map the question directly instead.
+        if self.mapmem.blocked(x, y, heading):
+            unblocked = [(s, h) for s, h in scored
+                         if not self.mapmem.blocked(x, y, h)]
+            if unblocked:
+                best_score, best = max(unblocked, key=lambda t: t[0])
+                logger.info("steer: refusing %.0f deg (wall or map edge "
+                            "within reach) -> %.0f deg",
+                            math.degrees(heading) % 360,
+                            math.degrees(best) % 360)
+                return best
+            # Every way out is blocked: take the least-bad rather than stand
+            # still, and say so, because that is a corner worth knowing about.
+            logger.warning("steer: every candidate heading is blocked at "
+                           "(%d,%d) -- taking %.0f deg", x, y,
+                           math.degrees(best) % 360)
             return best
 
         if best_score > scored[0][0] + 1.0:

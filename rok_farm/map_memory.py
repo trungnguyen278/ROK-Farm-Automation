@@ -184,6 +184,29 @@ class MapMemory:
         weight = 0.5 ** (age_h / REACH_HALFLIFE_H)
         return (c.get("gem", 0) * 2.0 - c.get("empty", 0) * 0.5) * weight
 
+    def blocked(self, x: int, y: int, heading: float,
+                reach_cells: int = 6) -> bool:
+        """Does this heading run into a wall, or off the map, within reach?
+
+        Separate from heading_score on purpose. The score MIXES two different
+        things: terrain that cannot be entered, and ground that simply looked
+        empty last time. Summed together a wall (-10) and mild emptiness
+        (-0.5 per empty visit) are both "negative", and a veto written against
+        the sum fired on every other scan -- refusing headings whose only sin
+        was a previous empty scan, which is exactly the pinning the wander's
+        margin was designed to prevent.
+
+        A wall is a fact about the map. An empty scan is a guess about gems.
+        Only the first is worth a veto.
+        """
+        for step in range(1, reach_cells + 1):
+            d = step * CELL
+            cx = int(x + math.cos(heading) * d)
+            cy = int(y + math.sin(heading) * d)
+            if cx < 0 or cy < 0 or self.is_wall(cx, cy):
+                return True
+        return False
+
     def heading_score(self, x: int, y: int, heading: float,
                       reach_cells: int = 6) -> float:
         """Sum the scores along a heading, a few cells out."""
