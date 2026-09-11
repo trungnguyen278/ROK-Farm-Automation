@@ -36,6 +36,14 @@ from rok_farm.screenshots import save_annotated, save_screenshot
 # turn out to land a tile apart, the data says so and this can grow.
 SITE_MATCH_TILES = 0
 
+# Scans to allow before concluding the map is not drawing deposits at all.
+# Measured over 649 mines: the first candidate arrives on scan 0 at the median,
+# scan 1 at p90, scan 7 at p99, and 13 in the worst case ever recorded. Ten
+# gives up on 2 of those 649 and saves eight useless scans on each of the 70
+# that never produced a candidate at all -- those are wrong-zoom mines, and no
+# amount of further wandering fixes a zoom.
+NO_CANDIDATE_GIVEUP = 10
+
 
 class GemFlowMixin:
     """Per-mine flow steps. Mixed into GemFarmRunner."""
@@ -856,6 +864,28 @@ class GemFlowMixin:
                     return None
                 print(f"  [ -- ] Scan {scan_count:2d}/{max_scans}: no icons "
                       f"(spd={scan_speed:.1f}x, empty={empty_streak})")
+
+                # Nothing AT ALL after a few scans is not a barren patch, it is
+                # a map that is not showing what we are looking for -- wrong
+                # zoom, most often. Carrying on to 18 scans cannot help,
+                # because the wander cannot fix the zoom; only the trip through
+                # the city can, and that is what this cuts to.
+                #
+                # Measured over 649 mines: the first candidate arrives on scan
+                # 0 at the median, scan 1 at p90 and scan 7 at p99, with 13 the
+                # worst ever seen. Leaving at 10 gives up on 2 of those 649
+                # (0.3%) and saves eight wasted scans on each of the 70 that
+                # never saw a candidate at all.
+                if (scan_count >= NO_CANDIDATE_GIVEUP
+                        and not getattr(self, "_candidates_this_mine", 0)):
+                    print(f"  [{FAIL}] {scan_count} scans and NOT ONE candidate "
+                          f"-- the map is not showing deposits (wrong zoom?); "
+                          f"going back through the city, which resets it")
+                    logger.warning("No candidates in %d scans -- early return "
+                                   "to city to reset the zoom", scan_count)
+                    self._step_return_city(tag)
+                    return None
+
                 if empty_streak >= max_empty_streak:
                     if self._check_reconnect_popup():
                         empty_streak = 0

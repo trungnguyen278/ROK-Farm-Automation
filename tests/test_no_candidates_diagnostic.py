@@ -66,3 +66,32 @@ def test_the_give_up_message_distinguishes_the_two_cases(flow):
 def test_the_ordinary_message_survives(flow):
     """A genuinely barren patch must still report plainly, not alarmingly."""
     assert "restarting from city" in _giveup_block(flow)
+
+
+def test_a_blank_map_is_abandoned_early(flow):
+    """Eighteen scans cannot fix a zoom; only the trip through the city can.
+
+    Measured over 649 mines: the first candidate arrives on scan 0 at the
+    median, scan 1 at p90, scan 7 at p99, 13 at the worst. Ten scans with
+    NOTHING is not a barren patch, it is a map not drawing deposits.
+    """
+    from rok_farm.flow_steps import NO_CANDIDATE_GIVEUP
+
+    assert 8 <= NO_CANDIDATE_GIVEUP <= 13, (
+        f"{NO_CANDIDATE_GIVEUP} sits outside the measured range: below 8 it "
+        f"starts cutting healthy mines, above 13 it saves nothing")
+
+    start = flow.index("NOT ONE candidate")
+    early = flow[max(0, start - 1200):start + 600]
+    assert "NO_CANDIDATE_GIVEUP" in early
+    assert "_step_return_city" in early, \
+        "the early exit does not go through the city, so the zoom is not reset"
+
+
+def test_the_early_exit_needs_zero_candidates_not_just_empty_scans(flow):
+    """A patch that yields candidates the classifier rejects is ordinary."""
+    start = flow.index("NO_CANDIDATE_GIVEUP\n", flow.index("def _step_scan"))
+    block = flow[start:start + 400]
+    assert "_candidates_this_mine" in block, (
+        "the early exit fires on empty scans alone, which would cut short any "
+        "mine searching genuinely barren ground")
