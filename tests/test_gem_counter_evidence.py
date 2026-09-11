@@ -79,3 +79,25 @@ def test_the_guard_rejects_a_clipped_read_and_keeps_the_previous(reader, monkeyp
     assert reader.note_gem_count(frame) is None, "the clipped read was accepted"
     assert reader.note_gem_count(frame) == 55104, \
         "a rejected read poisoned the baseline"
+
+
+def test_both_box_edges_are_recorded(reader, monkeypatch):
+    """A left edge alone cannot say whether two boxes overlap.
+
+    Six refused readings were logged before this was noticed, and not one of
+    them could be used to evaluate a fix: the seam disagreements ('63.' + '8.605',
+    where the same glyph reads 3 in one box and 8 in the other) need the overlap
+    WIDTH to say how many characters were read twice, and the width needs both
+    edges.
+    """
+    monkeypatch.setattr(q, "_ocr_engine", lambda roi: (engine_result([
+        (104.0, 130.0, "63."), (117.0, 160.0, "8.605")]), None))
+    reader._read_gem_count(np.zeros((862, 1533, 3), dtype=np.uint8))
+
+    assert reader._gem_pieces, "no boxes recorded at all"
+    first = reader._gem_pieces[0]
+    assert len(first) == 3, (
+        f"recorded {first!r}; without a right edge the overlap cannot be "
+        f"measured and the evidence is unusable")
+    left, right, text = first
+    assert right > left, "the right edge is not to the right of the left one"

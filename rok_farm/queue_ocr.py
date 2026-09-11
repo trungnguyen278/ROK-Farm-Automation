@@ -272,7 +272,14 @@ class GemCounterMixin:
         # of exactly this shape -- boxes that split or overlap where the code
         # assumed one box per number -- and it was only solvable once the raw
         # boxes were in the log.
-        self._gem_pieces = [(round(r[0][0][0], 1), r[1]) for r in ordered]
+        # BOTH edges, not just the left. Whether two boxes overlap -- and by how
+        # much -- is the only thing that can say how many characters at the seam
+        # were read twice, and a left edge alone cannot answer it. Six refused
+        # readings were logged before this was noticed, and none of them could
+        # be used to evaluate a fix.
+        self._gem_pieces = [(round(min(p[0] for p in r[0]), 1),
+                             round(max(p[0] for p in r[0]), 1), r[1])
+                            for r in ordered]
 
         # The merged text holds every number in the crop, and the gem total is
         # the right-most of them -- the same thing "right-most box" was reaching
