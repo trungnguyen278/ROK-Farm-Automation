@@ -166,11 +166,6 @@ class DetectMixin:
         for m in matches:
             if m.confidence < gem_thr:
                 continue
-            # Count every candidate that reached the classifier. A mine that
-            # ends with zero of these has not searched barren ground -- the map
-            # drew nothing to search. That distinction is invisible in the scan
-            # counts alone and is what the give-up message needs.
-            self._candidates_this_mine = getattr(self, "_candidates_this_mine", 0) + 1
             patch = self._extract_icon_patch(frame, m)
             should, label, clf_conf = self.classifier.should_click(patch)
             if not should:
@@ -297,6 +292,15 @@ class DetectMixin:
         for m in matches:
             if m.confidence < gem_thr:
                 continue
+            # Count every candidate that reached the classifier. A mine ending
+            # with zero of these has not searched barren ground -- the map drew
+            # nothing to search, which is a different fault and a different fix.
+            #
+            # THIS is the function the scan loop calls. It was first added to
+            # _find_all_gems next door, which the scan loop does not use, so
+            # the count stayed at zero and the early give-up fired on every
+            # mine -- including one that had already classified a gem.
+            self._candidates_this_mine = getattr(self, "_candidates_this_mine", 0) + 1
             patch = self._extract_icon_patch(frame, m)
             should_click, label, clf_conf = self.classifier.should_click(patch)
             if not should_click:

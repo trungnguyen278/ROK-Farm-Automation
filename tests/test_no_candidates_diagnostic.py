@@ -35,11 +35,29 @@ def test_the_counter_is_reset_for_each_mine(flow):
         "the candidate counter is not reset when a mine's scan begins"
 
 
-def test_the_counter_is_raised_where_candidates_are_seen():
+def test_the_counter_is_raised_in_the_function_the_scan_loop_calls():
+    """detect.py has two near-identical finders and only one is used here.
+
+    The counter first went into _find_all_gems, which the scan loop does not
+    call. It therefore never left zero, "no candidates" was always true, and
+    the early give-up cut every mine at ten scans -- including one that had
+    already classified a gem. Same file, same shape, wrong function.
+    """
     src = DETECT.read_text(encoding="utf-8")
-    assert "_candidates_this_mine" in src, (
-        "nothing counts candidates, so the give-up message cannot tell the "
-        "two failures apart")
+    flow = FLOW.read_text(encoding="utf-8")
+
+    called = {m for m in ("_find_all_icons", "_find_all_gems")
+              if f"self.{m}(frame)" in flow[flow.index("def _step_scan_and_verify_gem"):]}
+    assert called, "the scan loop calls neither finder; has it been renamed?"
+
+    for name in called:
+        start = src.index(f"def {name}(")
+        nxt = src.find("\n    def ", start + 10)
+        body = src[start:nxt if nxt != -1 else len(src)]
+        assert "_candidates_this_mine" in body, (
+            f"{name} is what the scan loop calls and it does not count "
+            f"candidates, so the give-up cannot tell a blank map from a "
+            f"barren one")
     # It must count BEFORE the classifier's verdict: a rejected candidate is
     # still evidence the map drew something.
     idx = src.index("_candidates_this_mine")
