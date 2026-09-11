@@ -648,6 +648,11 @@ class GemFlowMixin:
     def _step_scan_and_verify_gem(self, tag: str) -> Match | None:
         print(f"\n--- [{tag}] Step 2: Scan + verify gem mines ---\n")
 
+        # Per MINE, not per run: the question is "did THIS search see anything
+        # at all", and a counter carried over from the last mine answers a
+        # different question and always says yes.
+        self._candidates_this_mine = 0
+
         ww = self.win["width"]
         wh = self.win["height"]
         margin = 80
@@ -835,8 +840,32 @@ class GemFlowMixin:
                     if self._check_reconnect_popup():
                         empty_streak = 0
                         continue
-                    print(f"  [{WARN}] {max_empty_streak} consecutive empty scans -- "
-                          f"restarting from city")
+                    # Two very different things end up here, and they have
+                    # looked identical in the log until now.
+                    #
+                    # Normally a barren patch still produces CANDIDATES that
+                    # the classifier turns down -- six to nineteen of them in a
+                    # healthy mine. Zero rejects across the whole streak means
+                    # the icon stage found nothing to even consider, which is
+                    # not scarcity: it is the map not drawing what we are
+                    # looking for. Seen twice on 2026-09-11 -- once at the
+                    # wrong zoom, and once with the map filter panel open and
+                    # its "resources" layer switched OFF, which hides every
+                    # deposit including gem mines.
+                    #
+                    # Naming it costs nothing and turns an invisible failure
+                    # into one that says what to check.
+                    if not getattr(self, "_candidates_this_mine", 0):
+                        print(f"  [{FAIL}] {max_empty_streak} empty scans and "
+                              f"NOT ONE candidate -- the map is not showing "
+                              f"deposits (check the map filter's resource "
+                              f"layer, and the zoom level)")
+                        logger.warning(
+                            "No icon candidates at all in %d scans -- resource "
+                            "layer off, or wrong zoom", max_empty_streak)
+                    else:
+                        print(f"  [{WARN}] {max_empty_streak} consecutive empty "
+                              f"scans -- restarting from city")
                     self._step_return_city(tag)
                     return None
                 continue

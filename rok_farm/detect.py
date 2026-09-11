@@ -166,6 +166,11 @@ class DetectMixin:
         for m in matches:
             if m.confidence < gem_thr:
                 continue
+            # Count every candidate that reached the classifier. A mine that
+            # ends with zero of these has not searched barren ground -- the map
+            # drew nothing to search. That distinction is invisible in the scan
+            # counts alone and is what the give-up message needs.
+            self._candidates_this_mine = getattr(self, "_candidates_this_mine", 0) + 1
             patch = self._extract_icon_patch(frame, m)
             should, label, clf_conf = self.classifier.should_click(patch)
             if not should:
