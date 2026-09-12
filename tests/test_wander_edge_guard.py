@@ -109,6 +109,17 @@ def test_the_veto_looks_further_than_the_camera_travels(book):
     tiles, so 36% of steps jumped clean over the zone it had just cleared --
     which is how 67 real crossings into kingdom 4096 happened with the veto
     switched on.
+
+    CONFIRMED IN PRODUCTION, 2026-09-13. Counted per farm start over the whole
+    log, before and after the reach went 6 -> 12 cells:
+
+        before   5772 scans   67 crossings (11.6 per 1000)   31 vetoes
+        after     561 scans    0 crossings ( 0.0 per 1000)   26 vetoes
+
+    Both halves of that matter. Zero crossings alone would prove nothing -- a
+    run that never approached the border would also show zero -- but the veto
+    fired 8.6x more often per scan, so it was being exercised, and the old
+    rate predicted about 6.5 crossings over those scans.
     """
     from rok_farm.map_memory import CELL, MapMemory
 
