@@ -972,6 +972,19 @@ class GemFlowMixin:
                     # saturated screen is what open ocean looks like too, and
                     # ocean is inside the kingdom -- but that stays a guess
                     # until there is a frame to look at, which is what this is.
+                    #
+                    # Scale check before anyone spends a night on it: most of
+                    # those 108 were the WANDER, not the detector. Fog is the
+                    # out-of-kingdom void, so a wander that stops walking to
+                    # the border stops finding it, and the border veto fix of
+                    # 2026-09-11 did exactly that --
+                    #
+                    #   before the veto fix   5772 scans   107 fog   18.5/1000
+                    #   after                  561 scans     2 fog    3.6/1000
+                    #
+                    # a 5x drop, where the old rate predicted about 10. What
+                    # is left is a small residue, and these frames are for
+                    # understanding that residue, not a crisis.
                     save_screenshot(frame, f"{tag}_FOG_{scan_count:02d}")
                     # Strongest terrain evidence available: mark it permanently.
                     # Mountains and the map void do not move, so unlike the
