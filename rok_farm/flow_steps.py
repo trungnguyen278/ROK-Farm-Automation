@@ -786,9 +786,16 @@ class GemFlowMixin:
         # censoring the data rather than describing it. Over 374 finds in the
         # log the streak-before-a-find decayed 24, 18, 14, 19, 9, 8 across
         # lengths 6..11 and then dropped to a hard 0 at 12 -- not a natural
-        # tail, just the cutoff. Finds at 12-14 were unobservable, so 18 is set
-        # to actually run the experiment; report.py counts scan_giveup, so the
-        # next run says whether anything lands past 11.
+        # tail, just the cutoff. Finds at 12-14 were unobservable, so 18 was
+        # set to actually run the experiment.
+        #
+        # THE EXPERIMENT HAS ITS ANSWER (2026-09-13, 826 finds). The tail is
+        # real and 12 was cutting it off: 57 finds -- 6.9% of every find in
+        # the log -- arrived on a streak of 12 or more, and the decay runs
+        # smoothly on through 13 (18, 23, 13, 12 at lengths 10..13) before
+        # thinning out. Past 13 there are single digits per length and the
+        # counts blur into a boundary artefact at 18 itself, so this is far
+        # enough: raising it again would buy noise at the price of scans.
         max_empty_streak = 18
         max_icons_per_frame = 2
         attempt = 0
@@ -1024,6 +1031,19 @@ class GemFlowMixin:
                     # wrong zoom, and once with the map filter panel open and
                     # its "resources" layer switched OFF, which hides every
                     # deposit including gem mines.
+                    #
+                    # And when there ARE rejects, they are honest ones. The
+                    # numbers look damning from the log alone -- a streak mine
+                    # turns down a median of 31 candidates and accepts none,
+                    # against 13 seen and 2 accepted in a mine that succeeds --
+                    # but that comparison is circular, because accepting is
+                    # what ENDS a mine. So the patches were re-extracted and
+                    # looked at: 88 rejects across two streak mines (m17, m23
+                    # of 2026-09-13), every one a wood log or a stone cluster,
+                    # not a single gem among them, while the four the same
+                    # pipeline accepted on m21 were plainly gem crystals.
+                    # These mines were in wood-and-stone country. The fix for
+                    # them is where the wander goes, not how it classifies.
                     #
                     # Naming it costs nothing and turns an invisible failure
                     # into one that says what to check.
