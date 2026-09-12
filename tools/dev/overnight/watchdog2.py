@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -238,6 +239,8 @@ last_retry_alert = 0.0
 # toward the five-per-hour halt. Only restarts seen AFTER we start are ours.
 restart_seen = prev["restart"]
 restart_times = []
+# Counted, never fatal. See the handler at the bottom of the loop.
+poll_errors = 0
 
 while True:
     time.sleep(POLL)
@@ -250,162 +253,180 @@ while True:
         break
 
     try:
-        text = FARM_LOG.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        continue
-
-    size = flow_size(text)
-    if size != last_size:
-        last_size, last_change = size, time.time()
-    elif time.time() - last_change > SILENT_LIMIT:
-        restarted = restart_farm(f"no flow output for {int(time.time()-last_change)}s (hung)")
-        if restarted:
+        try:
+            text = FARM_LOG.read_text(encoding="utf-8", errors="replace")
+        except Exception:
             continue
-        break
 
-    cur = counts(text)
-    # Edge detection against the PREVIOUS POLL. Comparing with `prev` looked
-    # right and was silently catastrophic: `prev` is only refreshed by the
-    # hourly summary, so one increment made `cur > prev` true on EVERY poll for
-    # the rest of the hour. The planned-wait guard below refreshes the stuck
-    # clock, and the farm now takes a planned wait every gather cycle -- far
-    # more often than hourly -- so the condition was effectively always true
-    # and the 75-minute stuck detector could never fire at all. A watchdog that
-    # cannot time out is not a watchdog.
-    new_planned_wait = cur["planned_wait"] > poll_prev["planned_wait"]
-    client_died = cur["client_dead"] > poll_prev["client_dead"]
-    poll_prev = cur
-
-    # The one fault here that is terminal on its own. Every other check waits
-    # to see whether the farm recovers, because most things do; this one does
-    # not -- the client is gone, the farm cannot start a mine, and nothing it
-    # does next will bring the window back. Waiting out the 75-minute stuck
-    # clock would cost the rest of the night for no information.
-    if client_died:
-        if restart_farm("the client did not come back after a planned wait"):
-            continue
-        break
-
-    # consecutive failures (tail run of FAILED with no DONE after it)
-    # Count failures within the CURRENT farm run only. The log is appended
-    # across restarts on purpose, so counting over the whole file meant the 14
-    # failures that triggered a relaunch were still the newest events a second
-    # later -- the freshly started farm had produced none of its own yet. It
-    # halted again 40 seconds after coming back, then again, burning all six
-    # supervisor restarts in four minutes without the new process ever getting
-    # a chance. The start banner is the boundary the log already provides.
-    run = current_run(text)
-    events = re.findall(r"Mine \d+ (FAILED|DONE)", run)
-    consec = 0
-    for e in reversed(events):
-        if e == "FAILED":
-            consec += 1
-        else:
-            break
-    if consec >= CONSEC_FAIL_LIMIT:
-        restarted = restart_farm(f"{consec} consecutive mine failures")
-        if restarted:
-            continue
-        break
-
-    if cur["restart"] < restart_seen:
-        restart_seen = cur["restart"]      # log truncated under us; re-baseline
-    if cur["restart"] > restart_seen:
-        restart_seen = cur["restart"]
-        restart_times.append(time.time())
-        log(f"game restart ({len(restart_times)} since watchdog start)")
-    recent = [t for t in restart_times if t > time.time() - 3600]
-    if len(recent) >= RESTART_LIMIT:
-        # Relaunch, do not merely kill. This branch called kill_farm and broke
-        # out of the loop, so a farm that restarted its client too often was
-        # killed and left dead -- the exact failure the supervisor exists to
-        # prevent, and the one that cost a whole night when a designed quiet
-        # period was read as a hang. The consecutive-failure branch above has
-        # always relaunched; this one never did.
-        #
-        # restart_farm carries its own cap, so a genuine loop still stops after
-        # MAX_SUPERVISOR_RESTARTS instead of bouncing for ever.
-        restart_times.clear()
-        if restart_farm(f"{len(recent)} game restarts within an hour"):
-            continue
-        break
-
-    # A dead command channel is the failure this missed the first time: the
-    # farm stayed alive, the capture thread kept logging, but nothing clicked
-    # again. Watch for the serial exception directly -- it is unambiguous.
-    # Only the RECENT tail. The farm log is append-mode now (deliberately -- a
-    # truncating log erases the evidence of why it restarted), so searching the
-    # whole file means one serial hiccup hours ago keeps re-raising this alert
-    # for the rest of the run, and across every future run too. Boolean searches
-    # over a cumulative log are alerts with no expiry date.
-    if SERIAL_FAULT.search(text[-20000:]):
-        if not serial_flagged:
-            serial_flagged = True
-            log("!! serial error seen in farm log -- command channel may be dead")
-        # Only fatal if it never recovers: a reconnect logs further activity.
-        if cur["mine_done"] == prev_progress_done and \
-                cur["mine_failed"] == prev_progress_failed and \
-                time.time() - last_progress_at > 600:
-            if restart_farm("serial error and no mine progress for 10 min "
-                            "-- command channel did not recover"):
-                serial_flagged = False
+        size = flow_size(text)
+        if size != last_size:
+            last_size, last_change = size, time.time()
+        elif time.time() - last_change > SILENT_LIMIT:
+            restarted = restart_farm(f"no flow output for {int(time.time()-last_change)}s (hung)")
+            if restarted:
                 continue
             break
 
-    if cur["mine_done"] != prev_progress_done or \
-            cur["mine_failed"] != prev_progress_failed:
-        prev_progress_done = cur["mine_done"]
-        prev_progress_failed = cur["mine_failed"]
-        last_progress_at = time.time()
+        cur = counts(text)
+        # Edge detection against the PREVIOUS POLL. Comparing with `prev` looked
+        # right and was silently catastrophic: `prev` is only refreshed by the
+        # hourly summary, so one increment made `cur > prev` true on EVERY poll for
+        # the rest of the hour. The planned-wait guard below refreshes the stuck
+        # clock, and the farm now takes a planned wait every gather cycle -- far
+        # more often than hourly -- so the condition was effectively always true
+        # and the 75-minute stuck detector could never fire at all. A watchdog that
+        # cannot time out is not a watchdog.
+        new_planned_wait = cur["planned_wait"] > poll_prev["planned_wait"]
+        client_died = cur["client_dead"] > poll_prev["client_dead"]
+        poll_prev = cur
 
-    # Mines cannot start while the client is deliberately closed, so
-    # counting "no mines" as a fault during a planned wait measures the
-    # wrong thing. This also covers the serial rule, which shares the
-    # same clock.
-    if new_planned_wait:
-        last_progress_at = time.time()
+        # The one fault here that is terminal on its own. Every other check waits
+        # to see whether the farm recovers, because most things do; this one does
+        # not -- the client is gone, the farm cannot start a mine, and nothing it
+        # does next will bring the window back. Waiting out the 75-minute stuck
+        # clock would cost the rest of the night for no information.
+        if client_died:
+            if restart_farm("the client did not come back after a planned wait"):
+                continue
+            break
 
-    # Stuck check must NOT require scans to keep growing: a paralysed bot stops
-    # producing them entirely, which is precisely the case worth catching.
-    idle_min = (time.time() - last_progress_at) / 60.0
-    if idle_min > STUCK_MINUTES:
-        restarted = restart_farm(f"no mine started or finished for {idle_min:.0f} min "
-                  f"-- farm is not progressing")
-        if restarted:
-            continue
-        break
+        # consecutive failures (tail run of FAILED with no DONE after it)
+        # Count failures within the CURRENT farm run only. The log is appended
+        # across restarts on purpose, so counting over the whole file meant the 14
+        # failures that triggered a relaunch were still the newest events a second
+        # later -- the freshly started farm had produced none of its own yet. It
+        # halted again 40 seconds after coming back, then again, burning all six
+        # supervisor restarts in four minutes without the new process ever getting
+        # a chance. The start banner is the boundary the log already provides.
+        run = current_run(text)
+        events = re.findall(r"Mine \d+ (FAILED|DONE)", run)
+        consec = 0
+        for e in reversed(events):
+            if e == "FAILED":
+                consec += 1
+            else:
+                break
+        if consec >= CONSEC_FAIL_LIMIT:
+            restarted = restart_farm(f"{consec} consecutive mine failures")
+            if restarted:
+                continue
+            break
 
-    # Circling one mine is a ban-shaped behaviour, so surface it as soon as it
-    # appears rather than waiting for the next summary.
-    why = circling_evidence(text)
-    if why and time.time() - last_retry_alert > RETRY_COOLDOWN:
-        last_retry_alert = time.time()
-        log(f"!! possible circling: {why}")
+        if cur["restart"] < restart_seen:
+            restart_seen = cur["restart"]      # log truncated under us; re-baseline
+        if cur["restart"] > restart_seen:
+            restart_seen = cur["restart"]
+            restart_times.append(time.time())
+            log(f"game restart ({len(restart_times)} since watchdog start)")
+        recent = [t for t in restart_times if t > time.time() - 3600]
+        if len(recent) >= RESTART_LIMIT:
+            # Relaunch, do not merely kill. This branch called kill_farm and broke
+            # out of the loop, so a farm that restarted its client too often was
+            # killed and left dead -- the exact failure the supervisor exists to
+            # prevent, and the one that cost a whole night when a designed quiet
+            # period was read as a hang. The consecutive-failure branch above has
+            # always relaunched; this one never did.
+            #
+            # restart_farm carries its own cap, so a genuine loop still stops after
+            # MAX_SUPERVISOR_RESTARTS instead of bouncing for ever.
+            restart_times.clear()
+            if restart_farm(f"{len(recent)} game restarts within an hour"):
+                continue
+            break
 
-    if time.time() - last_summary >= SUMMARY_EVERY:
-        d = {k: cur[k] - prev[k] for k in cur}
-        mins = SUMMARY_EVERY // 60
-        log(f"[+{mins}min] done={d['mine_done']} failed={d['mine_failed']} "
-            f"march={d['march_sent']} | empty={d['empty_scan']} "
-            f"giveup={d['scan_giveup']} fog={d['fog_bail']} occupied={d['occupied']} "
-            f"skip={d['skip_clicked']} | clf_rej={d['clf_reject']} "
-            f"col_rej={d['color_reject']} gather_miss={d['gather_miss']} "
-            f"refused={d['refused']} world_fail={d['world_fail']} "
-            f"| max_retry={max_attempt_index(text)} | TOTAL done={cur['mine_done']} "
-            f"fail={cur['mine_failed']} empty={cur['empty_scan']} "
-            f"fog={cur['fog_bail']}")
-        # A burst of empties with nothing to show for it is the pattern that
-        # preceded every fruitless loop so far; worth saying out loud.
-        if d["empty_scan"] >= 20 and d["mine_done"] == 0:
-            log(f"   note: {d['empty_scan']} empty scans and no mine in {mins} min")
-        if d["fog_bail"] == 0 and d["empty_scan"] >= 20:
-            log("   note: many empty scans but no fog bail -- may be panning "
-                "somewhere the detector does not recognise")
-        prev = cur
-        last_summary = time.time()
+        # A dead command channel is the failure this missed the first time: the
+        # farm stayed alive, the capture thread kept logging, but nothing clicked
+        # again. Watch for the serial exception directly -- it is unambiguous.
+        # Only the RECENT tail. The farm log is append-mode now (deliberately -- a
+        # truncating log erases the evidence of why it restarted), so searching the
+        # whole file means one serial hiccup hours ago keeps re-raising this alert
+        # for the rest of the run, and across every future run too. Boolean searches
+        # over a cumulative log are alerts with no expiry date.
+        if SERIAL_FAULT.search(text[-20000:]):
+            if not serial_flagged:
+                serial_flagged = True
+                log("!! serial error seen in farm log -- command channel may be dead")
+            # Only fatal if it never recovers: a reconnect logs further activity.
+            if cur["mine_done"] == prev_progress_done and \
+                    cur["mine_failed"] == prev_progress_failed and \
+                    time.time() - last_progress_at > 600:
+                if restart_farm("serial error and no mine progress for 10 min "
+                                "-- command channel did not recover"):
+                    serial_flagged = False
+                    continue
+                break
 
-    if time.time() - last_oracle >= ORACLE_EVERY:
-        last_oracle = time.time()
-        log(f"screen: {screen_state()}")
+        if cur["mine_done"] != prev_progress_done or \
+                cur["mine_failed"] != prev_progress_failed:
+            prev_progress_done = cur["mine_done"]
+            prev_progress_failed = cur["mine_failed"]
+            last_progress_at = time.time()
+
+        # Mines cannot start while the client is deliberately closed, so
+        # counting "no mines" as a fault during a planned wait measures the
+        # wrong thing. This also covers the serial rule, which shares the
+        # same clock.
+        if new_planned_wait:
+            last_progress_at = time.time()
+
+        # Stuck check must NOT require scans to keep growing: a paralysed bot stops
+        # producing them entirely, which is precisely the case worth catching.
+        idle_min = (time.time() - last_progress_at) / 60.0
+        if idle_min > STUCK_MINUTES:
+            restarted = restart_farm(f"no mine started or finished for {idle_min:.0f} min "
+                      f"-- farm is not progressing")
+            if restarted:
+                continue
+            break
+
+        # Circling one mine is a ban-shaped behaviour, so surface it as soon as it
+        # appears rather than waiting for the next summary.
+        why = circling_evidence(text)
+        if why and time.time() - last_retry_alert > RETRY_COOLDOWN:
+            last_retry_alert = time.time()
+            log(f"!! possible circling: {why}")
+
+        if time.time() - last_summary >= SUMMARY_EVERY:
+            d = {k: cur[k] - prev[k] for k in cur}
+            mins = SUMMARY_EVERY // 60
+            log(f"[+{mins}min] done={d['mine_done']} failed={d['mine_failed']} "
+                f"march={d['march_sent']} | empty={d['empty_scan']} "
+                f"giveup={d['scan_giveup']} fog={d['fog_bail']} occupied={d['occupied']} "
+                f"skip={d['skip_clicked']} | clf_rej={d['clf_reject']} "
+                f"col_rej={d['color_reject']} gather_miss={d['gather_miss']} "
+                f"refused={d['refused']} world_fail={d['world_fail']} "
+                f"| max_retry={max_attempt_index(text)} | TOTAL done={cur['mine_done']} "
+                f"fail={cur['mine_failed']} empty={cur['empty_scan']} "
+                f"fog={cur['fog_bail']}")
+            # A burst of empties with nothing to show for it is the pattern that
+            # preceded every fruitless loop so far; worth saying out loud.
+            if d["empty_scan"] >= 20 and d["mine_done"] == 0:
+                log(f"   note: {d['empty_scan']} empty scans and no mine in {mins} min")
+            if d["fog_bail"] == 0 and d["empty_scan"] >= 20:
+                log("   note: many empty scans but no fog bail -- may be panning "
+                    "somewhere the detector does not recognise")
+            prev = cur
+            last_summary = time.time()
+
+        if time.time() - last_oracle >= ORACLE_EVERY:
+            last_oracle = time.time()
+            log(f"screen: {screen_state()}")
+        poll_errors = 0
+    except Exception:
+        # A watchdog that dies leaves the farm unsupervised, which is worse
+        # than anything it might trip over. On 2026-09-13 at 03:30 a NameError
+        # in the hourly summary killed this process outright and the farm ran
+        # alone until morning -- the health monitor noticed, the code could
+        # not. Nothing in here is worth exiting for.
+        #
+        # The two checks above stay OUTSIDE this guard on purpose: whether the
+        # deadline passed and whether the farm process is still alive are the
+        # answers that must survive a degraded poll.
+        poll_errors += 1
+        if poll_errors <= 3 or poll_errors % 50 == 0:
+            log(f"!! watchdog poll raised (#{poll_errors}) -- CONTINUING, "
+                f"the farm must not be left unsupervised -- "
+                f"{traceback.format_exc().strip()}")
+        continue
 
 log("watchdog exiting")
