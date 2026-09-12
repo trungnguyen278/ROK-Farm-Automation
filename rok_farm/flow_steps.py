@@ -46,6 +46,13 @@ SITE_MATCH_TILES = 0
 # amount of further wandering fixes a zoom.
 NO_CANDIDATE_GIVEUP = 10
 
+# Corrective zoom-out rounds allowed when the HUD says the map is zoomed in.
+# Two, not "until it looks right": the loop re-reads the gauge between rounds
+# and stops the moment the resource bar disappears, so it cannot ratchet the
+# way the old "no gems means zoom out more" rule did -- but a bounded loop is
+# what makes that a guarantee rather than an argument.
+ZOOM_FIX_ROUNDS = 2
+
 
 class GemFlowMixin:
     """Per-mine flow steps. Mixed into GemFarmRunner."""
@@ -337,44 +344,66 @@ class GemFlowMixin:
             self._scroll_at_center(-1, zs)
             self._wait_zoom_settled()
         else:
-            # On the world map, but NOT at icon zoom -- no gems were visible
-            # above. Leaving it alone was wrong: the gather chain zooms IN on
-            # the mine it clicks, so a mine that starts here begins at whatever
-            # zoom the last gather left behind, and the icon template (captured
-            # at icon zoom) cannot match at all. Measured on 2026-09-11: every
-            # mine that took this branch and did not already see a gem failed
-            # with 18 empty scans and ZERO classifier rejects -- nothing was
-            # even detected as a candidate -- while all six that zoomed out
-            # succeeded.
+            # On the world map, and no gem was visible above -- which says
+            # nothing on its own, because the gather chain zooms IN on the
+            # mine it clicks, so a mine starting here begins at whatever zoom
+            # the last gather left behind, and barren ground at the right zoom
+            # looks identical to good ground at the wrong one.
             #
-            # The old comment is still right that "no gems" must not mean "zoom
-            # out MORE": doing that ratcheted the view to 0.35x scale over a
-            # night. This does not zoom out more. It clamps fully in first and
-            # comes out a fixed number of notches, so it lands on the same
-            # absolute level however far the view had drifted, and repeating it
-            # cannot walk anywhere.
-            if getattr(self, "_zoomed_in_by_click", False):
-                # Paired with a zoom-in that actually happened, which is what
-                # makes it safe. _reset_zoom_to_reference looked like the
-                # tidier answer and is not: it clamps fully IN and comes out
-                # the same 3 notches the CITY path uses, but the city path
-                # starts from the world map's default, which is much further
-                # out. From the clamp, 3 notches lands at 5 KM against the
-                # 77 KM of icon zoom -- close enough that plain grass has no
-                # features at all, which the fog detector then read as being
-                # out of the kingdom. It had never been called before, so the
-                # "then out to icon zoom" in its docstring was never true.
-                print(f"  [{INFO}] Undoing the gather zoom-in to get back to "
-                      f"icon level")
+            # Ask the HUD where the zoom is instead of inferring it from
+            # whether a gem was visible. "No gems" cannot tell barren ground
+            # apart from the wrong zoom, and both of the rules built on it were
+            # wrong in turn: zooming out on it ratcheted the view to 0.35x
+            # template scale over a night, and then leaving the zoom alone let
+            # three mines in one night inherit a gather's zoom-in and scan to
+            # the give-up limit without the icon stage finding one candidate.
+            #
+            # See ICON_ZOOM_BADGE_MAX: the badge's position in its own crop
+            # separates the two views with a gap a third of the crop wide over
+            # 386 frames. This can only fire while the resource bar is ON
+            # screen, which only happens zoomed in, so it cannot walk outward.
+            gauge = self.read_zoom_gauge()
+            if gauge is None and getattr(self, "_zoomed_in_by_click", False):
+                # Gauge unreadable -- fall back to the paired undo, which is
+                # safe because a zoom-in provably happened. Do NOT reach for
+                # _reset_zoom_to_reference: it clamps fully in and comes out
+                # the 3 notches the CITY path uses, but the city path starts
+                # from the world map's default, which is much further out, so
+                # from the clamp it lands at 5 KM against icon zoom's 77 KM --
+                # close enough that plain grass has no features, which the fog
+                # detector reads as out of the kingdom.
+                print(f"  [{INFO}] Zoom gauge unreadable -- undoing the gather "
+                      f"zoom-in to get back to icon level")
                 self._scroll_at_center(-1, self._zoom_scrolls())
                 self._wait_zoom_settled()
-                self._zoomed_in_by_click = False
             else:
-                # Nothing zoomed us in, so nothing to undo. Zooming out "just
-                # in case" is what walked the view to 0.35x template scale over
-                # a night: barren ground looks exactly like wrong zoom.
-                print(f"  [{PASS}] Already on the world map -- leaving the "
-                      f"zoom alone")
+                for _ in range(ZOOM_FIX_ROUNDS):
+                    if gauge != "close":
+                        break
+                    print(f"  [{WARN}] HUD shows the resource bar -- the map is "
+                          f"zoomed IN, not at icon level; scrolling out")
+                    logger.warning("Zoom gauge says close zoom on arrival -- "
+                                   "correcting before the scan")
+                    self._scroll_at_center(-1, self._zoom_scrolls())
+                    self._wait_zoom_settled()
+                    gauge = self.read_zoom_gauge()
+                if gauge == "close":
+                    print(f"  [{FAIL}] Still zoomed in after {ZOOM_FIX_ROUNDS} "
+                          f"scroll-outs -- scanning anyway, evidence saved")
+                    logger.warning("Zoom stayed close after %d corrections",
+                                   ZOOM_FIX_ROUNDS)
+                    stuck = self._grab()
+                    if stuck is not None:
+                        save_screenshot(stuck, f"{tag}_ZOOM_STUCK")
+                elif gauge is None:
+                    print(f"  [{PASS}] Zoom gauge unreadable and nothing zoomed "
+                          f"us in -- leaving the zoom alone")
+                else:
+                    print(f"  [{PASS}] HUD confirms icon zoom -- leaving it alone")
+            # Cleared on every path out of this branch. Leaving it set after a
+            # correction is what once undid the same zoom-in twice and landed
+            # the view at 121 KM.
+            self._zoomed_in_by_click = False
 
         frame = self._grab()
         if frame is not None:
@@ -431,6 +460,19 @@ class GemFlowMixin:
         if second is None:
             return False
         if self._is_fog(second):
+            # Both frames agree it has no features. Before believing that, ask
+            # the HUD what the zoom is: close in, plain ground genuinely has
+            # no features, and the detector cannot tell that from the map
+            # void. Two mines in one night bailed this way while zoomed in --
+            # and a fog bail does not just cost the mine, it writes a
+            # PERMANENT wall into the map book, so the wander then steers
+            # away from good ground for the rest of the book's life.
+            if self.read_zoom_gauge() == "close":
+                print(f"  [{INFO}] Featureless, but the HUD shows the resource "
+                      f"bar -- this is close zoom, not the map void")
+                logger.warning("fog: both frames featureless but the zoom gauge "
+                               "says close -- NOT fog, not recording a wall")
+                return False
             return True
         print(f"  [{INFO}] Fog vanished on re-check -- the view was still loading")
         logger.info("fog: first frame said fog, second did not -- treated as a "
@@ -689,6 +731,12 @@ class GemFlowMixin:
         # at all", and a counter carried over from the last mine answers a
         # different question and always says yes.
         self._candidates_this_mine = 0
+        # One in-place zoom correction per mine, then the give-up clock
+        # restarts from the scan it was fixed on -- so a mine that arrived at
+        # the wrong zoom gets a real chance instead of being written off, and
+        # a mine that cannot be fixed still gives up on schedule.
+        self._zoom_fixed_this_mine = False
+        no_candidate_floor = 0
 
         ww = self.win["width"]
         wh = self.win["height"]
@@ -885,13 +933,32 @@ class GemFlowMixin:
                 # worst ever seen. Leaving at 10 gives up on 2 of those 649
                 # (0.3%) and saves eight wasted scans on each of the 70 that
                 # never saw a candidate at all.
-                if (scan_count >= NO_CANDIDATE_GIVEUP
+                if (scan_count - no_candidate_floor >= NO_CANDIDATE_GIVEUP
                         and not getattr(self, "_candidates_this_mine", 0)):
+                    # Stop guessing at the cause. The HUD says whether this is
+                    # the wrong zoom, and if it is, a scroll fixes it here --
+                    # the trip through the city costs the whole mine and was
+                    # only ever a way of resetting the zoom by side effect.
+                    gauge = self.read_zoom_gauge()
+                    if gauge == "close" and not self._zoom_fixed_this_mine:
+                        print(f"  [{WARN}] {scan_count} scans, no candidate, and "
+                              f"the HUD shows the resource bar -- zoomed in, "
+                              f"not barren; scrolling out and carrying on")
+                        logger.warning("No candidates in %d scans and the zoom "
+                                       "gauge says close -- correcting in "
+                                       "place", scan_count)
+                        self._zoom_fixed_this_mine = True
+                        self._scroll_at_center(-1, self._zoom_scrolls())
+                        self._wait_zoom_settled()
+                        no_candidate_floor = scan_count
+                        empty_streak = 0
+                        continue
                     print(f"  [{FAIL}] {scan_count} scans and NOT ONE candidate "
-                          f"-- the map is not showing deposits (wrong zoom?); "
-                          f"going back through the city, which resets it")
-                    logger.warning("No candidates in %d scans -- early return "
-                                   "to city to reset the zoom", scan_count)
+                          f"-- the map is not showing deposits (zoom gauge: "
+                          f"{gauge}); going back through the city, which "
+                          f"resets it")
+                    logger.warning("No candidates in %d scans (zoom gauge %s) "
+                                   "-- early return to city", scan_count, gauge)
                     self._step_return_city(tag)
                     return None
 

@@ -106,16 +106,31 @@ def test_it_does_not_simply_zoom_out_further():
     """The ratchet this must not become.
 
     Zooming out whenever no gem is seen walked the view to 0.35x scale over one
-    night. The reset clamps fully in first, so repeating it lands on the same
-    absolute level instead of drifting.
+    night, because "no gem" cannot tell barren ground from the wrong zoom.
+
+    This used to be checked by asserting the branch never says "leaving the
+    zoom alone" -- which passed only because that sentence happened to be
+    split across two f-strings, so the substring was never in the file at all.
+    The invariant it was reaching for is the one asserted here: nothing zooms
+    out on a GUESS. Either we just came from the city, where the world map
+    always opens zoomed in, or the HUD was read and said so.
     """
     text = open(fs.__file__, encoding="utf-8").read()
     start = text.index("Already on world map icon-zoom")
     branch = text[start:text.index("Step 2", start)]
-    assert "leaving the zoom alone" not in branch
-    # the bare zoom-out must still be reachable ONLY from the city path
+    # the bare zoom-out must still be reachable from the city path
     city = branch[branch.index("if toggled_from_city"):]
     assert "_scroll_at_center(-1" in city
+
+    step1 = branch[:branch.index("def _step_stay_and_rezoom")]
+    for line in step1.splitlines():
+        if "_scroll_at_center(-1" not in line:
+            continue
+        before = step1[:step1.index(line)]
+        assert ("toggled_from_city" in before[-2000:]
+                or "read_zoom_gauge" in before[-2000:]), \
+            f"this zoom-out is not gated on the city path or on a gauge " \
+            f"reading, so it is a guess: {line.strip()}"
 
 
 def test_visible_gems_short_circuit_before_any_zooming():

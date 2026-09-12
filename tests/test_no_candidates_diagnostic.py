@@ -87,11 +87,16 @@ def test_the_ordinary_message_survives(flow):
 
 
 def test_a_blank_map_is_abandoned_early(flow):
-    """Eighteen scans cannot fix a zoom; only the trip through the city can.
+    """Eighteen scans cannot fix a zoom. A scroll can; failing that, the city.
 
     Measured over 649 mines: the first candidate arrives on scan 0 at the
     median, scan 1 at p90, scan 7 at p99, 13 at the worst. Ten scans with
     NOTHING is not a barren patch, it is a map not drawing deposits.
+
+    The give-up now reads the zoom gauge first and scrolls out in place when
+    the HUD says the map is zoomed in, so the walk back through the city -- a
+    whole mine's worth of actions, taken only to reset the zoom by side
+    effect -- is the fallback rather than the only answer.
     """
     from rok_farm.flow_steps import NO_CANDIDATE_GIVEUP
 
@@ -99,11 +104,14 @@ def test_a_blank_map_is_abandoned_early(flow):
         f"{NO_CANDIDATE_GIVEUP} sits outside the measured range: below 8 it "
         f"starts cutting healthy mines, above 13 it saves nothing")
 
-    start = flow.index("NOT ONE candidate")
-    early = flow[max(0, start - 1200):start + 600]
-    assert "NO_CANDIDATE_GIVEUP" in early
+    # Anchor on the condition, not on a character distance from the message:
+    # the branch grew and the old window silently stopped covering it.
+    start = flow.index("NO_CANDIDATE_GIVEUP\n", flow.index("def _step_scan"))
+    early = flow[start:start + 2200]
+    assert "NOT ONE candidate" in early
     assert "_step_return_city" in early, \
-        "the early exit does not go through the city, so the zoom is not reset"
+        "the early exit does not go through the city, so a zoom the scroll " \
+        "could not fix is never reset"
 
 
 def test_the_early_exit_needs_zero_candidates_not_just_empty_scans(flow):

@@ -115,6 +115,55 @@ POS_ROI = (0.02, 0.000, 0.26, 0.035)
 _POS_RE = re.compile(r"#\s*([A-Za-z]{0,2}\d{3,6})\D{0,3}X[:\s]*(\d{1,4})"
                      r"\D{0,3}Y[:\s]*(\d{1,4})", re.IGNORECASE)
 
+# --- Zoom gauge: WHERE the coordinate badge sits inside its own crop -------
+# The farm had no way to tell icon zoom from a closer view, and guessed from
+# "did the detector see a gem", which cannot tell barren ground apart from the
+# wrong zoom. Reading it as "zoom out more" once walked the view to 0.35x
+# template scale over a night, so the guess was removed and the zoom simply
+# left alone -- which let a mine inherit whatever zoom the previous gather had
+# left behind. Three mines in one night (m8, m28, m33) then scanned to the
+# give-up limit without the icon stage finding a single candidate, and two
+# more bailed on "fog" because plain ground close up has no features.
+#
+# The game answers the question itself. At icon zoom ROK hides the power and
+# resource bar and shows the minimap; closer in it puts the power counter back
+# in front of the coordinates and pushes the badge to the right. The POS_ROI
+# comment already recorded that shift -- it was what once clipped "Y:191" to
+# "Y:1" -- without anyone noticing it was a zoom reading.
+#
+# Measured over 386 saved scan frames: the badge starts at 0.04-0.19 of the
+# crop width at icon zoom (n=356) and at 0.52-0.53 close in (n=30), with
+# NOTHING in between, and every one of the 29 frames from the three mines that
+# found no candidate at all sits in the high group. The threshold goes in the
+# middle of a gap a third of the crop wide.
+#
+# The gem counter looks like the same signal and is not: on 9 of those frames
+# it "read" 6, 8, 31, 33 -- deposit level numbers showing through the crop at
+# icon zoom, not a gem total. Geometry has no such failure mode here.
+ICON_ZOOM_BADGE_MAX = 0.35
+
+
+def badge_left_frac(boxes, roi_w: float) -> float | None:
+    """Left edge of the "#S11465 X.. Y.." box, as a fraction of the crop.
+
+    None when no box looks like the badge -- the caller must then leave the
+    zoom alone rather than act on a guess.
+    """
+    if not boxes or roi_w <= 0:
+        return None
+    for det in sorted(boxes, key=lambda r: r[0][0][0]):
+        text = det[1] or ""
+        if "#" in text or "S1" in text:
+            return float(det[0][0][0]) / roi_w
+    return None
+
+
+def zoom_verdict(frac: float | None) -> str | None:
+    """'icon', 'close', or None when the badge was not located."""
+    if frac is None:
+        return None
+    return "close" if frac >= ICON_ZOOM_BADGE_MAX else "icon"
+
 
 # --- Gem counter (right-most value in the top resource bar) ---------------
 # Cropped WIDE and read right-to-left rather than sized to today's number.
@@ -460,10 +509,23 @@ class MapPositionMixin:
         # trace here -- and those are the ones that make the farm bail out of
         # its own kingdom.
         self._last_pos_text = text[:80]
+        # Same OCR, second answer: how far in the crop the badge starts says
+        # whether the resource bar is on screen, and so whether this is icon
+        # zoom. Recorded on every read, including the unparsed ones -- a frame
+        # whose coordinates will not parse is exactly when knowing the zoom
+        # matters.
+        self._last_zoom_gauge = zoom_verdict(
+            badge_left_frac(boxes, roi.shape[1]))
         if not m:
             logger.debug("Map position unparsed: %r", text[:40])
             return None
         return m.group(1), int(m.group(2)), int(m.group(3))
+
+    def read_zoom_gauge(self, frame=None) -> str | None:
+        """'icon', 'close' or None. Shares the map-position OCR, never adds one."""
+        self._last_zoom_gauge = None
+        self._read_map_position(frame)
+        return getattr(self, "_last_zoom_gauge", None)
 
 
 # --- Deploy panel: march time and gathering speed -------------------------
