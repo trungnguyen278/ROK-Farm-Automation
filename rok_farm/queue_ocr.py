@@ -207,11 +207,24 @@ def _parse_amount(text: str) -> int | None:
 
 
 # What the popup buttons say, once OCR has flattened the diacritics. The gather
-# button is "THU THAP"; the two that must never be clicked are "DICH CHUYEN"
-# (teleport the city here) and "HANH QUAN" (march troops here), which appear on
-# the popup for an EMPTY TILE.
+# button is "THU THAP". The ones that must never be clicked:
+#
+#   DICH CHUYEN   teleport the city here          } the popup for an
+#   HANH QUAN     march troops here               } EMPTY TILE
+#   TRIEU HOI     recall the troops already here
+#
+# TRIEU HOI is the expensive one and it was missing. Seen live on 2026-09-13
+# 06:47 reading ['Sotuolg', 'dRI', '0/30', 'TRIEU HOI'] -- the bot had clicked
+# a node its own troops were already gathering on, and the panel offers to
+# CALL THEM HOME, throwing away the gather in progress. The verdict came back
+# "unreadable", which this guard lets through; only the coordinate-based
+# duplicate check stopped the click.
+#
+# Adding words here is safe whatever else is in the crop, because the gather
+# words are matched FIRST -- a real gather popup still wins.
 _BTN_GATHER = ("thuthap", "thuhap", "thut")
-_BTN_NOT_GATHER = ("dichchuyen", "dich", "chuyen", "hanhquan", "hanh", "quan")
+_BTN_NOT_GATHER = ("dichchuyen", "dich", "chuyen", "hanhquan", "hanh", "quan",
+                   "trieuhoi", "trieu")
 
 
 def button_verdict(texts) -> str:
@@ -226,6 +239,15 @@ def button_verdict(texts) -> str:
     unreadable button must stay allowed: refusing on silence would turn every
     OCR hiccup into a lost mine, and this guard exists to stop one specific
     catastrophe, not to become a second gate on the happy path.
+
+    That last paragraph is now measured rather than argued. Over all 66 button
+    readings in the log: 45 read "THU THAP", 16 read nothing at all, and 5 read
+    letters that matched no word. Four of those five were 'HA' or 'ar' -- and
+    every one of the four went on to open the deploy panel and send a real
+    march, so they were genuine gather buttons that OCR only half read.
+    Treating "letters but no match" as "other" would have cost 4 mines in 66.
+    The fifth was TRIEU HOI, which is why that word is in the list below
+    instead.
     """
     flat = "".join(t for t in texts).lower()
     flat = "".join(ch for ch in flat if ch.isalpha())

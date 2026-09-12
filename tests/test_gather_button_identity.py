@@ -104,3 +104,39 @@ def test_the_button_text_is_logged_every_time():
         "the button text is only recorded on a refusal, so the case that "
         "actually fails leaves no evidence")
     assert "words" in block, "the raw words are not what gets logged"
+
+
+# --- the recall button, seen live 2026-09-13 06:47 ------------------------
+
+def test_the_recall_button_is_refused():
+    """['Sotuolg', 'dRI', '0/30', 'TRIEU HOI'] -- verbatim from the log.
+
+    The bot had clicked a node its own troops were already gathering on, and
+    the panel offers to call them HOME, throwing away the gather in progress.
+    The verdict was "unreadable", which this guard lets through; only the
+    coordinate-based duplicate check stopped the click that time.
+    """
+    assert button_verdict(["Sotuolg", "dRI", "0/30", "TRIEU HOI"]) == "other"
+
+
+def test_a_real_gather_still_wins_whatever_else_is_in_the_crop():
+    """The crop is loose -- it picked up a troop count and two junk words.
+
+    So the gather words must be matched first, or every word added to the
+    refusal list becomes a new way to lose a real mine.
+    """
+    assert button_verdict(["THU THAP", "TRIEU HOI"]) == "gather"
+    assert button_verdict(["0/30", "THU THAP", "Sotuolg"]) == "gather"
+
+
+def test_half_read_letters_are_still_allowed_through():
+    """Measured, not assumed. Over all 66 readings in the log, five matched no
+    word: 'HA' three times, 'ar' once, and TRIEU HOI once. Every one of the
+    four garbled ones went on to open the deploy panel and send a real march,
+    so they were genuine gather buttons OCR only half read. Calling them
+    "other" would have cost 4 mines in 66.
+    """
+    for junk in ("HA", "ar", "h", "T"):
+        assert button_verdict([junk]) == "unreadable", (
+            f"{junk!r} now refuses the click; four readings exactly like it "
+            f"were real gather buttons that marched successfully")
