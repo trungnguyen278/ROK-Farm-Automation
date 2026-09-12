@@ -35,6 +35,35 @@ FATAL = ("undefined name",
          "redefinition of unused")   # a shadowed def silently loses a branch
 
 
+# The farm itself runs unattended too. A cold branch raising NameError there
+# is less lethal than in the supervisor -- the watchdog restarts the farm --
+# but it still costs a mine every time it is reached, and every guard added on
+# the night of 2026-09-13 (zoom, fog, foreground) IS a cold branch: it runs
+# only when something has already gone wrong, which is the worst moment to
+# discover a typo.
+PACKAGES = ("rok_farm", "vision", "capture", "anti_detection")
+
+
+def _pyflakes(paths):
+    proc = subprocess.run([sys.executable, "-m", "pyflakes", *map(str, paths)],
+                          capture_output=True, text=True, timeout=300)
+    if proc.returncode != 0 and not proc.stdout and proc.stderr:
+        pytest.skip(f"pyflakes unavailable: {proc.stderr.strip()[:120]}")
+    return [ln for ln in proc.stdout.splitlines()
+            if any(f in ln.lower() for f in FATAL)]
+
+
+@pytest.mark.parametrize("pkg", PACKAGES)
+def test_the_farm_package_has_no_undefined_names(pkg):
+    files = sorted((PROJECT_ROOT / pkg).glob("*.py"))
+    if not files:
+        pytest.skip(f"{pkg} not present")
+    bad = _pyflakes(files)
+    assert not bad, (
+        f"{pkg} has names that only fail when a cold branch runs: "
+        + "; ".join(bad))
+
+
 @pytest.mark.parametrize("rel", UNATTENDED)
 def test_no_undefined_names(rel):
     path = PROJECT_ROOT / rel

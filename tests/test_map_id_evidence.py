@@ -14,7 +14,6 @@ Nothing recorded the string the id came from -- only unparseable text was
 logged, which is precisely the case that does NOT cause a bail.
 """
 
-import pytest
 
 from rok_farm import PROJECT_ROOT
 

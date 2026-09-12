@@ -303,7 +303,7 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
             print(f"  [{INFO}] Classifier: cold start ({stats['total']}/{10} samples)")
 
         p = self._profile
-        print(f"\n  --- Anti-Detection ---")
+        print("\n  --- Anti-Detection ---")
         print(f"  [{PASS}] Profile: {p.get('name', 'default')}")
         print(f"  [{INFO}] Action delay: {p['timing']['action_delay_mean']}ms "
               f"(+/-{p['timing']['action_delay_std']}ms)")

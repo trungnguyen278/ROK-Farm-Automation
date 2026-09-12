@@ -5,8 +5,6 @@ which supervises a live farm the moment it is imported. Every defect in them so
 far had to be found by watching production.
 """
 
-import re
-from pathlib import Path
 
 import pytest
 

@@ -16,7 +16,6 @@ It was not barren ground, it was the wrong scale.
 """
 
 import numpy as np
-import pytest
 
 import rok_farm.flow_steps as fs
 from rok_farm.flow_steps import GemFlowMixin

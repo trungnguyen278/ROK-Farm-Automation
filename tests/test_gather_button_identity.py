@@ -92,8 +92,6 @@ def test_the_button_text_is_logged_every_time():
     log there is no way to tell an unreadable Gather from an unreadable
     something-else, and no way to know whether the guard was even consulted.
     """
-    from pathlib import Path
-
     from rok_farm import PROJECT_ROOT
 
     src = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(
