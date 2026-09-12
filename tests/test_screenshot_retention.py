@@ -35,7 +35,8 @@ def test_startup_does_not_wipe_everything(source):
 def test_fault_frames_are_never_swept(source):
     from rok_farm.runner import GemFarmRunner
 
-    for tag in ("WRONG_BUTTON", "WRONG_PLACE", "TIMEOUT", "MAPID"):
+    for tag in ("WRONG_BUTTON", "WRONG_PLACE", "TIMEOUT", "MAPID",
+                "FOG", "ZOOM_STUCK", "WRONG_NODE"):
         assert tag in GemFarmRunner.KEEP_FOREVER, (
             f"{tag} frames are saved precisely because something went wrong, "
             f"and would be swept away before anyone could look")

@@ -894,6 +894,20 @@ class GemFlowMixin:
                 if self._fog_confirmed(frame):
                     print(f"  [{WARN}] Scan {scan_count:2d}: FOG (out of kingdom) -- "
                           f"turn back inland, then return to city")
+                    # Keep the frame. Fog is the second largest cause of failed
+                    # mines in the whole log -- 108 of 353 -- and in all that
+                    # time not one picture of one was saved, so "is that the
+                    # map void or is it ocean" has never been answerable.
+                    #
+                    # The numbers do not settle it. Over 237 logged decisions,
+                    # 62% were taken on a VIVIDLY coloured screen (sat >= 100;
+                    # the "featureless" branch medians sat=131 and the flat-hue
+                    # branch sat=184) and only 37% on the grey nothing a
+                    # kingdom border actually looks like. A uniform, deeply
+                    # saturated screen is what open ocean looks like too, and
+                    # ocean is inside the kingdom -- but that stays a guess
+                    # until there is a frame to look at, which is what this is.
+                    save_screenshot(frame, f"{tag}_FOG_{scan_count:02d}")
                     # Strongest terrain evidence available: mark it permanently.
                     # Mountains and the map void do not move, so unlike the
                     # reach book this is never expired.

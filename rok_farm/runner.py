@@ -361,7 +361,8 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
     # Frames whose names mark them as evidence of a specific fault. These
     # survive the startup sweep: they are the ones somebody will want to look
     # at, and they are rare.
-    KEEP_FOREVER = ("WRONG_BUTTON", "WRONG_PLACE", "TIMEOUT", "MAPID")
+    KEEP_FOREVER = ("WRONG_BUTTON", "WRONG_PLACE", "TIMEOUT", "MAPID",
+                    "FOG", "ZOOM_STUCK", "WRONG_NODE")
     KEEP_HOURS = 3.0
 
     def run(self):
