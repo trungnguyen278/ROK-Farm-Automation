@@ -14,6 +14,8 @@ All four started, or drifted into, frames whose badge read in the close group
 wrong zoom from bad luck, because none of them asked.
 """
 
+import re
+
 import pytest
 
 from rok_farm import PROJECT_ROOT
@@ -154,3 +156,53 @@ def test_the_giveup_clock_restarts_after_a_correction():
     assert "no_candidate_floor = scan_count" in branch
     start = FLOW.index("def _step_scan_and_verify_gem")
     assert "no_candidate_floor = 0" in FLOW[start:start + 1400]
+
+
+# --- step 7: stop the leak into the next mine ----------------------------
+
+def rezoom_body():
+    start = FLOW.index("def _return_to_icon_zoom")
+    return FLOW[start:FLOW.index("\n    def ", start + 10)]
+
+
+def test_the_post_march_rezoom_checks_that_it_landed():
+    """Two of the first seven mines after the gauge shipped arrived zoomed in.
+
+    Step 1 catches that, but only after running its gem check at the wrong
+    level -- and the camera had already panned a "full screen" that was a
+    fraction of one.
+    """
+    at = FLOW.index("def _step_stay_and_rezoom")
+    step7 = FLOW[at:FLOW.index("\n    def ", at + 10)]
+    assert "_return_to_icon_zoom(verify=True)" in step7, \
+        "the post-march re-zoom does not check whether it worked"
+
+
+def test_the_check_happens_before_the_pan():
+    """The pan is sized in screen fractions; at the wrong zoom it under-runs.
+
+    Its whole job is to put the just-marched mine out of view, and the same
+    mine being clicked again was measured on 2 of 18 mid-burst transitions.
+    """
+    body = rezoom_body()
+    assert body.index("read_zoom_gauge") < body.index("_human_drag"), \
+        "the zoom is verified after the pan, so the pan ran at the wrong zoom"
+
+
+def test_the_scan_loop_path_does_not_pay_for_it():
+    """The dud-icon caller fires many times per mine; an OCR each is not free."""
+    body = rezoom_body()
+    assert "verify: bool = False" in body, \
+        "verification is on by default, so the scan loop now pays an OCR per dud"
+    at = FLOW.index("def _step_scan_and_verify_gem")
+    scan = FLOW[at:FLOW.index("\n    def ", at + 10)]
+    for call in re.findall(r"_return_to_icon_zoom\([^)]*\)", scan):
+        assert "verify" not in call, \
+            f"the scan loop asks for verification on every dud icon: {call}"
+
+
+def test_that_correction_is_bounded_too():
+    body = rezoom_body()
+    loop = body[body.index("if verify:"):]
+    assert "range(ZOOM_FIX_ROUNDS)" in loop, \
+        "the post-march correction can scroll without limit"

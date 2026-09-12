@@ -465,7 +465,12 @@ class GemFlowMixin:
         # mine just gathered (69px and 106px, i.e. the same rock), several more
         # within 200px. It is also a poor look: a real player does not re-farm
         # the node their troops are still marching to.
-        self._return_to_icon_zoom()
+        # verify=True here and nowhere else. This is the leak into the NEXT
+        # mine: step 1 now catches a bad zoom, but only after running its gem
+        # check at the wrong level, and in production the correction fired on
+        # 2 of the first 7 mines after it shipped -- so roughly a third of
+        # marches leave the camera closer in than one scroll-out puts back.
+        self._return_to_icon_zoom(verify=True)
 
         self._view_is_world = True  # stayed on the world map
         self._record(f"{tag}_rezoom", True, "Stayed on world map, re-zoomed")
@@ -709,7 +714,8 @@ class GemFlowMixin:
         print(f"  [{WARN}] [{attempt}] Not a gem mine")
         return False
 
-    def _return_to_icon_zoom(self, heading: float | None = None):
+    def _return_to_icon_zoom(self, heading: float | None = None,
+                             verify: bool = False):
         """After a failed icon click, zoom back out AND move on.
 
         Clicking an icon zooms the game onto that mine, so zooming back out
@@ -737,6 +743,26 @@ class GemFlowMixin:
         self._zoomed_in_by_click = False
         self._scroll_at_center(-1, self._zoom_scrolls())
         self._wait_zoom_settled()
+
+        # One scroll-out does not always land it, and the HUD can now say so.
+        # Checked BEFORE the pan below, not after: the pan is sized in screen
+        # fractions, so at a closer zoom it covers a fraction of the ground it
+        # is meant to, and the point of it is to put the marched mine out of
+        # view entirely.
+        #
+        # Off by default, because the other caller is the dud-icon path inside
+        # the scan loop, which fires many times per mine -- an OCR there would
+        # be paid over and over for a drift the give-up branch already catches.
+        if verify:
+            for _ in range(ZOOM_FIX_ROUNDS):
+                if self.read_zoom_gauge() != "close":
+                    break
+                print(f"  [{WARN}] Still zoomed in after the march -- scrolling "
+                      f"out again before the next mine inherits it")
+                logger.warning("Re-zoom did not land: the gauge still says "
+                               "close -- correcting")
+                self._scroll_at_center(-1, self._zoom_scrolls())
+                self._wait_zoom_settled()
 
         cx, cy = self._center_screen()
         ww, wh = self.win["width"], self.win["height"]
