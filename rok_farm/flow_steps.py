@@ -240,9 +240,41 @@ class GemFlowMixin:
             # check on every mine would cost a second or two each time for a
             # state that cannot have changed since the last one.
             self._client_just_returned = False
-            self._wait_client_ready(f"start of mine {idx}")
+            focused = self._wait_client_ready(f"start of mine {idx}")
         else:
-            self._ensure_game_focused(f"start of mine {idx}")
+            focused = self._ensure_game_focused(f"start of mine {idx}")
+
+        # Both of those return a verdict and both were called for their side
+        # effects alone, so the one thing they exist to prevent went ahead
+        # anyway. When the game will not come to the front, the clicks that
+        # follow land on whatever window is -- measured five times in the log,
+        # every one of them ending in "Not on world map after toggling" after
+        # three blind clicks onto the user's desktop. Skipping the mine costs
+        # one mine; clicking blind costs one mine AND clicks on someone else's
+        # window while they are asleep.
+        if not focused:
+            print(f"  [{FAIL}] The game is not in front and would not come "
+                  f"forward -- skipping this mine rather than clicking into "
+                  f"whatever is")
+            logger.warning("Mine %s skipped: the game never took the "
+                           "foreground", idx)
+            frame = self._grab()
+            if frame is not None:
+                save_screenshot(frame, f"{tag}_NO_FOCUS")
+            self._record(f"{tag}_focus", False, "game never took the foreground")
+            # A pause, not a retry: whatever holds the foreground lock is not
+            # going to let go because we asked again immediately. And the pause
+            # GROWS, because the realistic cause of a persistent one is a human
+            # using the machine -- at which point a bot retrying every six
+            # seconds is burning mines into the failure counter and clattering
+            # ALT+TAB at someone who is trying to work. Capped, so it still
+            # notices within a minute when they are done.
+            streak = getattr(self, "_focus_fail_streak", 0) + 1
+            self._focus_fail_streak = streak
+            back_off = min(60.0, 5.0 * (2 ** (streak - 1)))
+            self._wait(random.uniform(back_off * 0.8, back_off * 1.2))
+            return False
+        self._focus_fail_streak = 0
 
         # Step 1: Get to world map at icon-zoom level
         # If already on world map (from previous mine), skip city detour
@@ -1202,7 +1234,18 @@ class GemFlowMixin:
         # Cheapest possible insurance in the most expensive place: if the game
         # is not in front, the whole deploy chain clicks into another window and
         # the march is lost silently.
-        self._ensure_game_focused("before deploy chain")
+        #
+        # The call was here from the start and its answer was thrown away, so
+        # the insurance was never bought: it refocused if it could, and fired
+        # the chain regardless if it could not.
+        if not self._ensure_game_focused("before deploy chain"):
+            print(f"  [{FAIL}] The game is not in front -- NOT firing the "
+                  f"deploy chain; three fixed clicks would land on another "
+                  f"window and the march would be lost silently")
+            logger.warning("Deploy chain refused: the game is not the "
+                           "foreground window")
+            self._record(f"{tag}_march", False, "game not in front")
+            return False
 
         # Do NOT assume the Gather click opened the deploy panel. Measured
         # 2026-08-19 12:57: gather_btn matched at 0.926, the click landed within

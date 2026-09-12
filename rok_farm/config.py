@@ -261,6 +261,15 @@ MAX_PLANNED_WAIT = 3 * 3600.0
 # about 76s (2026-09-09, attaching to a backgrounded client), so this
 # clears it with margin. Only paid when the client has just returned.
 CLIENT_READY_TIMEOUT = 90.0
+# Extra tries at taking the foreground once the client is drawing again.
+# Each try is two ALT+TABs and a SetForegroundWindow, so three rounds is
+# roughly fifteen seconds of patience -- worth it, because the alternative
+# is clicking into whatever window IS in front. Measured over 90 focus
+# losses in the log: 74 were fixed by the first ALT+TAB and 5 never came
+# forward at all, and every one of those 5 cost a mine and put three blind
+# clicks on the desktop. Not higher: if three rounds cannot do it, another
+# window is holding the foreground lock and waiting longer will not move it.
+FOCUS_RETRIES = 3
 
 # --- Layer 1: local screen-state probe ---
 # Measured on the live client at 1533x863, 2026-08-14

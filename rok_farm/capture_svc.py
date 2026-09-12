@@ -19,11 +19,12 @@ from vision.color_filter import normalize_frame
 
 from rok_farm import config as cfg
 from rok_farm.config import (CLIENT_READY_TIMEOUT, DELAY_AFTER_SCROLL,
+                             FOCUS_RETRIES,
                              GEM_ICON_THRESHOLD,
                              GEM_ICON_THRESHOLD_NIGHT, TARGET_CONTENT_W,
                              TITLE_BAR_H, ZOOM_OUT_POLL, ZOOM_OUT_QUIET_DIFF,
                              ZOOM_OUT_QUIET_POLLS, ZOOM_OUT_SETTLE_CAP)
-from rok_farm.logging_setup import INFO, WARN, logger
+from rok_farm.logging_setup import FAIL, INFO, WARN, logger
 
 
 class CaptureMixin:
@@ -110,29 +111,57 @@ class CaptureMixin:
         buffers, so a frozen capture can still hand back a different stale
         image once. Frozen reads A, B, B, B...; live keeps changing.
         """
-        self._ensure_game_focused(reason)
+        focused = self._ensure_game_focused(reason)
         started = time.time()
         deadline = started + CLIENT_READY_TIMEOUT
         prev, changes = None, 0
+        drawing = False
         while time.time() < deadline:
             frame = self._grab()
             if frame is not None:
                 if prev is not None and not np.array_equal(frame, prev):
                     changes += 1
                     if changes >= 2:
-                        waited = time.time() - started
-                        if waited > 2.0:
-                            print(f"  [{INFO}] Client ready after {waited:.1f}s "
-                                  f"({reason})")
-                        logger.info("Client ready after %.1fs (%s)", waited, reason)
-                        return True
+                        drawing = True
+                        break
                 prev = frame
             time.sleep(0.5)
-        print(f"  [{WARN}] Client still not drawing after "
-              f"{CLIENT_READY_TIMEOUT:.0f}s ({reason}) -- going ahead anyway")
-        logger.warning("Client not ready after %.0fs (%s)",
-                       CLIENT_READY_TIMEOUT, reason)
-        return False
+
+        waited = time.time() - started
+        if not drawing:
+            print(f"  [{WARN}] Client still not drawing after "
+                  f"{CLIENT_READY_TIMEOUT:.0f}s ({reason}) -- going ahead anyway")
+            logger.warning("Client not ready after %.0fs (%s)",
+                           CLIENT_READY_TIMEOUT, reason)
+            return False
+        if waited > 2.0:
+            print(f"  [{INFO}] Client ready after {waited:.1f}s ({reason})")
+        logger.info("Client ready after %.1fs (%s)", waited, reason)
+
+        # And now the OTHER half of "ready" -- the one listed first in the
+        # docstring above and never actually checked. _ensure_game_focused
+        # returns a verdict and this threw it away, so a client that came back
+        # BEHIND another window was reported ready and every click after it
+        # went into that window, with a perfectly healthy game frame in the
+        # log to prove nothing was wrong.
+        #
+        # Measured over the whole log: 90 focus losses, 74 fixed by one
+        # ALT+TAB, and 5 where the game never came forward at all. All 5 ended
+        # with a mine failing on "Not on world map after toggling" -- three
+        # blind clicks each, onto whatever the user had in front.
+        for _ in range(FOCUS_RETRIES):
+            if focused:
+                return True
+            # Paced, not hammered: an ALT+TAB storm is both a tell and a good
+            # way to land on a third window.
+            time.sleep(random.uniform(1.5, 3.0))
+            focused = self._ensure_game_focused(reason)
+        if not focused:
+            print(f"  [{FAIL}] The game is drawing but will not come to the "
+                  f"front ({reason}) -- refusing to click into another window")
+            logger.warning("Client drawing but never took the foreground (%s)",
+                           reason)
+        return focused
 
     @staticmethod
     def _settle_patch(frame) -> np.ndarray | None:
