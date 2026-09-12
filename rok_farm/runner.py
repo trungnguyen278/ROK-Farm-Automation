@@ -362,7 +362,8 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
     # survive the startup sweep: they are the ones somebody will want to look
     # at, and they are rare.
     KEEP_FOREVER = ("WRONG_BUTTON", "WRONG_PLACE", "TIMEOUT", "MAPID",
-                    "FOG", "ZOOM_STUCK", "WRONG_NODE")
+                    "FOG", "ZOOM_STUCK", "WRONG_NODE", "world_fail",
+                    "NO_FOCUS")
     KEEP_HOURS = 3.0
 
     def run(self):
