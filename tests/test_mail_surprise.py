@@ -178,3 +178,59 @@ def test_a_covered_screen_is_not_called_an_empty_mailbox(monkeypatch):
     assert not look
     assert "covers the game" in why, why
     assert f._mail_last_count is None, "a look through a panel moved the baseline"
+
+
+class Quitting(Fake):
+    """The before-quit path: harvest stubbed out, the mail action counted."""
+
+    def __init__(self):
+        self.opened = 0
+        outer = self
+
+        class Actions:
+            def do(self, job):
+                outer.opened += 1
+
+        self._actions = Actions()
+
+    def _harvest_city_before_quit(self):
+        pass
+
+
+def test_the_baseline_is_the_badge_after_the_farm_read_the_mail(monkeypatch):
+    """Live 2026-09-14: 48 before the farm read two tabs at 02:53, 39 at the
+    next exit, and the check called that "somebody has read it" and skipped
+    without the arithmetic. The count has to start from the read mailbox."""
+    seq = [48, 30, 39]
+    monkeypatch.setattr(ph, "mail_badge_count", lambda frame: seq.pop(0))
+    monkeypatch.setattr(ph.time, "sleep", lambda s: None)
+    f = Quitting()
+    f._gathers_started = 10
+    f._check_panels_before_quit()
+    assert f.opened == 1
+    assert f._mail_last_count == 30
+
+    f._gathers_started = 15
+    look, why = f._mail_worth_opening()
+    assert not look
+    assert "30->39" in why and "4 unexplained" in why, why
+
+
+def test_a_fall_after_the_farm_read_is_put_down_to_the_farm(monkeypatch):
+    """When the post-read badge does not read, the pre-read baseline stays --
+    and the fall that follows must not be blamed on somebody else."""
+    seq = [48, None, 39, 30]
+    monkeypatch.setattr(ph, "mail_badge_count", lambda frame: seq.pop(0))
+    monkeypatch.setattr(ph.time, "sleep", lambda s: None)
+    f = Quitting()
+    f._gathers_started = 10
+    f._check_panels_before_quit()
+    assert f._mail_last_count == 48, "a badge that did not read moved the baseline"
+
+    look, why = f._mail_worth_opening()
+    assert not look
+    assert "the farm read it" in why and "somebody" not in why, why
+
+    # the farm did not read at that exit, so a later fall is somebody else
+    look, why = f._mail_worth_opening()
+    assert "somebody has read it" in why, why

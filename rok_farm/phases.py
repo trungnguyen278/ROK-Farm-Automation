@@ -312,6 +312,41 @@ class PhasesMixin:
                 # the real work and the client is about to be closed anyway.
                 logger.warning("%s check before quit failed", job,
                                exc_info=True)
+        self._mail_rebaseline_after_read()
+
+    def _mail_rebaseline_after_read(self):
+        """Take the baseline from the badge AFTER the farm has read the mail.
+
+        The check counts the badge before deciding to open, so the baseline it
+        leaves behind is the pre-read number. Live 2026-09-14: 48 before the
+        farm read two tabs at 02:53, 39 at the next exit -- which the check
+        called "badge fell, somebody has read it" and skipped without doing
+        the arithmetic at all. Any mail that arrived in between was invisible
+        for that exit. The operator's rule counts from a read mailbox, so the
+        count starts from one.
+
+        If the number does not read now, or the panel is still covering the
+        game, the pre-read baseline stays -- and the next fall is at least put
+        down to the right reader.
+        """
+        self._mail_read_by_farm = True
+        time.sleep(random.uniform(0.6, 1.0))
+        frame = self._grab()
+        if getattr(frame, "shape", None) is not None:
+            from rok_farm.state_probe import dim_ratio
+            if dim_ratio(frame) >= MODAL_RATIO_MIN:
+                logger.info("mail: still covered after reading; baseline "
+                            "stays %s", self._mail_last_count)
+                return
+        count = mail_badge_count(frame) if frame is not None else None
+        if count is None:
+            logger.info("mail: badge after reading did not read; baseline "
+                        "stays %s", self._mail_last_count)
+            return
+        logger.info("mail: badge %s -> %s after reading, re-baselining",
+                    self._mail_last_count, count)
+        self._mail_last_count = count
+        self._mail_last_gathers = getattr(self, "_gathers_started", 0)
 
     def _mail_badge_visible(self, frame) -> bool:
         """Is there any badge-red blob on the mail button at all?
@@ -357,9 +392,11 @@ class PhasesMixin:
         done = getattr(self, "_gathers_started", 0)
 
         prev, prev_done = self._mail_last_count, self._mail_last_gathers
+        read_by_farm = getattr(self, "_mail_read_by_farm", False)
         if count is not None:
             self._mail_last_count = count
             self._mail_last_gathers = done
+            self._mail_read_by_farm = False
 
         if count is None:
             # None has meant two different things, and the log said the wrong
@@ -395,8 +432,8 @@ class PhasesMixin:
         if prev is None:
             return True, f"first look this session (badge {count})"
         if count < prev:
-            return False, (f"badge fell {prev}->{count}; somebody has read it, "
-                           f"re-baselining")
+            who = "the farm read it" if read_by_farm else "somebody has read it"
+            return False, f"badge fell {prev}->{count}; {who}, re-baselining"
 
         grew = count - prev
         explained = max(0, done - prev_done)
