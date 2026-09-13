@@ -293,6 +293,41 @@ def act_mail(ctx: PlayerActionCtx):
     _close_mail(ctx)
 
 
+MAIL_READ_ALL_PCT = (0.218, 0.943)
+MAIL_PANEL_MIN_SCORE = 0.76
+
+
+def _mail_panel_open(frame) -> bool:
+    """Is the mail panel on screen? Three tests, each measured, all required.
+
+    The read-all button on its own is NOT proof. That was assumed on
+    2026-09-14 and measured wrong within the hour: its template lies over the
+    chat box's strip, and at the old 0.55 it matched 627 of 812 saved frames
+    that had no panel at all. Over the same frames:
+
+        panel frames (9)   score 0.813-0.974, every one at (0.218, 0.943),
+                           dim ratio 2.40-3.03
+        all others (812)   score at most 0.709 and never at that spot;
+                           31 dimmed by other panels, none with the button there
+
+    So the button must score MAIL_PANEL_MIN_SCORE or more, within 0.01 of its
+    spot, on a screen dimmed behind a modal.
+    """
+    if frame is None or getattr(frame, "shape", None) is None:
+        return False
+    m = _match_on_frame(frame, "ui/mail_read_all_btn",
+                        threshold=MAIL_PANEL_MIN_SCORE, roi=(0.85, 1.0),
+                        scales=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+    if m is None:
+        return False
+    if (abs(m[0] - MAIL_READ_ALL_PCT[0]) > 0.01
+            or abs(m[1] - MAIL_READ_ALL_PCT[1]) > 0.01):
+        return False
+    from rok_farm.config import MODAL_RATIO_MIN
+    from rok_farm.state_probe import dim_ratio
+    return dim_ratio(frame) >= MODAL_RATIO_MIN
+
+
 def _click_in_mail_panel(ctx, frame, px: float, py: float, jitter_px: int = 3) -> bool:
     """Click inside the OPEN mail panel, where the HUD's no-click zones do not apply.
 
@@ -303,11 +338,11 @@ def _click_in_mail_panel(ctx, frame, px: float, py: float, jitter_px: int = 3) -
     read-all clicks in the log up to 2026-09-14 04:40 was blocked -- at DEBUG
     level, under an INFO line saying the mail had been read. It never was.
 
-    The zones are dropped only for a click whose frame shows the panel's own
-    read-all button, which exists nowhere else: proof that the panel, not the
-    HUD, is under the pointer. A click that is blocked anyway says so.
+    The zones are dropped only for a click whose frame passes _mail_panel_open,
+    so it is the panel, not the HUD, under the pointer. A click that is
+    blocked anyway says so.
     """
-    if frame is None or _find_mail_read_all(frame) is None:
+    if not _mail_panel_open(frame):
         logger.info("mail: panel not confirmed open, click at pct(%.3f,%.3f) "
                     "skipped", px, py)
         return False

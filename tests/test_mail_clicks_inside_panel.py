@@ -4,12 +4,17 @@ Every tab and "Doc va nhan tat" click the mail check ever attempted -- 22 of
 them, up to 2026-09-14 04:40 -- was dropped by the click layer as "in no-click
 zone" and logged at DEBUG, right under an INFO line saying the mail had been
 read. These tests pin the geometry that caused it and the gate that fixes it.
+
+The first gate trusted the read-all button alone and was measured unsafe the
+same hour: 627 of 812 saved frames with no panel passed it. The frames below
+are the ones that fooled it worst.
 """
 
 import ast
 import logging
 from contextlib import contextmanager
 
+import cv2
 import pytest
 
 import anti_detection.player_actions as pa
@@ -75,8 +80,46 @@ class Ctx:
         return self.result
 
 
+KEEP = PROJECT_ROOT / "screenshots" / "keep"
+PANEL_FRAMES = [
+    KEEP / "feature_refs" / "MAIL_NO_TAB_BADGES_130505.png",
+    KEEP / "feature_refs" / "MAIL_NO_TAB_BADGES_180640.png",
+    KEEP / "mail_read" / "MAIL_AFTER_READ_044022.png",
+    KEEP / "mail_read" / "MAIL_AFTER_READ_053337.png",
+]
+NOT_PANEL = [
+    # the read-all template's highest scores on frames WITHOUT the panel
+    KEEP / "gate_negatives" / "m4_scan_14_014903.png",        # 0.709
+    KEEP / "gate_negatives" / "m1_after_gather_032436.png",   # 0.700
+    KEEP / "gate_negatives" / "m2_scan_00_022544.png",        # 0.698
+    # dimmed behind a different panel
+    KEEP / "harvest_panel" / "road_panel_after_harvest_015217.png",
+    # the plain city, chat box and all
+    KEEP / "operator_samples" / "day" / "city_idle_return_city_190516.png",
+]
+
+
+def load(path):
+    if not path.is_file():
+        pytest.skip(f"{path.name} is not kept any more")
+    frame = cv2.imread(str(path))
+    if frame is None:
+        pytest.skip(f"{path.name} did not decode")
+    return frame
+
+
+@pytest.mark.parametrize("path", PANEL_FRAMES, ids=lambda p: p.stem)
+def test_the_mail_panel_is_recognised(path):
+    assert pa._mail_panel_open(load(path))
+
+
+@pytest.mark.parametrize("path", NOT_PANEL, ids=lambda p: p.stem)
+def test_nothing_else_is_taken_for_the_mail_panel(path):
+    assert not pa._mail_panel_open(load(path))
+
+
 def test_a_click_in_the_open_panel_goes_through_with_the_zones_down(monkeypatch):
-    monkeypatch.setattr(pa, "_find_mail_read_all", lambda frame: READ_ALL)
+    monkeypatch.setattr(pa, "_mail_panel_open", lambda frame: True)
     ctx = Ctx()
     assert pa._click_in_mail_panel(ctx, "frame", *READ_ALL)
     assert ctx.clicks == [(READ_ALL[0], READ_ALL[1], True)]
@@ -85,7 +128,7 @@ def test_a_click_in_the_open_panel_goes_through_with_the_zones_down(monkeypatch)
 
 def test_no_click_without_proof_that_the_panel_is_open(monkeypatch, caplog):
     """If the panel did not open, the read-all spot is the chat box."""
-    monkeypatch.setattr(pa, "_find_mail_read_all", lambda frame: None)
+    monkeypatch.setattr(pa, "_mail_panel_open", lambda frame: False)
     ctx = Ctx()
     with caplog.at_level(logging.INFO, logger=pa.logger.name):
         assert not pa._click_in_mail_panel(ctx, "frame", *READ_ALL)
@@ -94,7 +137,7 @@ def test_no_click_without_proof_that_the_panel_is_open(monkeypatch, caplog):
 
 
 def test_a_click_that_is_still_blocked_says_so(monkeypatch, caplog):
-    monkeypatch.setattr(pa, "_find_mail_read_all", lambda frame: READ_ALL)
+    monkeypatch.setattr(pa, "_mail_panel_open", lambda frame: True)
     ctx = Ctx(click_result=False)
     with caplog.at_level(logging.INFO, logger=pa.logger.name):
         assert not pa._click_in_mail_panel(ctx, "frame", *TAB_LIEN_MINH)
