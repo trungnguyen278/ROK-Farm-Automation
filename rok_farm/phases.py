@@ -122,32 +122,49 @@ class PhasesMixin:
         if random.random() < 0.3:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
-    def _check_mail_before_quit(self):
-        """Open the mail, but only on the way OUT of the client.
+    # How often the alliance gifts get a look on the way out. Mail is every
+    # time, because the whole reason it is back is to keep an honest record of
+    # when recall and warning letters arrive, and a patchy record is no
+    # record. Alliance carries no record, so it takes the operator's "khong
+    # can qua thuong xuyen" literally: gifts accumulate, half the exits is
+    # plenty, and it stops "quit" and "open two panels" from being one fixed
+    # ritual.
+    ALLIANCE_BEFORE_QUIT_CHANCE = 0.5
 
-        Mail used to be part of the city idle and was taken out because it
-        opens a panel, and a panel that fails to close strands the bot in a
-        screen no step knows how to leave -- it was seen hanging on the
-        alliance panel. That reasoning is sound everywhere except here. The
-        next thing this code does is ALT+F4, which closes the window whatever
-        panel is open, and the client comes back with none. The one failure
-        that removed the feature cannot happen on this path.
+    def _check_panels_before_quit(self):
+        """Mail, and sometimes the alliance gifts -- only on the way OUT.
 
-        It is also where a player would do it: you check your mail before you
-        log off, not in the middle of a march.
+        Both used to run during the city idle and both were taken out for the
+        same reason: they open a panel, and a panel that fails to close
+        strands the bot in a screen no step knows how to leave. It was the
+        alliance panel it was seen hanging on.
 
-        act_mail skips when the mail button has no red badge, so this opens
-        nothing unless there is something to read -- which keeps the log an
-        honest record of when mail actually arrived, and that is the point:
-        recall and warning letters are what the account owner needs to see the
-        frequency of.
+        That reasoning is sound everywhere except here. The next thing this
+        code does is ALT+F4, which closes the window whatever panel is open,
+        and the client comes back with none -- the operator's own argument for
+        putting alliance back on 2026-09-13. The one failure that removed
+        these cannot happen on this path.
+
+        It is also when a player would do it: you read your mail and collect
+        your gifts before you log off, not in the middle of a march.
+
+        Each action skips when its button has no red badge, so this opens
+        nothing unless there is something there. Order is shuffled, because
+        doing the same two things in the same sequence before every exit is
+        itself a pattern.
         """
-        try:
-            self._actions.do("mail")
-        except Exception:
-            # Never let a nicety stop the quit. The wait that follows is the
-            # real work and the client is about to be closed anyway.
-            logger.warning("Mail check before quit failed", exc_info=True)
+        jobs = ["mail"]
+        if random.random() < self.ALLIANCE_BEFORE_QUIT_CHANCE:
+            jobs.append("alliance")
+        random.shuffle(jobs)
+        for job in jobs:
+            try:
+                self._actions.do(job)
+            except Exception:
+                # Never let a nicety stop the quit. The wait that follows is
+                # the real work and the client is about to be closed anyway.
+                logger.warning("%s check before quit failed", job,
+                               exc_info=True)
 
     def _sleep_until_woken(self, seconds: float, reason: str) -> bool:
         """Sleep, but stop early if the remote control asks.
@@ -225,7 +242,7 @@ class PhasesMixin:
                 # Only here. _restart_game is also the RECOVERY path, where the
                 # client may be the thing that is broken, and poking a panel
                 # into it would be the worst possible moment.
-                self._check_mail_before_quit()
+                self._check_panels_before_quit()
                 if self._restart_game(f"waiting {plan / 60:.0f}min for troops",
                                       extra_wait=plan):
                     self._view_is_world = False
