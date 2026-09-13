@@ -106,8 +106,11 @@ def test_a_blank_map_is_abandoned_early(flow):
 
     # Anchor on the condition, not on a character distance from the message:
     # the branch grew and the old window silently stopped covering it.
+    # Bounded by the NEXT branch, not by a character count. A window measured
+    # in characters makes a test that fails whenever the code it checks gets
+    # documented, which has now happened twice.
     start = flow.index("NO_CANDIDATE_GIVEUP\n", flow.index("def _step_scan"))
-    early = flow[start:start + 2200]
+    early = flow[start:flow.index("if empty_streak >= max_empty_streak:", start)]
     assert "NOT ONE candidate" in early
     assert "_step_return_city" in early, \
         "the early exit does not go through the city, so a zoom the scroll " \

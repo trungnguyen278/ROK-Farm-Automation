@@ -1095,6 +1095,21 @@ class GemFlowMixin:
                           f"resets it")
                     logger.warning("No candidates in %d scans (zoom gauge %s) "
                                    "-- early return to city", scan_count, gauge)
+                    # The frame, not just the verdict. This is the failure the
+                    # whole zoom gauge was built for, and when the gauge comes
+                    # back None it has nothing to say -- which is exactly when
+                    # a picture is the only thing left.
+                    #
+                    # There is a live suspect. The FOG frame of 09:32 caught
+                    # the map FILTER panel open with its "Tai nguyen"
+                    # (resources) layer unchecked, and with that layer off the
+                    # game draws no deposits at all -- which looks precisely
+                    # like this: ten scans, not one candidate, on ground that
+                    # is otherwise fine. One frame is not evidence, so this
+                    # collects more rather than acting on a hunch.
+                    blind = self._grab()
+                    if blind is not None:
+                        save_screenshot(blind, f"{tag}_NO_CANDIDATES")
                     self._step_return_city(tag)
                     return None
 
