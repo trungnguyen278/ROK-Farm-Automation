@@ -245,18 +245,24 @@ def act_mail(ctx: PlayerActionCtx):
     #
     # Clicking a tab that is already open does nothing, so the optimisation
     # was worth less than the failure mode it carried.
+    last = frame
+    after = None
     for bx, by in badge_tabs:
+        before = tab_badge_count(last, bx)
         print(f"    -> click tab at badge pct({bx:.3f},{by:.3f})")
         ctx._click_pct(bx - 0.01, by + 0.02, jitter_px=3)
         time.sleep(random.uniform(1.5, 3.0))
 
         frame2 = _grab_chat_frame(ctx)
         if frame2 is not None:
+            last = frame2
             still_has_badge = any(
                 abs(b2x - bx) < 0.08 for b2x, _ in _find_mail_tab_badges(frame2)
             )
             if not still_has_badge:
                 print(f"    tab pct({bx:.3f}) badge cleared after switch, skip read")
+                logger.info("mail: tab pct(%.3f) badge %s cleared on opening, "
+                            "nothing to read", bx, before)
             else:
                 read_btn = _find_mail_read_all(frame2)
                 if read_btn:
@@ -266,9 +272,38 @@ def act_mail(ctx: PlayerActionCtx):
                     ctx._click_pct(rx, ry, jitter_px=3)
                     time.sleep(random.uniform(1.5, 3.0))
                     _dismiss_reward_popup(ctx)
+                    after = _grab_chat_frame(ctx)
+                    if after is not None:
+                        last = after
+                        _log_tab_after_read(after, bx, before)
 
+    # One picture of the panel after reading, per session. What is still in it
+    # is the answer the numbers above can only point at.
+    if after is not None and not getattr(ctx, "_mail_after_read_saved", False):
+        ctx._mail_after_read_saved = True
+        try:
+            from rok_farm.screenshots import save_screenshot
+            save_screenshot(after, "MAIL_AFTER_READ")
+        except Exception:
+            logger.debug("mail: could not save the after-read frame",
+                         exc_info=True)
 
     _close_mail(ctx)
+
+
+def _log_tab_after_read(frame, bx: float, before) -> None:
+    """Log a tab's badge before and after "Doc va nhan tat".
+
+    "gone" means no badge left on that tab, "unreadable" a badge whose number
+    did not read. The measurement that says whether reading empties a tab.
+    """
+    near = [b2x for b2x, _ in _find_mail_tab_badges(frame) if abs(b2x - bx) < 0.03]
+    if not near:
+        now = "gone"
+    else:
+        n = tab_badge_count(frame, near[0])
+        now = n if n is not None else "unreadable"
+    logger.info("mail: tab pct(%.3f) badge %s -> %s after read-all", bx, before, now)
 
 
 def _btn_has_badge(frame, btn_key: str) -> bool:
@@ -350,16 +385,39 @@ def mail_badge_count(frame) -> int | None:
     so the crop is the badge blob itself, found the same way the boolean
     check finds it, and blown up 6x before the engine sees it.
     """
-    from rok_farm import queue_ocr as _q          # lazy: avoids import order
-
-    if frame is None or _q._ocr_engine is None:
+    if frame is None:
         return None
     fh, fw = frame.shape[:2]
     mx, my = BTN_POS["mail"]
     x1, x2 = int((mx - 0.030) * fw), int((mx + 0.030) * fw)
     y1, y2 = int((my - 0.048) * fh), int((my + 0.004) * fh)
     region = frame[max(0, y1):min(fh, y2), max(0, x1):min(fw, x2)]
-    if region.size == 0:
+    return _read_badge_number(region)
+
+
+def tab_badge_count(frame, pct_x: float) -> int | None:
+    """The number on the mail TAB badge at pct_x, or None.
+
+    The same reading as mail_badge_count, pointed at the tab strip: a window
+    0.03 either side of a badge _find_mail_tab_badges reported, over that
+    function's measured band. It exists for one question the button's number
+    cannot answer -- whether "Doc va nhan tat" empties a tab. Live 2026-09-14
+    the button read 47 before the farm read two tabs and 46 right after, and
+    sat between 36 and 48 through four reads that night.
+    """
+    if frame is None:
+        return None
+    fh, fw = frame.shape[:2]
+    x1, x2 = int((pct_x - 0.03) * fw), int((pct_x + 0.03) * fw)
+    region = frame[0:int(fh * 0.05), max(0, x1):min(fw, x2)]
+    return _read_badge_number(region)
+
+
+def _read_badge_number(region) -> int | None:
+    """The digits inside the roundest badge-red blob in region, or None."""
+    from rok_farm import queue_ocr as _q          # lazy: avoids import order
+
+    if region is None or region.size == 0 or _q._ocr_engine is None:
         return None
     red = _badge_red(region)
     circle = _find_badge_circle(red, min_circularity=0.40)
@@ -375,7 +433,7 @@ def mail_badge_count(frame) -> int | None:
     try:
         result, _ = _q._ocr_engine(crop)
     except Exception as e:
-        logger.debug("mail badge OCR error: %s", e)
+        logger.debug("badge OCR error: %s", e)
         return None
     digits = "".join(ch for ch in _q.merge_boxes(result) if ch.isdigit())
     if not digits:
