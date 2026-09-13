@@ -361,6 +361,21 @@ class GemFlowMixin:
                 self._check_reconnect_popup()
 
         if not reached:
+            # Before calling it a navigation failure, ask whether anything is
+            # COVERING the button. Three toggles that all miss look identical
+            # whether the corner is wrong or a panel is sitting on it, and the
+            # frame saved on 2026-09-13 at 12:18 turned out to be a deploy
+            # panel left open by a refusal two mines earlier.
+            if self._dismiss_modal():
+                print(f"  [{INFO}] Something was covering the game -- closed "
+                      f"it, trying the world map once more")
+                logger.info("world nav: dismissed a modal, retrying the toggle")
+                reached = self._wait_until_world_map(timeout=3.0)
+                if not reached:
+                    self._toggle_view("City -> world map (after dismiss)")
+                    reached = self._wait_until_world_map(timeout=4.0)
+
+        if not reached:
             print(f"  [{FAIL}] Not on world map after toggling")
             self._view_is_world = False
             frame = self._grab()
@@ -1445,6 +1460,27 @@ class GemFlowMixin:
                                "(troops=%s)", load, (panel or {}).get("troops"))
                 save_screenshot(self._grab(), f"{tag}_WRONG_NODE")
                 self._record(f"{tag}_march", False, f"non-gem node load={load}")
+                # Close it. "Backing out" used to mean returning False with the
+                # deploy panel still covering the screen, and the next mines
+                # inherited it -- photographed on 2026-09-13, where one refusal
+                # at 12:17 cost THREE mines in a row:
+                #
+                #   m12  refused the node, panel left open
+                #   m13  "10 scans and NOT ONE candidate (zoom gauge: None)"
+                #        -- the panel hides the deposits AND the coordinate
+                #        badge the gauge reads, so both went blind at once
+                #   m14  "Not on world map after toggling" -- the toggle
+                #        clicks were landing on the panel
+                #
+                # m14's world_fail frame is the deploy panel, pixel for pixel
+                # the same one m12 refused. That is also the likeliest reading
+                # of the 19 world-nav failures in the log that had no
+                # explanation: nobody had kept a frame of one until today.
+                if not self._dismiss_modal():
+                    print(f"  [{WARN}] The deploy panel did not close -- the "
+                          f"next mine may start behind it")
+                    logger.warning("Deploy panel still up after refusing a "
+                                   "non-gem node")
                 return False
 
             print(f"  [{INFO}] March (Hanh quan) at fixed pct{MARCH_BTN_PCT}")
