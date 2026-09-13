@@ -288,7 +288,21 @@ def merge_boxes(result) -> str:
 
     out = ""
     prev_right = None
+    covered_right = None
     for left, right, text in boxes:
+        # A box whose whole span is already inside one we have consumed cannot
+        # contribute a glyph we have not read: it adds no horizontal extent, so
+        # it is the engine detecting part of a number a second time. Seen live
+        # 2026-09-13 09:47 -- (204..313, '65.428') followed by (269..284, '6'),
+        # which the seam logic below could not repair because the repeated
+        # character was in the MIDDLE of the outer text, not at its edge. It
+        # appended, read 654286 for a real 65.428, and only the
+        # too-big-a-jump guard stopped it being believed.
+        #
+        # This is geometry, not a threshold fitted to one sighting: containment
+        # means redundancy whatever the text says.
+        if out and covered_right is not None and right <= covered_right:
+            continue
         if out and prev_right is not None:
             if left < prev_right:
                 # Overlapping: the same glyph was decoded twice, so strip the
@@ -313,6 +327,8 @@ def merge_boxes(result) -> str:
                 text = " " + text
         out += text
         prev_right = right
+        covered_right = right if covered_right is None else max(covered_right,
+                                                                right)
     return out
 
 

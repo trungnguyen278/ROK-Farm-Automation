@@ -84,3 +84,36 @@ def test_overlapping_boxes_drop_the_repeat():
 def test_no_boxes_is_empty_not_an_error():
     assert merge_boxes([]) == ""
     assert merge_boxes(None) == ""
+
+
+def test_a_box_wholly_inside_one_already_read_is_dropped():
+    """Real, 2026-09-13 09:47, verbatim from the log.
+
+    (204..313, '65.428') then (269..284, '6') -- the second box sits entirely
+    inside the first. The seam logic could not repair it, because the repeated
+    character was in the MIDDLE of the outer text rather than at either edge,
+    so '6' was appended and 65.428 read as 654286. Only the too-big-a-jump
+    guard stopped it being believed, and the reading was lost.
+
+    Containment means redundancy whatever the text says: a box that adds no
+    horizontal extent cannot carry a glyph that was not already read.
+    """
+    out = merge_boxes([det(21, 121, "31.2M"), det(204, 313, "65.428"),
+                       det(269, 284, "6")])
+    assert out.endswith("65.428"), out
+    assert "654286" not in out
+
+
+def test_containment_is_judged_against_everything_read_so_far():
+    """Not just the previous box: boxes are sorted by LEFT edge, so a small
+    box can be contained in one that started two boxes ago."""
+    out = merge_boxes([det(0, 300, "12345"), det(10, 40, "2"),
+                       det(50, 80, "3")])
+    assert out == "12345", out
+
+
+def test_a_box_that_extends_the_span_is_still_read():
+    """The rule must not swallow a genuine continuation that merely starts
+    inside the previous box."""
+    out = merge_boxes([det(100, 200, "65."), det(150, 260, "428")])
+    assert out.endswith("65.428"), out
