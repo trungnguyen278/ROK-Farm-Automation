@@ -47,6 +47,8 @@ HARVEST_NMS_PX = 30
 # claiming far more is not a city full of bubbles, it is a detector gone wrong,
 # and the cap stops that turning into a click storm.
 HARVEST_MAX_CLICKS = 30
+# The next tap goes to one of this many untapped bubbles nearest the last one.
+HARVEST_NEAREST = 3
 
 
 @dataclass(frozen=True)
@@ -106,3 +108,31 @@ def find_harvest_bubbles(frame, templates, threshold: float = HARVEST_THRESHOLD,
             kept.append(Bubble(x, y, float(best[y, x]),
                                templates[int(who[y, x])][0]))
     return kept
+
+
+def _near(a: Bubble, b: Bubble, px: int) -> bool:
+    return (a.x - b.x) ** 2 + (a.y - b.y) ** 2 <= px ** 2
+
+
+def untapped(bubbles, tapped, px: int = HARVEST_NMS_PX) -> list[Bubble]:
+    """The bubbles that no earlier tap landed on."""
+    return [b for b in bubbles if not any(_near(b, t, px) for t in tapped)]
+
+
+def still_there(bubbles, target: Bubble, px: int = HARVEST_NMS_PX) -> Bubble | None:
+    """The bubble showing at the spot just tapped, if there is one."""
+    return next((b for b in bubbles if _near(b, target, px)), None)
+
+
+def pick_next(candidates, last: Bubble | None, rng) -> Bubble:
+    """One of the few bubbles nearest the last tap -- any of them for the first.
+
+    A hand sweeps across the city. Jumping at random between far corners is
+    not how a thumb moves, and always taking THE nearest would walk the same
+    path through the same buildings on every exit.
+    """
+    if last is None:
+        return rng.choice(list(candidates))
+    ranked = sorted(candidates,
+                    key=lambda b: (b.x - last.x) ** 2 + (b.y - last.y) ** 2)
+    return rng.choice(ranked[:HARVEST_NEAREST])

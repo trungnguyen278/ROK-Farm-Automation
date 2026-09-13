@@ -13,7 +13,8 @@ import time
 
 from anti_detection.player_actions import mail_badge_count
 from rok_farm.config import (MAIL_SURPRISE, MAX_MARCH_MINUTES,
-                             WAIT_EARLY_MARGIN, WAIT_QUIT_MINUTES)
+                             MODAL_RATIO_MIN, WAIT_EARLY_MARGIN,
+                             WAIT_QUIT_MINUTES)
 from rok_farm import wake
 from rok_farm.logging_setup import INFO, WARN, logger
 
@@ -130,31 +131,42 @@ class PhasesMixin:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
     def _harvest_city_before_quit(self):
-        """Tap every resource bubble in the city, on the way out of the client.
+        """Tap the resource bubbles in the city, on the way out of the client.
 
         The operator's call, 2026-09-14: collect the city's production -- the
         four common resources and the KvK-only crystal -- and do it only
-        before quitting. By then the flow has already returned to the city, so
-        the bubbles are on screen, and whatever a stray tap might open is
-        closed by the ALT+F4 that follows.
+        before quitting, when the flow is already back in the city.
 
         Detection and its measurements live in rok_farm/city_harvest.py.
 
-        Tapped in a shuffled order at a quick, uneven pace. These are the most
-        familiar taps in the game; a player sweeps them fast, and the same
-        twenty buildings in the same sequence at the same rhythm every exit
-        would be a pattern.
+        ONE TAP, THEN LOOK AGAIN. The first version tapped every bubble found
+        on a single frame, one after another. Live 2026-09-14, three exits,
+        the same 20 spots each time, and after two of them something was
+        covering the game when the mail check looked: at 01:02 the view button
+        template scored 0.000 (0.841 at the next exit), and the 01:52 frame
+        shows the road plot's info panel over the city. Taps were landing
+        where a bubble had been. Whether one tap takes every bubble of its
+        kind, or something else cleared them, is not known yet -- tapping only
+        what is still on screen is right either way, and the per-tap log
+        lines will say which.
 
-        After a beat the frame is read again and whatever is still there is
-        LOGGED, not tapped a second time. A bubble that survives a tap is more
-        likely a wrong detection than a slow animation, and the numbers are
-        what will say which.
+        So every tap is followed by a fresh frame, and:
+          * anything covering the game stops the harvest on the spot. Dim
+            ratio over the saved frames: 23 city views, 18 of them with 18-20
+            bubbles showing, 1.04-1.24; the mail panel 2.40; the road panel
+            5.18; MODAL_RATIO_MIN is 1.8. The panel goes to _dismiss_modal,
+            one try, and the ALT+F4 that follows closes it if that fails;
+          * no spot is tapped twice. A bubble still there after its tap and a
+            second look is logged and left for the next exit -- one a tap did
+            not take is more likely a wrong detection than bad luck.
+
+        The next target is one of the few nearest the last tap (pick_next).
         """
         from collections import Counter
 
         from rok_farm.city_harvest import (HARVEST_MAX_CLICKS,
-                                           find_harvest_bubbles,
-                                           load_harvest_templates)
+                                           load_harvest_templates, pick_next,
+                                           still_there, untapped)
         from rok_farm.screenshots import save_screenshot
 
         templates = getattr(self, "_harvest_templates", None)
@@ -165,34 +177,95 @@ class PhasesMixin:
             logger.warning("harvest: no templates in templates/city -- skipped")
             return
 
-        frame = self._grab()
+        frame, ratio, bubbles = self._harvest_look(templates)
         if frame is None:
             return
-        bubbles = find_harvest_bubbles(frame, templates)
+        if bubbles is None:
+            logger.info("harvest: something already covers the city "
+                        "(dim %.2f) -- skipped", ratio)
+            return
         if not bubbles:
             print(f"  [{INFO}] Harvest: nothing to collect")
             logger.info("harvest: no bubbles on screen")
             return
 
-        bubbles = bubbles[:HARVEST_MAX_CLICKS]
-        random.shuffle(bubbles)
         kinds = dict(Counter(b.kind for b in bubbles))
         print(f"  [{INFO}] Harvest: {len(bubbles)} bubble(s) {kinds}")
         logger.info("harvest: %d bubble(s) %s", len(bubbles), kinds)
 
         fh, fw = frame.shape[:2]
-        for b in bubbles:
-            self._click_pct(b.x / fw, b.y / fh, jitter_px=4)
-            time.sleep(random.uniform(0.35, 1.1))
+        tapped = []
+        survivors = []
+        while len(tapped) < HARVEST_MAX_CLICKS:
+            fresh = untapped(bubbles, tapped)
+            if not fresh:
+                break
+            target = pick_next(fresh, tapped[-1] if tapped else None, random)
+            self._click_pct(target.x / fw, target.y / fh, jitter_px=4)
+            tapped.append(target)
+            time.sleep(random.uniform(0.6, 1.2))
 
-        time.sleep(random.uniform(1.0, 1.8))
-        after = self._grab()
-        left = find_harvest_bubbles(after, templates) if after is not None else []
-        logger.info("harvest: tapped %d, %d still on screen", len(bubbles),
-                    len(left))
-        if left and not getattr(self, "_harvest_leftover_saved", False):
+            frame, ratio, now = self._harvest_look(templates)
+            if now is not None and still_there(now, target) is not None:
+                # A bubble takes a moment to go. Look once more before
+                # calling this one a survivor.
+                time.sleep(random.uniform(0.5, 0.9))
+                frame, ratio, now = self._harvest_look(templates)
+            if frame is None:
+                logger.info("harvest: no frame after tap %d -- stopping",
+                            len(tapped))
+                return
+            if now is None:
+                self._harvest_covered(frame, ratio, tapped)
+                return
+
+            here = still_there(now, target)
+            if here is not None:
+                survivors.append(here)
+            logger.info("harvest: tap %d %s at (%d,%d): %d -> %d on screen%s",
+                        len(tapped), target.kind, target.x, target.y,
+                        len(bubbles), len(now),
+                        ", and it is still there" if here is not None else "")
+            bubbles = now
+
+        logger.info("harvest: tapped %d, %d still on screen", len(tapped),
+                    len(bubbles))
+        if survivors and not getattr(self, "_harvest_leftover_saved", False):
             self._harvest_leftover_saved = True
-            save_screenshot(after, "HARVEST_LEFTOVER")
+            save_screenshot(frame, "HARVEST_LEFTOVER")
+
+    def _harvest_look(self, templates):
+        """A fresh frame as (frame, dim ratio, bubbles).
+
+        bubbles is None when there is no frame or something covers the game --
+        a covered city is not an empty one, and nothing on it may be tapped.
+        """
+        from rok_farm.city_harvest import find_harvest_bubbles
+        from rok_farm.state_probe import dim_ratio
+
+        frame = self._grab()
+        if frame is None:
+            return None, 0.0, None
+        ratio = dim_ratio(frame)
+        if ratio >= MODAL_RATIO_MIN:
+            return frame, ratio, None
+        return frame, ratio, find_harvest_bubbles(frame, templates)
+
+    def _harvest_covered(self, frame, ratio, tapped):
+        """A tap opened something. Stop, keep the evidence, try to close it."""
+        from rok_farm.screenshots import save_screenshot
+
+        last = tapped[-1]
+        print(f"  [{WARN}] Harvest: tap {len(tapped)} opened a panel -- stopping")
+        logger.warning("harvest: tap %d (%s at %d,%d) left the game covered, "
+                       "dim %.2f -- stopping", len(tapped), last.kind, last.x,
+                       last.y, ratio)
+        if not getattr(self, "_harvest_panel_saved", False):
+            self._harvest_panel_saved = True
+            save_screenshot(frame, "HARVEST_PANEL_OPEN")
+        closed = self._dismiss_modal()
+        logger.info("harvest: panel %s", "closed" if closed
+                    else "still open, ALT+F4 will take it")
 
     def _check_panels_before_quit(self):
         """City harvest, then mail -- and only on the way OUT of the client.
@@ -271,6 +344,15 @@ class PhasesMixin:
         the old red mask missed the badge entirely.
         """
         frame = self._grab()
+        if getattr(frame, "shape", None) is not None:
+            from rok_farm.state_probe import dim_ratio
+            cover = dim_ratio(frame)
+            if cover >= MODAL_RATIO_MIN:
+                # Live 2026-09-14 01:52: a harvest tap had opened the road
+                # plot's panel and this said "no badge on the mail button".
+                # The badge was underneath, not gone. Baseline untouched.
+                return False, (f"something covers the game (dim {cover:.2f}), "
+                               "the badge cannot be seen")
         count = mail_badge_count(frame) if frame is not None else None
         done = getattr(self, "_gathers_started", 0)
 
@@ -282,17 +364,18 @@ class PhasesMixin:
         if count is None:
             # None has meant two different things, and the log said the wrong
             # one. Live 2026-09-14 01:02: "badge unreadable, falling back" --
-            # then act_mail's own check found red_px=0, NO badge at all. The
-            # mailbox was empty because the 00:35 check had read it. Nothing
-            # was unreadable, and MAIL_SURPRISE is meant to be tuned from
-            # exactly these lines.
+            # then act_mail's own check found red_px=0, no badge it could see.
+            # Nothing was unreadable, and MAIL_SURPRISE is meant to be tuned
+            # from exactly these lines. (That exit was first put down to an
+            # empty mailbox. The view-button template scored 0.000 there
+            # against 0.841 at the next exit, and the exit after that saved a
+            # frame with a panel over the city, so covered is likelier. A
+            # panel that dims the game is now caught above.)
             if not self._mail_badge_visible(frame):
-                # Empty mailbox, or something covering the button -- the
-                # button template cannot tell those apart yet: over 212 saved
-                # frames, not one shows the button plainly visible WITHOUT a
-                # badge, so there is nothing to calibrate against. Save the
-                # first such frame so there is. Baseline untouched: guessing
-                # "0" while the button is covered would fake a jump later.
+                # Empty mailbox, or something covering the button without
+                # dimming the game. Save the first such frame so the two can
+                # be told apart. Baseline untouched: guessing "0" while the
+                # button is covered would fake a jump later.
                 if not getattr(self, "_mail_nobadge_frame_saved", False):
                     self._mail_nobadge_frame_saved = True
                     if getattr(frame, "shape", None) is not None:

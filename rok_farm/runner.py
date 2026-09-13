@@ -365,7 +365,8 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                     "FOG", "ZOOM_STUCK", "WRONG_NODE", "world_fail",
                     "NO_FOCUS", "ZOOM_CLOSE_ON_ARRIVAL",
                     "NO_CANDIDATES", "MAIL_NO_TAB_BADGES",
-                    "OFFBAND_GATHER", "HARVEST_LEFTOVER", "MAIL_BUTTON_NO_BADGE", "FILTER_PANEL_OPEN")
+                    "OFFBAND_GATHER", "HARVEST_LEFTOVER", "MAIL_BUTTON_NO_BADGE", "FILTER_PANEL_OPEN",
+                    "HARVEST_PANEL_OPEN")
     # Frames the operator asked to keep as references for work in
     # progress. The sweep is age-based, so a frame named in a
     # conversation is gone three hours later and the next farm start

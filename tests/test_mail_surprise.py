@@ -124,9 +124,10 @@ def test_the_threshold_is_a_knob_not_a_constant_of_nature():
 
 def test_no_badge_at_all_is_not_called_unreadable(monkeypatch):
     """Live 2026-09-14 01:02: the log said "badge unreadable, falling back",
-    and act_mail's own check then found red_px=0 -- no badge at all, because
-    the 00:35 check had already read the mailbox. The behaviour was right and
-    the log was wrong, and the threshold is meant to be tuned from that log.
+    and act_mail's own check then found red_px=0 -- no badge it could see.
+    Whatever the reason (an empty mailbox, or -- likelier, as it turned out --
+    a panel a harvest tap had opened), "unreadable" was the wrong word, and
+    the threshold is meant to be tuned from that log.
     """
     monkeypatch.setattr(ph, "mail_badge_count", lambda frame: None)
     f = Fake()
@@ -153,3 +154,27 @@ def test_no_badge_does_not_move_the_baseline(monkeypatch):
     f._gathers_started = 2
     look, why = f._mail_worth_opening()
     assert "29->31" in why, why
+
+
+def test_a_covered_screen_is_not_called_an_empty_mailbox(monkeypatch):
+    """Live 2026-09-14 01:52: a harvest tap had opened the road plot's info
+    panel, and the check logged "no badge on the mail button". The badge was
+    under the panel, not gone -- and a look through a panel must not move the
+    baseline either."""
+    import numpy as np
+
+    import rok_farm.state_probe as probe
+
+    monkeypatch.setattr(ph, "mail_badge_count", lambda frame: 29)
+    monkeypatch.setattr(probe, "dim_ratio", lambda frame: 5.18)
+
+    class Covered(Fake):
+        def _grab(self):
+            return np.zeros((862, 1533, 3), np.uint8)
+
+    f = Covered()
+    f._gathers_started = 0
+    look, why = f._mail_worth_opening()
+    assert not look
+    assert "covers the game" in why, why
+    assert f._mail_last_count is None, "a look through a panel moved the baseline"
