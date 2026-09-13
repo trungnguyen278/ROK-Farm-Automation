@@ -1102,6 +1102,35 @@ class GemFlowMixin:
                     if self._check_reconnect_popup():
                         empty_streak = 0
                         continue
+                    # Ask the zoom before writing the mine off, the same way
+                    # the no-candidate give-up does. That branch only fires
+                    # when NOTHING was ever detected, so a mine that found
+                    # candidates early and then drifted to close zoom halfway
+                    # through never reached it -- it just scanned blind to the
+                    # streak limit and died as "barren".
+                    #
+                    # Seen on 2026-09-13 09:35: mine 14 was at scan 31 with a
+                    # streak of 15 when the fog guard read the gauge and got
+                    # "close". Nothing acted on that, and the mine failed
+                    # three scans later. This is also how a mine can produce
+                    # honest wood-and-stone rejects early and still be a zoom
+                    # failure by the end, which m17 of the same night looks
+                    # like: its badge readings ran 33px to 195px within one
+                    # mine.
+                    if (not self._zoom_fixed_this_mine
+                            and self.read_zoom_gauge() == "close"):
+                        print(f"  [{WARN}] {max_empty_streak} empty scans and "
+                              f"the HUD shows the resource bar -- zoomed in "
+                              f"mid-scan, not barren; scrolling out and "
+                              f"carrying on")
+                        logger.warning("Empty streak of %d with the zoom gauge "
+                                       "reading close -- correcting in place",
+                                       max_empty_streak)
+                        self._zoom_fixed_this_mine = True
+                        self._scroll_at_center(-1, self._zoom_scrolls())
+                        self._wait_zoom_settled()
+                        empty_streak = 0
+                        continue
                     # Two very different things end up here, and they have
                     # looked identical in the log until now.
                     #

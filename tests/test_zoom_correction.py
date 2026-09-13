@@ -235,3 +235,52 @@ def test_skipping_the_pan_does_not_skip_the_zoom():
         "pan=False returns before the zoom-out, so it does nothing at all"
     assert body.index("read_zoom_gauge") < body.index("if not pan:"), \
         "pan=False returns before the verification, so a stuck zoom is missed"
+
+
+# --- the streak give-up: a mine can drift to close zoom halfway through ---
+
+def streak_giveup():
+    """The branch, with comment-only lines dropped.
+
+    This block carries a long explanation of what a barren streak means, and a
+    window measured in characters would be mostly prose -- a test that breaks
+    when you document the code it checks. Comment-only lines are dropped, not
+    every '#', so a '#' inside a string is left alone.
+    """
+    start = FLOW.index("def _step_scan_and_verify_gem")
+    body = FLOW[start:]
+    at = body.index("if empty_streak >= max_empty_streak:")
+    lines = [ln for ln in body[at:].splitlines()
+             if not ln.strip().startswith("#")]
+    return "\n".join(lines)[:2000]
+
+
+def test_the_streak_giveup_asks_the_zoom_too():
+    """The no-candidate branch only fires when NOTHING was ever detected.
+
+    A mine that found candidates early and then drifted to close zoom never
+    reached it -- it scanned blind to the streak limit and died as "barren".
+    Seen 2026-09-13 09:35: mine 14 was at scan 31 when the fog guard read the
+    gauge and got "close"; nothing acted on it and the mine failed three scans
+    later.
+    """
+    branch = streak_giveup()
+    assert "read_zoom_gauge()" in branch, \
+        "the streak give-up still cannot tell a barren patch from a bad zoom"
+    assert "empty_streak = 0" in branch, \
+        "the correction does not reset the streak, so it gives up anyway"
+
+
+def test_the_streak_fix_shares_the_once_per_mine_flag():
+    """Two in-place corrections in one mine would be a scroll loop."""
+    branch = streak_giveup()
+    assert "_zoom_fixed_this_mine" in branch
+    assert "not self._zoom_fixed_this_mine" in branch, \
+        "the streak branch can correct a mine the give-up branch already did"
+
+
+def test_a_genuinely_barren_patch_still_gives_up():
+    """The guard must not turn every barren streak into an endless scan."""
+    branch = streak_giveup()
+    assert "_step_return_city" in branch, \
+        "nothing ends the mine any more when the ground really is barren"
