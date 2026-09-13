@@ -292,9 +292,7 @@ def _btn_has_badge(frame, btn_key: str) -> bool:
     region = frame[y1:y2, x1:x2]
     if region.size == 0:
         return False
-    red_mask = ((region[:, :, 2] > 150)
-                & (region[:, :, 1] < 100)
-                & (region[:, :, 0] < 100))
+    red_mask = _badge_red(region)
     red_px = int(red_mask.sum())
 
     circle = _find_badge_circle(red_mask, min_circularity=0.40)
@@ -307,6 +305,85 @@ def _btn_has_badge(frame, btn_key: str) -> bool:
     if _DEBUG_BADGES:
         print(f"      {btn_key} btn badge red_px={red_px} circle={circle} -> {has}")
     return has
+
+
+# How much redder than its own green/blue a pixel must be to count as badge
+# red. RELATIVE, not absolute, and that is the whole point.
+#
+# The old mask asked for R>150 and G<100 and B<100. Measured 2026-09-13 on the
+# same badge in two frames:
+#
+#     by day    R 226-236   G 0-7     B 0-4      -> passes easily
+#     at night  R 255       G 101     B 101      -> fails G<100 by ONE unit
+#
+# ROK's night lighting lifts the whole frame, so an absolute floor sits a
+# single value away from a real reading -- the same "threshold fitted to the
+# ceiling" that cost this project the 12-scan empty streak and the 8-attempt
+# circling alert. R minus the brighter of G and B does not care how bright
+# the frame is: 154 at night, 219 by day, against a bar of 60.
+#
+# Swept over 597 saved frames: the relative test finds a badge on 166 that the
+# absolute one missed, and misses 4 that it found -- all four being 4x15 or
+# 37x22 slivers, not badges.
+BADGE_RED_MARGIN = 60
+
+
+def _badge_red(region):
+    """Mask of pixels that are badge-red regardless of overall brightness."""
+    b = region[:, :, 0].astype(np.int16)
+    g = region[:, :, 1].astype(np.int16)
+    r = region[:, :, 2].astype(np.int16)
+    return (r - np.maximum(g, b)) > BADGE_RED_MARGIN
+
+
+def mail_badge_count(frame) -> int | None:
+    """How many unread items the mail button's badge says, or None.
+
+    The badge is a COUNT, not a light, and reading it is what lets the farm
+    tell routine gather reports apart from something that actually arrived.
+    _btn_has_badge only ever answered yes/no, which is why "check the mail"
+    fired on all 125 calls it was given.
+
+    Measured 2026-09-13 over every frame saved that day: the digits read on
+    7 blobs out of 7 -- 13, 13, 13, 4, 4, 87, 6 -- each matching the number
+    visible in the picture. The button's position is fixed (BTN_POS["mail"]),
+    so the crop is the badge blob itself, found the same way the boolean
+    check finds it, and blown up 6x before the engine sees it.
+    """
+    from rok_farm import queue_ocr as _q          # lazy: avoids import order
+
+    if frame is None or _q._ocr_engine is None:
+        return None
+    fh, fw = frame.shape[:2]
+    mx, my = BTN_POS["mail"]
+    x1, x2 = int((mx - 0.030) * fw), int((mx + 0.030) * fw)
+    y1, y2 = int((my - 0.048) * fh), int((my + 0.004) * fh)
+    region = frame[max(0, y1):min(fh, y2), max(0, x1):min(fw, x2)]
+    if region.size == 0:
+        return None
+    red = _badge_red(region)
+    circle = _find_badge_circle(red, min_circularity=0.40)
+    if circle is None:
+        return None
+    bx, by, bw, bh, _ = circle
+    pad = 6
+    crop = region[max(0, by - pad):by + bh + pad,
+                  max(0, bx - pad):bx + bw + pad]
+    if crop.size == 0:
+        return None
+    crop = cv2.resize(crop, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
+    try:
+        result, _ = _q._ocr_engine(crop)
+    except Exception as e:
+        logger.debug("mail badge OCR error: %s", e)
+        return None
+    digits = "".join(ch for ch in _q.merge_boxes(result) if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except ValueError:
+        return None
 
 
 def _mail_btn_has_badge(frame) -> bool:
@@ -347,9 +424,7 @@ def _find_mail_tab_badges(frame) -> list[tuple[float, float]]:
     x2 = int(fw * 0.72)
     strip = frame[y1:y2, x1:x2]
 
-    red_mask = ((strip[:, :, 2] > 150)
-                & (strip[:, :, 1] < 100)
-                & (strip[:, :, 0] < 100))
+    red_mask = _badge_red(strip)
     mask_u8 = red_mask.astype(np.uint8) * 255
     contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_SIMPLE)
