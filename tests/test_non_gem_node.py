@@ -13,10 +13,20 @@ Measured over 272 panel readings:
 
 Three orders of magnitude apart, nothing between.
 
-The cost of refusing is nothing: the node was never a gem, so no gem mine is
-lost. The cost of NOT refusing is an army out, a march slot held, and a record
-that cannot be timed -- which blinds every wait that follows for up to three
-hours.
+WHAT THE READING IS FOR CHANGED ON 2026-09-13, and the numbers did not.
+
+It used to refuse. The operator's call is that gathering the wrong mine now
+and then is acceptable as long as it IS a mine -- and "Trong tai" is the
+carrying capacity of a GATHERING march, so a load of any size says exactly
+that: a deposit, and troops that come home with something. Refusing cost a
+whole mine every time, and it returned with the deploy panel still covering
+the game, which cost two more before the next city trip cleared it.
+
+So the threshold now decides what to CALL the node, not whether to march to
+it, and the values below still have to separate the two kinds or the log stops
+telling anyone how often the detector picks the wrong one. What must still be
+a mine is enforced earlier and by better instruments: the gather button's text
+(HANH QUAN, DICH CHUYEN, TRIEU HOI are not mines) and its position.
 """
 
 import pytest
@@ -39,7 +49,8 @@ def test_a_gem_mine_is_allowed(load):
 
 
 @pytest.mark.parametrize("load", OTHER_LOADS)
-def test_every_other_node_is_refused(load):
+def test_every_other_node_is_named_as_such(load):
+    """Named, not refused -- see the note at the top of this file."""
     assert load > GEM_MAX_LOAD
 
 

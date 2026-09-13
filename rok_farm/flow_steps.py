@@ -1452,36 +1452,33 @@ class GemFlowMixin:
             # the mine is not lost by refusing -- it was never a gem.
             panel = self._parse_deploy_panel(self._grab())
             load = (panel or {}).get("load")
+            # A big load means the wrong KIND of node, not the wrong kind of
+            # action -- "Trong tai" is the carrying capacity of a gathering
+            # march, so its presence says this is a deposit and the troops
+            # will come home with something. The operator's call, 2026-09-13:
+            # gathering the wrong mine now and then is acceptable as long as
+            # it is still a mine. Refusing cost a whole mine every time and
+            # left the deploy panel covering the game (see _dismiss_modal
+            # below), which cost two more.
+            #
+            # What must still be a mine is enforced EARLIER and by better
+            # instruments: the gather button's text refuses HANH QUAN, DICH
+            # CHUYEN and TRIEU HOI, and its position refuses a popup that is
+            # not a deposit's. Those run before this panel ever opens.
             if load is not None and load > GEM_MAX_LOAD:
-                print(f"  [{FAIL}] Deploy panel says load={load:,} -- that is "
-                      f"not a gem mine (gems read 10-30); backing out instead "
-                      f"of marching")
-                logger.warning("Refusing march: load=%s means a non-gem node "
-                               "(troops=%s)", load, (panel or {}).get("troops"))
+                print(f"  [{WARN}] Deploy panel says load={load:,} -- not a gem "
+                      f"mine, but it IS a mine; gathering it anyway")
+                logger.warning("Non-gem node accepted: load=%s troops=%s",
+                               load, (panel or {}).get("troops"))
                 save_screenshot(self._grab(), f"{tag}_WRONG_NODE")
-                self._record(f"{tag}_march", False, f"non-gem node load={load}")
-                # Close it. "Backing out" used to mean returning False with the
-                # deploy panel still covering the screen, and the next mines
-                # inherited it -- photographed on 2026-09-13, where one refusal
-                # at 12:17 cost THREE mines in a row:
-                #
-                #   m12  refused the node, panel left open
-                #   m13  "10 scans and NOT ONE candidate (zoom gauge: None)"
-                #        -- the panel hides the deposits AND the coordinate
-                #        badge the gauge reads, so both went blind at once
-                #   m14  "Not on world map after toggling" -- the toggle
-                #        clicks were landing on the panel
-                #
-                # m14's world_fail frame is the deploy panel, pixel for pixel
-                # the same one m12 refused. That is also the likeliest reading
-                # of the 19 world-nav failures in the log that had no
-                # explanation: nobody had kept a frame of one until today.
-                if not self._dismiss_modal():
-                    print(f"  [{WARN}] The deploy panel did not close -- the "
-                          f"next mine may start behind it")
-                    logger.warning("Deploy panel still up after refusing a "
-                                   "non-gem node")
-                return False
+                self._record(f"{tag}_march", True, f"non-gem node load={load}")
+            elif load is None:
+                # Never seen: 363 panel readings in the log, not one without a
+                # load. Logged rather than acted on, because a rule that has
+                # never fired is a rule nobody has measured -- and refusing
+                # here on an OCR miss would throw away real gem mines.
+                logger.warning("Deploy panel parsed with NO load field -- "
+                               "panel=%s", panel)
 
             print(f"  [{INFO}] March (Hanh quan) at fixed pct{MARCH_BTN_PCT}")
             self._click_pct(*MARCH_BTN_PCT, jitter_px=6)

@@ -169,6 +169,19 @@ ANYWHERE = {"pan", "zoom", "stare", "hesitate", "misclick", "alt_tab",
 
 ALL_ACTIONS = CITY_ONLY | WORLD_ONLY | ANYWHERE
 
+# Never chosen at random. The implementations stay -- do("alliance") still
+# works if something calls it deliberately -- but nothing picks them out of a
+# pool any more.
+#
+# alliance: the operator does not want it (2026-09-13). It had already stopped
+# firing on its own -- last seen 2026-09-09, and the live persona's pool is
+# micro_afk/stare/pan/check_troops/zoom -- but random_preferred() samples from
+# ALL_ACTIONS, so a persona generated tomorrow could have brought it back.
+# It also opens a panel, which is what got it and mail removed from the city
+# idle in the first place.
+OFF_BY_DEFAULT = {"alliance"}
+SELECTABLE = ALL_ACTIONS - OFF_BY_DEFAULT
+
 
 # ---------------------------------------------------------------------------
 # Individual action implementations
@@ -1324,11 +1337,11 @@ class PlayerActions:
 
     @staticmethod
     def default_preferred_pool() -> list[str]:
-        return sorted(ALL_ACTIONS)
+        return sorted(SELECTABLE)
 
     @staticmethod
     def random_preferred(k_min: int = 4, k_max: int = 7) -> list[str]:
-        pool = sorted(ALL_ACTIONS)
+        pool = sorted(SELECTABLE)
         k = random.randint(k_min, min(k_max, len(pool)))
         return random.sample(pool, k=k)
 
