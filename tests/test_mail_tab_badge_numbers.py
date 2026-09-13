@@ -76,7 +76,8 @@ def act_mail_code():
 
 def test_every_read_all_click_is_measured():
     code = act_mail_code()
-    assert code.count("_click_pct(rx, ry") == code.count("_log_tab_after_read(") == 1, \
+    assert code.count("_click_in_mail_panel(ctx, frame2, rx, ry") == \
+        code.count("_log_tab_after_read(") == 1, \
         "a read-all click without a before/after reading of its tab"
     assert "tab_badge_count(last, bx)" in code
 

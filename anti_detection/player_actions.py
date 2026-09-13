@@ -250,7 +250,8 @@ def act_mail(ctx: PlayerActionCtx):
     for bx, by in badge_tabs:
         before = tab_badge_count(last, bx)
         print(f"    -> click tab at badge pct({bx:.3f},{by:.3f})")
-        ctx._click_pct(bx - 0.01, by + 0.02, jitter_px=3)
+        if not _click_in_mail_panel(ctx, last, bx - 0.01, by + 0.02):
+            continue
         time.sleep(random.uniform(1.5, 3.0))
 
         frame2 = _grab_chat_frame(ctx)
@@ -268,8 +269,9 @@ def act_mail(ctx: PlayerActionCtx):
                 if read_btn:
                     rx, ry = read_btn[0], read_btn[1]
                     print(f"    -> read & collect all at pct({rx:.3f},{ry:.3f})")
+                    if not _click_in_mail_panel(ctx, frame2, rx, ry):
+                        continue
                     logger.info("mail: read & collect all on tab pct(%.3f)", bx)
-                    ctx._click_pct(rx, ry, jitter_px=3)
                     time.sleep(random.uniform(1.5, 3.0))
                     _dismiss_reward_popup(ctx)
                     after = _grab_chat_frame(ctx)
@@ -289,6 +291,37 @@ def act_mail(ctx: PlayerActionCtx):
                          exc_info=True)
 
     _close_mail(ctx)
+
+
+def _click_in_mail_panel(ctx, frame, px: float, py: float, jitter_px: int = 3) -> bool:
+    """Click inside the OPEN mail panel, where the HUD's no-click zones do not apply.
+
+    The zones in rok_farm/input_hid.py keep clicks off the profile corner (top
+    13%, left 70%) and the chat box (bottom 20%, left 45%) of the plain map and
+    city views. The mail panel covers both, and its tab strip and its "Doc va
+    nhan tat" button sit squarely inside them. Every one of the 22 tab and
+    read-all clicks in the log up to 2026-09-14 04:40 was blocked -- at DEBUG
+    level, under an INFO line saying the mail had been read. It never was.
+
+    The zones are dropped only for a click whose frame shows the panel's own
+    read-all button, which exists nowhere else: proof that the panel, not the
+    HUD, is under the pointer. A click that is blocked anyway says so.
+    """
+    if frame is None or _find_mail_read_all(frame) is None:
+        logger.info("mail: panel not confirmed open, click at pct(%.3f,%.3f) "
+                    "skipped", px, py)
+        return False
+    scope = getattr(ctx, "_pointer_scope", None)
+    win = getattr(ctx, "win", None)
+    if scope is not None and win is not None:
+        with scope(win):
+            ok = ctx._click_pct(px, py, jitter_px=jitter_px)
+    else:
+        ok = ctx._click_pct(px, py, jitter_px=jitter_px)
+    if ok is False:
+        logger.warning("mail: click at pct(%.3f,%.3f) was blocked", px, py)
+        return False
+    return True
 
 
 def _log_tab_after_read(frame, bx: float, before) -> None:

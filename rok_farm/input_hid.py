@@ -319,7 +319,7 @@ class HidInputMixin:
         ww, wh = self.win["width"], self.win["height"]
         sx = self.win["left"] + int(ww * pct_x) + random.randint(-jitter_px, jitter_px)
         sy = self.win["top"] + int(wh * pct_y) + random.randint(-jitter_px, jitter_px)
-        self._click(sx, sy)
+        return self._click(sx, sy)
 
     def _human_drag(self, sx: int, sy: int, ex: int, ey: int,
                     button: str = "L", speed_factor: float = 1.0,
