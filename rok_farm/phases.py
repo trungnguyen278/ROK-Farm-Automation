@@ -133,10 +133,11 @@ class PhasesMixin:
         is also when a player would do it -- you read your mail before you log
         off, not in the middle of a march.
 
-        ALLIANCE WAS HERE AND IS GONE (operator's call, 2026-09-13, on the
-        measurement in act_alliance): 25 panel opens across the whole log and
-        zero gifts collected. Nothing on the benefit side of the scale, so
-        there was nothing to weigh the exposure against.
+        Alliance gifts were here for about an hour on 2026-09-13 and the
+        action was deleted the same day, on its own record: 80 calls, 25 of
+        them opening the panel, and zero gifts collected across the entire
+        log. Nothing on the benefit side of the scale, so there was nothing to
+        weigh the exposure against.
 
         act_mail skips when the mail button has no red badge, so this opens
         nothing unless something is there. Whether mail itself survives is an

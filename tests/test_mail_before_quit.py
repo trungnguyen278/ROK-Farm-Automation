@@ -115,20 +115,19 @@ def test_what_it_finds_reaches_the_log_not_only_the_terminal():
 
 # --- alliance: dropped on the measurement, 2026-09-13 -------------------
 
-def test_alliance_is_not_called_from_anywhere():
-    """25 panel opens across the whole log and zero gifts collected.
+def test_alliance_is_gone():
+    """Deleted 2026-09-13: 25 panel opens across the log, zero gifts.
 
     Nothing on the benefit side of the scale, so there was nothing to weigh
     the exposure against. It had a caller for about an hour; this is what
-    stops it drifting back in.
+    stops it, or anything shaped like it, drifting back in.
     """
-    from anti_detection.player_actions import SELECTABLE, ACTION_REGISTRY
+    from anti_detection.player_actions import ALL_ACTIONS, ACTION_REGISTRY
 
-    assert "alliance" not in SELECTABLE, \
-        "alliance is selectable again, so an idle pool can pick it"
-    assert "alliance" in ACTION_REGISTRY, \
-        "the implementation was deleted; the note explaining WHY it is off " \
-        "went with it"
+    assert "alliance" not in ALL_ACTIONS, \
+        "alliance is back in the action pool, so an idle can pick it"
+    assert "alliance" not in ACTION_REGISTRY, \
+        "the action is registered again"
 
     # Calls only. phases.py still holds _BTN_POS / _X_CLOSE_POS /
     # _PANEL_ITEMS entries for the alliance panel, and those are measured UI

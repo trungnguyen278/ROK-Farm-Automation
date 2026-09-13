@@ -64,6 +64,12 @@ class PlayerActionCtx(Protocol):
 # Layout constants (relative to game window)
 # ---------------------------------------------------------------------------
 
+# The "alliance" entries here and in PANEL_ITEMS / X_CLOSE_POS have no reader
+# since act_alliance was deleted on 2026-09-13 (25 panel opens across the log
+# and zero gifts collected). They are kept because they are MEASURED window
+# positions -- cheap to hold, and re-measuring them costs somebody a session
+# with a ruler. Note "alliance" also appears below as a MAIL tab and as a CHAT
+# channel, and those are live.
 BTN_POS = {
     "bag":      (0.755, 0.953),
     "alliance": (0.803, 0.953),
@@ -165,22 +171,10 @@ def _match_on_frame(frame, template_name: str, threshold: float = 0.65,
 CITY_ONLY = {"bag", "events"}
 WORLD_ONLY = {"peek_poi", "check_troops", "scout_fog"}
 ANYWHERE = {"pan", "zoom", "stare", "hesitate", "misclick", "alt_tab",
-            "idle_drag", "micro_afk", "mail", "alliance", "chat"}
+            "idle_drag", "micro_afk", "mail", "chat"}
 
 ALL_ACTIONS = CITY_ONLY | WORLD_ONLY | ANYWHERE
 
-# Never chosen at random. The implementations stay -- do("alliance") still
-# works if something calls it deliberately -- but nothing picks them out of a
-# pool any more.
-#
-# alliance: the operator does not want it (2026-09-13). It had already stopped
-# firing on its own -- last seen 2026-09-09, and the live persona's pool is
-# micro_afk/stare/pan/check_troops/zoom -- but random_preferred() samples from
-# ALL_ACTIONS, so a persona generated tomorrow could have brought it back.
-# It also opens a panel, which is what got it and mail removed from the city
-# idle in the first place.
-OFF_BY_DEFAULT = {"alliance"}
-SELECTABLE = ALL_ACTIONS - OFF_BY_DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -436,98 +430,6 @@ def _close_mail(ctx: PlayerActionCtx):
     _dismiss_panel(ctx)
 
 
-def act_alliance(ctx: PlayerActionCtx):
-    """OFF since 2026-09-13, and kept only so the decision stays readable.
-
-    Nothing calls this: it is out of SELECTABLE, so no pool can pick it, and
-    the before-quit routine that briefly held it dropped it again the same
-    day. The measurement that settled it, over the whole log:
-
-        80 calls, 55 skipped on no badge, 25 opened the alliance panel
-        -- and ZERO gifts collected. Not one "gift icon at pct(...)" line.
-
-    It always either failed to find the gift icon (18) or found it without a
-    badge (7). So it opened a panel 25 times for nothing, and opening panels
-    is the exact failure that stranded the bot here in the first place. With
-    no benefit on the other side of the scale there was nothing to weigh.
-
-    Turning it back on means putting a caller back AND adding "alliance" to
-    SELECTABLE -- and fixing the gift detection first, or it will go on doing
-    nothing.
-    """
-    print(f"  [{INFO}] Distraction: checking alliance gifts")
-
-    frame = _grab_chat_frame(ctx)
-    if not _btn_has_badge(frame, "alliance"):
-        print("    alliance icon has no badge, skipping")
-        return
-
-    ctx._click_pct(*BTN_POS["alliance"])
-    time.sleep(random.uniform(2.0, 4.0))
-
-    frame = _grab_chat_frame(ctx)
-    if frame is None:
-        print("    no frame, aborting")
-        _dismiss_panel(ctx)
-        return
-
-    gift = _match_on_frame(frame, "ui/btn_alliance_gift", threshold=0.55,
-                           roi=(0.35, 0.90),
-                           scales=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1])
-    if not gift:
-        print("    gift icon not found in alliance panel, skipping")
-        _close_alliance(ctx)
-        return
-
-    has_badge = _check_red_badge_near(frame, gift[0], gift[1])
-    if not has_badge:
-        print(f"    gift icon found but no badge, skipping")
-        _close_alliance(ctx)
-        return
-
-    print(f"    -> gift icon at pct({gift[0]:.3f},{gift[1]:.3f}) conf={gift[2]:.2f}")
-    ctx._click_pct(gift[0], gift[1], jitter_px=5)
-    time.sleep(random.uniform(1.5, 3.0))
-
-    frame = _grab_chat_frame(ctx)
-    if frame is None:
-        _close_alliance_gift(ctx)
-        _close_alliance(ctx)
-        return
-
-    _alliance_claim_tab(ctx, frame)
-
-    frame = _grab_chat_frame(ctx)
-    if frame is not None:
-        tab_badges = _find_red_badges_in_region(frame, x_range=(0.20, 0.55), y_range=(0.25, 0.40))
-        if tab_badges:
-            tx, ty = tab_badges[0]
-            print(f"    -> remaining tab badge at pct({tx:.3f},{ty:.3f}), switching")
-            ctx._click_pct(tx, ty + 0.01, jitter_px=3)
-            time.sleep(random.uniform(1.0, 2.0))
-            frame2 = _grab_chat_frame(ctx)
-            if frame2 is not None:
-                _alliance_claim_tab(ctx, frame2)
-
-    _close_alliance_gift(ctx)
-    _close_alliance(ctx)
-
-
-def _alliance_claim_tab(ctx, frame) -> bool:
-    """Find and click NHAN TAT CA on the currently visible gift tab."""
-    claim_btn = _match_on_frame(frame, "ui/btn_claim_all", threshold=0.45,
-                                roi=(0.25, 0.45),
-                                scales=[0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 0.9, 1.0])
-    if claim_btn:
-        print(f"    -> claim all at pct({claim_btn[0]:.3f},{claim_btn[1]:.3f}) conf={claim_btn[2]:.2f}")
-        ctx._click_pct(claim_btn[0], claim_btn[1], jitter_px=3)
-        time.sleep(random.uniform(1.5, 3.0))
-        _dismiss_alliance_reward(ctx)
-        return True
-    print("    claim all button not found on this tab")
-    return False
-
-
 def _find_red_badges_in_region(frame, x_range=(0.0, 1.0), y_range=(0.0, 1.0),
                                min_area=15, min_circ=0.25) -> list[tuple[float, float]]:
     """Find red badge circles in a specified region of the frame.
@@ -590,50 +492,6 @@ def _check_red_badge_near(frame, pct_x: float, pct_y: float) -> bool:
                   & (region[:, :, 1] < 100)
                   & (region[:, :, 0] < 100)).sum())
     return red_px > 15
-
-
-def _dismiss_alliance_reward(ctx: PlayerActionCtx):
-    """After claiming alliance gifts, dismiss reward summary popup."""
-    frame = _grab_chat_frame(ctx)
-    if frame is None:
-        return
-    m = _match_on_frame(frame, "ui/btn_confirm_alliance", threshold=0.60,
-                        roi=(0.4, 0.8),
-                        scales=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-    if m:
-        print(f"    -> reward summary, clicking confirm")
-        ctx._click_pct(m[0], m[1], jitter_px=5)
-        time.sleep(random.uniform(1.0, 2.0))
-
-
-def _close_alliance_gift(ctx: PlayerActionCtx):
-    """Close alliance gift popup by clicking X button."""
-    frame = _grab_chat_frame(ctx)
-    if frame is not None:
-        m = _match_on_frame(frame, "ui/btn_x_close_alliance_gift", threshold=0.55,
-                            roi=(0.10, 0.30),
-                            scales=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-        if m and m[0] < 0.85:
-            print(f"    -> close gift popup X at pct({m[0]:.3f},{m[1]:.3f})")
-            ctx._click_pct(m[0], m[1], jitter_px=3)
-            ctx._wait(DELAY_AFTER_DISMISS)
-            return
-    _dismiss_panel(ctx)
-
-
-def _close_alliance(ctx: PlayerActionCtx):
-    """Close alliance panel by clicking X button."""
-    frame = _grab_chat_frame(ctx)
-    if frame is not None:
-        m = _match_on_frame(frame, "ui/btn_x_close_alliance", threshold=0.55,
-                            roi=(0.0, 0.15),
-                            scales=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-        if m and m[0] < 0.90:
-            print(f"    -> close alliance X at pct({m[0]:.3f},{m[1]:.3f})")
-            ctx._click_pct(m[0], m[1], jitter_px=3)
-            ctx._wait(DELAY_AFTER_DISMISS)
-            return
-    _dismiss_panel(ctx)
 
 
 def act_bag(ctx: PlayerActionCtx):
@@ -1287,7 +1145,6 @@ def act_micro_afk(ctx: PlayerActionCtx):
 
 ACTION_REGISTRY: dict[str, callable] = {
     "mail":         act_mail,
-    "alliance":     act_alliance,
     "bag":          act_bag,
     "events":       act_events,
     "pan":          act_pan,
@@ -1374,11 +1231,11 @@ class PlayerActions:
 
     @staticmethod
     def default_preferred_pool() -> list[str]:
-        return sorted(SELECTABLE)
+        return sorted(ALL_ACTIONS)
 
     @staticmethod
     def random_preferred(k_min: int = 4, k_max: int = 7) -> list[str]:
-        pool = sorted(SELECTABLE)
+        pool = sorted(ALL_ACTIONS)
         k = random.randint(k_min, min(k_max, len(pool)))
         return random.sample(pool, k=k)
 
