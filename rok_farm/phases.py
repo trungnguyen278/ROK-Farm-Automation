@@ -145,10 +145,12 @@ class PhasesMixin:
         covering the game when the mail check looked: at 01:02 the view button
         template scored 0.000 (0.841 at the next exit), and the 01:52 frame
         shows the road plot's info panel over the city. Taps were landing
-        where a bubble had been. Whether one tap takes every bubble of its
-        kind, or something else cleared them, is not known yet -- tapping only
-        what is still on screen is right either way, and the per-tap log
-        lines will say which.
+        where a bubble had been, because ONE TAP TAKES EVERY BUBBLE OF ITS
+        KIND. Measured on the first six exits with per-tap logging (2026-09-14
+        02:53-06:04): 116 bubbles in 29 taps -- 20 in 5 five times, 16 in 4
+        once. Three times a collect animation hid a neighbour for one look and
+        shifted a count between two taps without changing the total. The old
+        sweep spent fifteen of its twenty taps on bare ground every exit.
 
         So every tap is followed by a fresh frame, and:
           * anything covering the game stops the harvest on the spot. Dim

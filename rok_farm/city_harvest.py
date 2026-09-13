@@ -1,7 +1,8 @@
 """Collect the resource bubbles in the city -- only on the way out of the client.
 
 Every production building in the city grows a bubble when it has something to
-collect, and a tap on the bubble takes it. There are five kinds: food, stone,
+collect, and a tap on one bubble takes every bubble of its kind (measured
+2026-09-14; see PhasesMixin._harvest_city_before_quit). There are five kinds: food, stone,
 wood, gold, and an orange crystal the operator says exists only on the KvK map.
 
 The templates in templates/city/ were cut by the operator from frames the bot

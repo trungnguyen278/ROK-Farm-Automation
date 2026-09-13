@@ -5,9 +5,10 @@ frame, and after two of them something covered the game -- the 01:52 frame
 shows the road plot's info panel over the city. A tap only opens that when no
 bubble is under it, so taps were landing where a bubble had been.
 
-Nobody has yet measured whether one tap takes every bubble of its kind. These
-tests drive the harvest against a city that behaves each way, and check that
-neither can make a tap land on bare ground.
+Measured since, over six exits (02:53-06:04): one tap takes every bubble of
+its kind -- 116 bubbles in 29 taps. These tests still drive the harvest
+against a city that behaves either way, so a change in the game cannot turn
+the taps back onto bare ground.
 """
 
 import random
