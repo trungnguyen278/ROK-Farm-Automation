@@ -1524,6 +1524,13 @@ class GemFlowMixin:
         self._wait(random.uniform(1.5, 2.5))
 
         print(f"  [{PASS}] March sent (fixed Quan moi + Hanh quan)")
+        # One march, one "Bao cao thu gom" in the mailbox when it comes home.
+        # This is the only thing that lets the mail check tell its OWN noise
+        # apart from post worth opening for -- see MAIL_SURPRISE.
+        #
+        # A counter of its own, not mines_completed: that one is rebound to the
+        # queue occupancy by the reconcile, so it is not cumulative.
+        self._gathers_started = getattr(self, "_gathers_started", 0) + 1
         self._record(f"{tag}_march", True, "sent")
         # Now that the march is away and nothing is time-critical, read the
         # numbers off the panel frame captured between the two clicks.

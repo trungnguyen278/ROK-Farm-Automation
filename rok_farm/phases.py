@@ -11,8 +11,9 @@ from __future__ import annotations
 import random
 import time
 
-from rok_farm.config import (MAX_MARCH_MINUTES, WAIT_EARLY_MARGIN,
-                             WAIT_QUIT_MINUTES)
+from anti_detection.player_actions import mail_badge_count
+from rok_farm.config import (MAIL_SURPRISE, MAX_MARCH_MINUTES,
+                             WAIT_EARLY_MARGIN, WAIT_QUIT_MINUTES)
 from rok_farm import wake
 from rok_farm.logging_setup import INFO, WARN, logger
 
@@ -25,6 +26,12 @@ TAB_CYCLE_COST = 20.0
 
 class PhasesMixin:
     """Between-burst behaviour. Mixed into GemFarmRunner."""
+
+    # Baseline for the mail rule. Class attributes so a fresh runner
+    # starts with no baseline and takes its first look, rather than
+    # needing every construction path to remember to set them.
+    _mail_last_count: int | None = None
+    _mail_last_gathers: int = 0
 
     def _tab_out(self):
         """Alt-tab out of the game and stop the HID idle-jitter. No fixed wait --
@@ -144,6 +151,12 @@ class PhasesMixin:
         open question -- see the note in act_mail, which has never once got
         past the panel to a letter.
         """
+        look, why = self._mail_worth_opening()
+        logger.info("mail check: %s -> %s", why, "OPEN" if look else "skip")
+        print(f"  [{INFO}] Mail: {why} -- {'opening' if look else 'leaving it'}")
+        if not look:
+            return
+
         for job in ["mail"]:
             try:
                 self._actions.do(job)
@@ -152,6 +165,50 @@ class PhasesMixin:
                 # the real work and the client is about to be closed anyway.
                 logger.warning("%s check before quit failed", job,
                                exc_info=True)
+
+    def _mail_worth_opening(self) -> tuple[bool, str]:
+        """Is there MORE mail than the farm's own marches can account for?
+
+        The badge is a count, and most of what lands in it is the farm's own
+        doing: every gather sends back one "Bao cao thu gom". So "is there
+        mail" is the wrong question -- there always is -- and asking it is why
+        the old rule opened the mailbox on all 125 calls it was given.
+
+        The operator's rule, 2026-09-13: compare how much the badge GREW
+        against how many gathers finished in the same stretch, and open when
+        the difference is bigger than routine. Their worked example -- badge 63
+        against about 40 returns, 23 unexplained -- was plainly worth a look.
+
+        Reading the number is new and measured: mail_badge_count got it right
+        on every frame that has a visible badge, including a night frame where
+        the old red mask missed the badge entirely.
+        """
+        frame = self._grab()
+        count = mail_badge_count(frame) if frame is not None else None
+        done = getattr(self, "_gathers_started", 0)
+
+        prev, prev_done = self._mail_last_count, self._mail_last_gathers
+        if count is not None:
+            self._mail_last_count = count
+            self._mail_last_gathers = done
+
+        if count is None:
+            # Cannot count is not the same as nothing there. Fall back to the
+            # old question so an unreadable badge never silently stops the
+            # mail being read at all.
+            return True, "badge unreadable, falling back to open-if-red"
+        if prev is None:
+            return True, f"first look this session (badge {count})"
+        if count < prev:
+            return False, (f"badge fell {prev}->{count}; somebody has read it, "
+                           f"re-baselining")
+
+        grew = count - prev
+        explained = max(0, done - prev_done)
+        surprise = grew - explained
+        detail = (f"badge {prev}->{count} (+{grew}), {explained} gather(s) "
+                  f"finished, {surprise} unexplained vs {MAIL_SURPRISE}")
+        return (surprise >= MAIL_SURPRISE), detail
 
     def _sleep_until_woken(self, seconds: float, reason: str) -> bool:
         """Sleep, but stop early if the remote control asks.

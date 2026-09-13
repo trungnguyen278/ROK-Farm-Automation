@@ -271,6 +271,20 @@ CLIENT_READY_TIMEOUT = 90.0
 # window is holding the foreground lock and waiting longer will not move it.
 FOCUS_RETRIES = 3
 
+# How much unexplained mail it takes before the bot opens the mailbox.
+#
+# The badge is a COUNT, and most of what lands in it is the farm's own doing:
+# every gather sends back one "Bao cao thu gom". So the question is not "is
+# there mail" -- there always is -- but "is there MORE than the marches we
+# sent can account for". The operator's example, 2026-09-13: the badge read 63
+# against about 40 returns, and 23 unexplained was plainly worth a look.
+#
+# Ten, and the value is meant to move. Battle reports land in the same tab and
+# the farm does not generate them, so some unexplained mail is routine, and
+# nobody has measured how much yet -- which is why every check logs the
+# arithmetic it did. Set it from that log rather than from this comment.
+MAIL_SURPRISE = 10
+
 # --- Layer 1: local screen-state probe ---
 # Measured on the live client at 1533x863, 2026-08-14
 # (tools/dev/measure_state_signals.py, results in logs/state_signals.json):
