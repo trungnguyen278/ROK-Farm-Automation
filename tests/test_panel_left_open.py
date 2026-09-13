@@ -21,8 +21,7 @@ FLOW = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(encoding="utf-8")
 
 
 def test_the_refusal_closes_what_it_opened():
-    at = FLOW.index("that is \"\n                      f\"not a gem mine") \
-        if "that is \"\n" in FLOW else FLOW.index("GEM_MAX_LOAD:")
+    at = FLOW.index("if load is not None and load > GEM_MAX_LOAD:")
     branch = FLOW[at:FLOW.index("return False", at) + len("return False")]
     assert "_dismiss_modal()" in branch, (
         "the march refusal still returns with the deploy panel covering the "
