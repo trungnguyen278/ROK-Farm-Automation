@@ -206,3 +206,32 @@ def test_that_correction_is_bounded_too():
     loop = body[body.index("if verify:"):]
     assert "range(ZOOM_FIX_ROUNDS)" in loop, \
         "the post-march correction can scroll without limit"
+
+
+def test_a_full_queue_still_undoes_the_zoom():
+    """The branch that skipped step 7 entirely.
+
+    "Queue full after march -- skip re-zoom, heading to city next" skipped the
+    zoom-out along with the pan, so the camera stayed at the gather's close
+    zoom through the city trip, the alt-tab, and into the next mine. Measured
+    2026-09-13: mine 16 arrived at close zoom straight after this branch ran
+    on mine 15.
+    """
+    at = FLOW.index("Queue full ({queue[0]}/{queue[1]}) after march")
+    branch = FLOW[at:at + 1400]
+    end = branch.index("return True")
+    assert "_return_to_icon_zoom" in branch[:end], \
+        "a full queue still leaves the gather's zoom-in in place for the " \
+        "next mine to inherit"
+    assert "pan=False" in branch[:end], \
+        "the pan is the wasted motion here, and it is no longer skipped"
+
+
+def test_skipping_the_pan_does_not_skip_the_zoom():
+    """pan=False must return AFTER the scroll-out, not before it."""
+    body = rezoom_body()
+    assert "if not pan:" in body
+    assert body.index("_scroll_at_center") < body.index("if not pan:"), \
+        "pan=False returns before the zoom-out, so it does nothing at all"
+    assert body.index("read_zoom_gauge") < body.index("if not pan:"), \
+        "pan=False returns before the verification, so a stuck zoom is missed"

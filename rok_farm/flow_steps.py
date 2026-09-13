@@ -313,8 +313,23 @@ class GemFlowMixin:
         if self.loop:
             queue = self._detect_march_queue()
             if queue and queue[0] >= queue[1]:
-                print(f"  [{INFO}] Queue full ({queue[0]}/{queue[1]}) after march -- "
-                      f"skip re-zoom, heading to city next")
+                print(f"  [{INFO}] Queue full ({queue[0]}/{queue[1]}) after march "
+                      f"-- heading to city next; undo the zoom, skip the pan")
+                # It used to skip BOTH, and the zoom-out is not the wasted
+                # part. Clicking the mine zoomed the camera in; returning True
+                # here left it there through the city trip and the alt-tab,
+                # and the next mine inherited it. Measured 2026-09-13: mine 16
+                # arrived at close zoom immediately after this branch ran on
+                # mine 15, and every other zoom correction that run followed
+                # either this branch or a mine that failed before step 7.
+                #
+                # Step 1's gauge does catch it, but only after a wasted scroll
+                # and a gem check made at the wrong level -- and before the
+                # gauge existed nothing caught it at all, which is very likely
+                # where a good share of the 77 blind mines in the log came
+                # from. The pan really would be wasted motion, so it is still
+                # skipped.
+                self._return_to_icon_zoom(verify=True, pan=False)
                 return True
         self._step_stay_and_rezoom(tag)
         return True
@@ -715,7 +730,7 @@ class GemFlowMixin:
         return False
 
     def _return_to_icon_zoom(self, heading: float | None = None,
-                             verify: bool = False):
+                             verify: bool = False, pan: bool = True):
         """After a failed icon click, zoom back out AND move on.
 
         Clicking an icon zooms the game onto that mine, so zooming back out
@@ -763,6 +778,11 @@ class GemFlowMixin:
                                "close -- correcting")
                 self._scroll_at_center(-1, self._zoom_scrolls())
                 self._wait_zoom_settled()
+
+        if not pan:
+            # The pan is the part that would be wasted when the next thing we
+            # do is leave the world map. Undoing the zoom is not.
+            return
 
         cx, cy = self._center_screen()
         ww, wh = self.win["width"], self.win["height"]
