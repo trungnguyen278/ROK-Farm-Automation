@@ -84,8 +84,6 @@ def test_position_no_longer_refuses_on_its_own():
     separates the two. The words do, and they have already been read by the
     time this branch runs.
     """
-    import re
-
     from rok_farm import PROJECT_ROOT
 
     flow = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(
