@@ -240,6 +240,19 @@ class PhasesMixin:
                 logger.warning("%s check before quit failed", job,
                                exc_info=True)
 
+    def _mail_badge_visible(self, frame) -> bool:
+        """Is there any badge-red blob on the mail button at all?
+
+        The boolean half of the mail button reading, for when the number does
+        not read. Errors count as visible, so a broken check falls back to the
+        old open-if-red behaviour instead of silently never reading mail.
+        """
+        try:
+            from anti_detection.player_actions import _btn_has_badge
+            return bool(_btn_has_badge(frame, "mail"))
+        except Exception:
+            return True
+
     def _mail_worth_opening(self) -> tuple[bool, str]:
         """Is there MORE mail than the farm's own marches can account for?
 
@@ -267,10 +280,35 @@ class PhasesMixin:
             self._mail_last_gathers = done
 
         if count is None:
+            # None has meant two different things, and the log said the wrong
+            # one. Live 2026-09-14 01:02: "badge unreadable, falling back" --
+            # then act_mail's own check found red_px=0, NO badge at all. The
+            # mailbox was empty because the 00:35 check had read it. Nothing
+            # was unreadable, and MAIL_SURPRISE is meant to be tuned from
+            # exactly these lines.
+            if not self._mail_badge_visible(frame):
+                # Empty mailbox, or something covering the button -- the
+                # button template cannot tell those apart yet: over 212 saved
+                # frames, not one shows the button plainly visible WITHOUT a
+                # badge, so there is nothing to calibrate against. Save the
+                # first such frame so there is. Baseline untouched: guessing
+                # "0" while the button is covered would fake a jump later.
+                if not getattr(self, "_mail_nobadge_frame_saved", False):
+                    self._mail_nobadge_frame_saved = True
+                    if getattr(frame, "shape", None) is not None:
+                        try:
+                            from rok_farm.screenshots import save_screenshot
+                            save_screenshot(frame, "MAIL_BUTTON_NO_BADGE")
+                        except Exception:
+                            logger.debug("could not save the no-badge frame",
+                                         exc_info=True)
+                return False, ("no badge on the mail button (empty mailbox, "
+                               "or the button is covered)")
             # Cannot count is not the same as nothing there. Fall back to the
-            # old question so an unreadable badge never silently stops the
-            # mail being read at all.
-            return True, "badge unreadable, falling back to open-if-red"
+            # old question so a number that does not read never silently stops
+            # the mail being read at all.
+            return True, ("badge present but its number did not read, "
+                          "falling back to open-if-red")
         if prev is None:
             return True, f"first look this session (badge {count})"
         if count < prev:

@@ -23,8 +23,13 @@ from rok_farm.phases import PhasesMixin
 
 
 class Fake(PhasesMixin):
+    visible = True          # is there any red on the mail button?
+
     def _grab(self):
         return "frame"
+
+    def _mail_badge_visible(self, frame):
+        return self.visible
 
 
 @pytest.fixture
@@ -91,7 +96,7 @@ def test_an_unreadable_badge_falls_back_to_opening(rig):
     """
     rig(10, 5)
     look, why = rig(None, 6)
-    assert look and "unreadable" in why
+    assert look and "did not read" in why, why
 
 
 def test_an_unreadable_badge_does_not_move_the_baseline(rig):
@@ -115,3 +120,36 @@ def test_the_threshold_is_a_knob_not_a_constant_of_nature():
     assert "unexplained vs" in fn, \
         "the check does not log the arithmetic it used, so the threshold can " \
         "only ever be guessed at"
+
+
+def test_no_badge_at_all_is_not_called_unreadable(monkeypatch):
+    """Live 2026-09-14 01:02: the log said "badge unreadable, falling back",
+    and act_mail's own check then found red_px=0 -- no badge at all, because
+    the 00:35 check had already read the mailbox. The behaviour was right and
+    the log was wrong, and the threshold is meant to be tuned from that log.
+    """
+    monkeypatch.setattr(ph, "mail_badge_count", lambda frame: None)
+    f = Fake()
+    f.visible = False
+    f._gathers_started = 3
+    look, why = f._mail_worth_opening()
+    assert not look
+    assert "no badge" in why and "unreadable" not in why, why
+
+
+def test_no_badge_does_not_move_the_baseline(monkeypatch):
+    """The button may be covered rather than empty, and the saved frames hold
+    no example that separates the two yet. Writing 0 while covered would make
+    the next real reading look like a jump."""
+    seq = [29, None, 31]
+    monkeypatch.setattr(ph, "mail_badge_count", lambda frame: seq.pop(0))
+    f = Fake()
+    f._gathers_started = 0
+    f._mail_worth_opening()
+    f.visible = False
+    f._gathers_started = 1
+    f._mail_worth_opening()
+    f.visible = True
+    f._gathers_started = 2
+    look, why = f._mail_worth_opening()
+    assert "29->31" in why, why
