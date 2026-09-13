@@ -180,7 +180,9 @@ def act_mail(ctx: PlayerActionCtx):
     frame = _grab_chat_frame(ctx)
     if not _mail_btn_has_badge(frame):
         print("    mail icon has no badge, skipping")
+        logger.info("mail: no badge, nothing new")
         return
+    logger.info("mail: badge present, opening")
 
     ctx._click_pct(*BTN_POS["mail"])
     time.sleep(random.uniform(1.5, 3.0))
@@ -196,6 +198,10 @@ def act_mail(ctx: PlayerActionCtx):
         print(f"    saved frame {frame.shape[1]}x{frame.shape[0]}")
 
     badge_tabs = _find_mail_tab_badges(frame)
+    # Logged, not just printed. The account owner reads this to see how often
+    # recall and warning letters arrive, and a print only reaches whoever was
+    # watching the terminal at the time.
+    logger.info("mail: %d tab(s) with unread badges", len(badge_tabs))
 
     if not badge_tabs:
         print("    no tab badges found")
@@ -227,6 +233,7 @@ def act_mail(ctx: PlayerActionCtx):
                 if read_btn:
                     rx, ry = read_btn[0], read_btn[1]
                     print(f"    -> read & collect all at pct({rx:.3f},{ry:.3f})")
+                    logger.info("mail: read & collect all on tab pct(%.3f)", bx)
                     ctx._click_pct(rx, ry, jitter_px=3)
                     time.sleep(random.uniform(1.5, 3.0))
                     _dismiss_reward_popup(ctx)

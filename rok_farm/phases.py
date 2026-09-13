@@ -122,6 +122,33 @@ class PhasesMixin:
         if random.random() < 0.3:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
+    def _check_mail_before_quit(self):
+        """Open the mail, but only on the way OUT of the client.
+
+        Mail used to be part of the city idle and was taken out because it
+        opens a panel, and a panel that fails to close strands the bot in a
+        screen no step knows how to leave -- it was seen hanging on the
+        alliance panel. That reasoning is sound everywhere except here. The
+        next thing this code does is ALT+F4, which closes the window whatever
+        panel is open, and the client comes back with none. The one failure
+        that removed the feature cannot happen on this path.
+
+        It is also where a player would do it: you check your mail before you
+        log off, not in the middle of a march.
+
+        act_mail skips when the mail button has no red badge, so this opens
+        nothing unless there is something to read -- which keeps the log an
+        honest record of when mail actually arrived, and that is the point:
+        recall and warning letters are what the account owner needs to see the
+        frequency of.
+        """
+        try:
+            self._actions.do("mail")
+        except Exception:
+            # Never let a nicety stop the quit. The wait that follows is the
+            # real work and the client is about to be closed anyway.
+            logger.warning("Mail check before quit failed", exc_info=True)
+
     def _sleep_until_woken(self, seconds: float, reason: str) -> bool:
         """Sleep, but stop early if the remote control asks.
 
@@ -195,6 +222,10 @@ class PhasesMixin:
                 print(f"  [{INFO}] Troops home in ~{wait_s / 60:.0f}min -- "
                       f"too long to sit here, quitting the client")
                 logger.info("Computed wait %.0fs -> quit+relaunch", plan)
+                # Only here. _restart_game is also the RECOVERY path, where the
+                # client may be the thing that is broken, and poking a panel
+                # into it would be the worst possible moment.
+                self._check_mail_before_quit()
                 if self._restart_game(f"waiting {plan / 60:.0f}min for troops",
                                       extra_wait=plan):
                     self._view_is_world = False
