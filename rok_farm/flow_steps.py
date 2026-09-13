@@ -431,14 +431,25 @@ class GemFlowMixin:
                           f"zoomed IN, not at icon level; scrolling out")
                     logger.warning("Zoom gauge says close zoom on arrival -- "
                                    "correcting before the scan")
-                    # One frame per session, the FIRST time this fires. The
-                    # correction works, so this is not about fixing it -- it
-                    # is about why the camera is close here at all. Every
-                    # source found so far has been closed (the full-queue skip,
-                    # the failure paths that never reach step 7) and it still
-                    # fires after a mine that took the fixed path, with a city
-                    # round trip and two alt-tab vigils in between. Inference
-                    # has run out; a picture has not.
+                    # One frame per session, the FIRST time this fires.
+                    #
+                    # ANSWERED 2026-09-13 08:47 by the frame it saved. The
+                    # camera was on the world map, at close zoom, centred on
+                    # the player's OWN CITY -- which is where ROK puts the
+                    # world-map camera every time you come back to it. The
+                    # mine before had filled the queue, so the flow went to
+                    # the city and sat out two alt-tab vigils; whatever
+                    # returned the view to the world map after that landed at
+                    # the game's default zoom, and only the toggled_from_city
+                    # path zooms out.
+                    #
+                    # So this is not a leak left to plug. It is the game's own
+                    # behaviour on a path step 1 does not recognise as coming
+                    # from the city, and chasing each such path one at a time
+                    # is exactly the fragile approach the gauge replaces:
+                    # measuring the zoom answers all of them at once, for two
+                    # seconds a mine. The frame stays saved because the next
+                    # person to see this warning will ask the same question.
                     if not getattr(self, "_zoom_evidence_saved", False):
                         self._zoom_evidence_saved = True
                         shot = self._grab()
