@@ -129,8 +129,76 @@ class PhasesMixin:
         if random.random() < 0.3:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
+    def _harvest_city_before_quit(self):
+        """Tap every resource bubble in the city, on the way out of the client.
+
+        The operator's call, 2026-09-14: collect the city's production -- the
+        four common resources and the KvK-only crystal -- and do it only
+        before quitting. By then the flow has already returned to the city, so
+        the bubbles are on screen, and whatever a stray tap might open is
+        closed by the ALT+F4 that follows.
+
+        Detection and its measurements live in rok_farm/city_harvest.py.
+
+        Tapped in a shuffled order at a quick, uneven pace. These are the most
+        familiar taps in the game; a player sweeps them fast, and the same
+        twenty buildings in the same sequence at the same rhythm every exit
+        would be a pattern.
+
+        After a beat the frame is read again and whatever is still there is
+        LOGGED, not tapped a second time. A bubble that survives a tap is more
+        likely a wrong detection than a slow animation, and the numbers are
+        what will say which.
+        """
+        from collections import Counter
+
+        from rok_farm.city_harvest import (HARVEST_MAX_CLICKS,
+                                           find_harvest_bubbles,
+                                           load_harvest_templates)
+        from rok_farm.screenshots import save_screenshot
+
+        templates = getattr(self, "_harvest_templates", None)
+        if templates is None:
+            templates = load_harvest_templates()
+            self._harvest_templates = templates
+        if not templates:
+            logger.warning("harvest: no templates in templates/city -- skipped")
+            return
+
+        frame = self._grab()
+        if frame is None:
+            return
+        bubbles = find_harvest_bubbles(frame, templates)
+        if not bubbles:
+            print(f"  [{INFO}] Harvest: nothing to collect")
+            logger.info("harvest: no bubbles on screen")
+            return
+
+        bubbles = bubbles[:HARVEST_MAX_CLICKS]
+        random.shuffle(bubbles)
+        kinds = dict(Counter(b.kind for b in bubbles))
+        print(f"  [{INFO}] Harvest: {len(bubbles)} bubble(s) {kinds}")
+        logger.info("harvest: %d bubble(s) %s", len(bubbles), kinds)
+
+        fh, fw = frame.shape[:2]
+        for b in bubbles:
+            self._click_pct(b.x / fw, b.y / fh, jitter_px=4)
+            time.sleep(random.uniform(0.35, 1.1))
+
+        time.sleep(random.uniform(1.0, 1.8))
+        after = self._grab()
+        left = find_harvest_bubbles(after, templates) if after is not None else []
+        logger.info("harvest: tapped %d, %d still on screen", len(bubbles),
+                    len(left))
+        if left and not getattr(self, "_harvest_leftover_saved", False):
+            self._harvest_leftover_saved = True
+            save_screenshot(after, "HARVEST_LEFTOVER")
+
     def _check_panels_before_quit(self):
-        """Mail, and only mail -- and only on the way OUT of the client.
+        """City harvest, then mail -- and only on the way OUT of the client.
+
+        Harvest goes FIRST because it needs the plain city view and mail opens
+        a panel over it.
 
         This used to run during the city idle and was taken out because it
         opens a panel, and a panel that fails to close strands the bot in a
@@ -151,6 +219,12 @@ class PhasesMixin:
         open question -- see the note in act_mail, which has never once got
         past the panel to a letter.
         """
+        try:
+            self._harvest_city_before_quit()
+        except Exception:
+            # Never let a nicety stop the quit.
+            logger.warning("harvest before quit failed", exc_info=True)
+
         look, why = self._mail_worth_opening()
         logger.info("mail check: %s -> %s", why, "OPEN" if look else "skip")
         print(f"  [{INFO}] Mail: {why} -- {'opening' if look else 'leaving it'}")
