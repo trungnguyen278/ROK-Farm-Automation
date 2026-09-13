@@ -529,6 +529,48 @@ class GemFlowMixin:
         self._view_is_world = True  # stayed on the world map
         self._record(f"{tag}_rezoom", True, "Stayed on world map, re-zoomed")
 
+    # The world-map FILTER panel ("Loc"), open with its "Tai nguyen" layer
+    # unticked. While it is up the game draws no deposits at all, so the map
+    # is blind: the icon stage finds nothing and plain ground reads as the
+    # featureless map void.
+    #
+    # Four times in two days (2026-09-13 09:32 and 19:30, both FOG bails;
+    # 12:27 and 2026-09-14 01:18, both NOT ONE candidate). The two fog bails
+    # each wrote a PERMANENT wall into the map book over ordinary ground.
+    # Nothing in the log shows the bot clicking the panel open, and it
+    # closes again on its own within the next mine; what it costs is one
+    # mine, plus a false wall whenever it happens to trip the fog detector.
+    #
+    # Measured with a crop of the panel header and its first rows, matched
+    # at the fixed top-left spot across 338 saved frames: panel open
+    # 0.824-1.000, every other frame 0.29 or lower. The threshold sits in
+    # the middle of that gap.
+    FILTER_PANEL_THRESHOLD = 0.60
+
+    def _filter_panel_open(self, frame) -> bool:
+        """Is the world-map filter panel covering the top-left corner?"""
+        if frame is None or getattr(frame, "shape", None) is None:
+            return False
+        import cv2
+        from pathlib import Path
+
+        from rok_farm.config import TEMPLATE_DIR
+
+        tmpl = getattr(self, "_filter_panel_tmpl", "unloaded")
+        if isinstance(tmpl, str):
+            path = Path(TEMPLATE_DIR) / "ui" / "map_filter_panel.png"
+            tmpl = cv2.imread(str(path)) if path.is_file() else None
+            self._filter_panel_tmpl = tmpl
+        if tmpl is None:
+            return False
+        fh, fw = frame.shape[:2]
+        roi = frame[int(fh * 30 / 862):int(fh * 220 / 862),
+                    0:int(fw * 210 / 1533)]
+        if roi.shape[0] < tmpl.shape[0] or roi.shape[1] < tmpl.shape[1]:
+            return False
+        score = float(cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED).max())
+        return score >= self.FILTER_PANEL_THRESHOLD
+
     def _fog_confirmed(self, frame) -> bool:
         """Fog, but confirmed on a second frame a beat later.
 
@@ -563,6 +605,19 @@ class GemFlowMixin:
                       f"bar -- this is close zoom, not the map void")
                 logger.warning("fog: both frames featureless but the zoom gauge "
                                "says close -- NOT fog, not recording a wall")
+                return False
+            # The filter panel hides every deposit, so plain ground under it
+            # reads as featureless too. Same verdict as close zoom: not the
+            # map void, and no wall.
+            if self._filter_panel_open(second):
+                print(f"  [{INFO}] Featureless, but the map FILTER panel is "
+                      f"open -- deposits are hidden, this is not the void")
+                logger.warning("fog: both frames featureless but the map "
+                               "filter panel is open -- NOT fog, not "
+                               "recording a wall")
+                if not getattr(self, "_filter_panel_frame_saved", False):
+                    self._filter_panel_frame_saved = True
+                    save_screenshot(second, "FILTER_PANEL_OPEN")
                 return False
             return True
         print(f"  [{INFO}] Fog vanished on re-check -- the view was still loading")
