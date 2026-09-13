@@ -218,6 +218,25 @@ def act_mail(ctx: PlayerActionCtx):
 
     if not badge_tabs:
         print("    no tab badges found")
+        # Every single time. Measured 2026-09-13 over the whole log: the mail
+        # button's own red badge was detected 47 times and the panel opened 47
+        # times, and _find_mail_tab_badges found nothing on all 47 -- zero tab
+        # clicks, zero "read & collect all". So the outer badge is real (there
+        # IS unread mail) and the detector inside the panel has never once
+        # worked. The action opens a panel and closes it again.
+        #
+        # One frame per session, so the next one can be looked at instead of
+        # argued about. Without it there is no way to tell a broken detector
+        # from a panel that genuinely has nothing in it.
+        if not getattr(ctx, "_mail_panel_frame_saved", False):
+            ctx._mail_panel_frame_saved = True
+            try:
+                from rok_farm.screenshots import save_screenshot
+                save_screenshot(frame, "MAIL_NO_TAB_BADGES")
+                logger.warning("mail: no tab badges -- frame saved")
+            except Exception:
+                logger.warning("mail: could not save the panel frame",
+                               exc_info=True)
         time.sleep(random.uniform(1.0, 2.5))
         _close_mail(ctx)
         return
