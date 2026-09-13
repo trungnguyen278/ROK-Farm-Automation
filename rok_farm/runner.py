@@ -364,7 +364,8 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
     KEEP_FOREVER = ("WRONG_BUTTON", "WRONG_PLACE", "TIMEOUT", "MAPID",
                     "FOG", "ZOOM_STUCK", "WRONG_NODE", "world_fail",
                     "NO_FOCUS", "ZOOM_CLOSE_ON_ARRIVAL",
-                    "NO_CANDIDATES", "MAIL_NO_TAB_BADGES")
+                    "NO_CANDIDATES", "MAIL_NO_TAB_BADGES",
+                    "OFFBAND_GATHER")
     KEEP_HOURS = 3.0
 
     def run(self):

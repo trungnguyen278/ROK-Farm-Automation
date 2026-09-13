@@ -1284,18 +1284,6 @@ class GemFlowMixin:
                 # matched at y=257 and y=451.
                 y_pct = m.center[1] / max(1, frame.shape[0])
                 y_off = abs(y_pct - GATHER_BTN_Y_PCT)
-                if y_off > GATHER_BTN_MAX_Y_OFFSET:
-                    print(f"  [{FAIL}] Gather button in the wrong place "
-                          f"(y={y_pct:.3f}, expected ~{GATHER_BTN_Y_PCT:.3f}) "
-                          f"-- this popup is not a mine's; refusing")
-                    logger.warning("Refusing gather click: y=%.3f is %.3f from "
-                                   "the expected %.3f (conf=%.3f at %s)",
-                                   y_pct, y_off, GATHER_BTN_Y_PCT,
-                                   m.confidence, m.center)
-                    save_screenshot(frame, f"{tag}_WRONG_PLACE_{attempt:02d}")
-                    self._record(f"{tag}_gather", False, "button misplaced")
-                    return False
-
                 words = read_button_text(frame, m.x, m.y, m.w, m.h)
                 verdict = button_verdict(words)
                 # Log what it read EVERY time, not only when refusing. Two
@@ -1318,6 +1306,52 @@ class GemFlowMixin:
                     save_screenshot(frame, f"{tag}_WRONG_BUTTON_{attempt:02d}")
                     self._record(f"{tag}_gather", False, "wrong button")
                     return False
+
+                # Out of the gem band. Position is a PROXY for "not a mine's
+                # popup" and it conflates two different things:
+                #
+                #   empty tile / army march   y=0.296, 0.523   must be refused
+                #   a non-gem MINE            y=0.478, 0.713, 0.738
+                #
+                # They overlap, so no threshold separates them -- but the words
+                # do, and by then they have already been read. A wood camp's
+                # popup says THU THAP (photographed at 18:54: "Trai xe go Cap
+                # do 7", reserve 1.417.500, gather button plainly there); an
+                # empty tile offers DICH CHUYEN and HANH QUAN and no gather
+                # button at all (photographed at 18:05 -- the template matched
+                # "Hanh quan" at 0.880, higher than most real gem mines).
+                #
+                # The operator's rule, 2026-09-13: gathering the wrong mine now
+                # and then is acceptable as long as it IS a mine. So an
+                # out-of-band button that positively reads as gather goes
+                # ahead, and anything else still stops here. Unreadable still
+                # stops: out of band AND unreadable is two signals wrong, and
+                # this is the only guard standing between a bad match and an
+                # army marched onto bare ground.
+                if y_off > GATHER_BTN_MAX_Y_OFFSET:
+                    if verdict == "gather":
+                        print(f"  [{WARN}] Gather button out of the gem band "
+                              f"(y={y_pct:.3f}) but it reads as Gather -- a "
+                              f"mine, just not a gem one; going ahead")
+                        logger.warning("Out-of-band gather accepted on text: "
+                                       "y=%.3f off=%.3f words=%r",
+                                       y_pct, y_off, words)
+                        save_screenshot(frame,
+                                        f"{tag}_OFFBAND_GATHER_{attempt:02d}")
+                    else:
+                        print(f"  [{FAIL}] Gather button in the wrong place "
+                              f"(y={y_pct:.3f}, expected "
+                              f"~{GATHER_BTN_Y_PCT:.3f}) and the text does not "
+                              f"say Gather ({verdict}) -- refusing")
+                        logger.warning("Refusing gather click: y=%.3f is %.3f "
+                                       "from the expected %.3f, words=%r "
+                                       "(conf=%.3f at %s)",
+                                       y_pct, y_off, GATHER_BTN_Y_PCT, words,
+                                       m.confidence, m.center)
+                        save_screenshot(frame,
+                                        f"{tag}_WRONG_PLACE_{attempt:02d}")
+                        self._record(f"{tag}_gather", False, "button misplaced")
+                        return False
 
                 # Identify the deposit BEFORE opening the deploy panel: that
                 # panel covers the top-left corner where the coordinates live.

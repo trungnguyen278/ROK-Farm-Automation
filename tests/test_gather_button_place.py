@@ -64,3 +64,74 @@ def test_x_is_not_checked():
     assert not hasattr(config, "GATHER_BTN_X_PCT"), (
         "an x check was added; measured clicks cluster at about 509 AND 1021, "
         "so the popup flips side and half the gathers would be refused")
+
+
+# --- out of band is not the same as "not a mine" (2026-09-13) -------------
+
+def test_position_no_longer_refuses_on_its_own():
+    """Position is a proxy, and it conflates two different things.
+
+    Photographed the same evening, both out of the gem band:
+
+        y=0.296  "Chua bi chiem dong" -- an EMPTY TILE offering DICH CHUYEN
+                 and HANH QUAN, with no gather button at all. The template
+                 matched "Hanh quan" at 0.880, higher than most real gem
+                 mines. This is the 178.000-troop catastrophe, caught.
+        y=0.738  "Trai xe go Cap do 7", reserve 1.417.500, gather button
+                 plainly there. A mine -- just not a gem one.
+
+    0.478 and 0.523 sit between them from opposite camps, so no threshold
+    separates the two. The words do, and they have already been read by the
+    time this branch runs.
+    """
+    import re
+
+    from rok_farm import PROJECT_ROOT
+
+    flow = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(
+        encoding="utf-8")
+    at = flow.index("if y_off > GATHER_BTN_MAX_Y_OFFSET:")
+    branch = flow[at:at + 1800]
+    assert 'verdict == "gather"' in branch, \
+        "the position check still refuses without asking what the button says"
+
+    # and the text must be read BEFORE the position is judged, or there is
+    # nothing to ask
+    assert flow.index("verdict = button_verdict(words)") < at, \
+        "the button text is read after the position check, so the position " \
+        "branch cannot consult it"
+
+
+def test_out_of_band_and_unreadable_still_refuses():
+    """Two signals wrong is not the moment to take a chance.
+
+    This guard is the only thing between a 0.880 match on "Hanh quan" and an
+    army marched onto bare ground, so silence does not earn the benefit of
+    the doubt here the way it does in the band.
+    """
+    from rok_farm import PROJECT_ROOT
+
+    flow = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(
+        encoding="utf-8")
+    at = flow.index("if y_off > GATHER_BTN_MAX_Y_OFFSET:")
+    branch = flow[at:at + 1800]
+    else_at = branch.index("else:")
+    assert "return False" in branch[else_at:], \
+        "an out-of-band button that does not read as Gather is allowed through"
+    assert "WRONG_PLACE" in branch[else_at:]
+
+
+def test_the_accepted_case_leaves_a_frame():
+    """It is a deliberate relaxation; the rate it happens at has to be
+    visible, or nobody can tell whether it was the right call."""
+    from rok_farm import PROJECT_ROOT
+
+    flow = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(
+        encoding="utf-8")
+    at = flow.index("if y_off > GATHER_BTN_MAX_Y_OFFSET:")
+    branch = flow[at:at + 1800]
+    assert "OFFBAND_GATHER" in branch
+
+    runner = (PROJECT_ROOT / "rok_farm" / "runner.py").read_text(
+        encoding="utf-8")
+    assert "OFFBAND_GATHER" in runner, "the frame is swept after three hours"
