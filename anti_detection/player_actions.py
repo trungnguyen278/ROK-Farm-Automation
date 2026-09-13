@@ -235,17 +235,20 @@ def act_mail(ctx: PlayerActionCtx):
         _close_mail(ctx)
         return
 
-    active_x = _detect_active_mail_tab_x(frame)
-    if active_x is not None:
-        print(f"    active tab at x={active_x:.3f}")
-
+    # Every badged tab is clicked, including one that may already be open.
+    # There used to be a check that skipped the re-click, and it was measured
+    # wrong on both saved frames -- _detect_active_mail_tab_x returned x=0.488
+    # (HE THONG) while the tab actually highlighted was BAO CAO at x=0.292.
+    # With badges at 0.326 and 0.412 that mistake would have marked LIEN MINH
+    # "already active" and read the reports tab's contents as if they were the
+    # alliance tab's.
+    #
+    # Clicking a tab that is already open does nothing, so the optimisation
+    # was worth less than the failure mode it carried.
     for bx, by in badge_tabs:
-        if active_x is not None and abs(bx - active_x) < 0.08:
-            print(f"    tab pct({bx:.3f}) is active, reading without re-click")
-        else:
-            print(f"    -> click tab at badge pct({bx:.3f},{by:.3f})")
-            ctx._click_pct(bx - 0.01, by + 0.02, jitter_px=3)
-            time.sleep(random.uniform(1.5, 3.0))
+        print(f"    -> click tab at badge pct({bx:.3f},{by:.3f})")
+        ctx._click_pct(bx - 0.01, by + 0.02, jitter_px=3)
+        time.sleep(random.uniform(1.5, 3.0))
 
         frame2 = _grab_chat_frame(ctx)
         if frame2 is not None:
@@ -264,7 +267,6 @@ def act_mail(ctx: PlayerActionCtx):
                     time.sleep(random.uniform(1.5, 3.0))
                     _dismiss_reward_popup(ctx)
 
-        active_x = bx
 
     _close_mail(ctx)
 
@@ -312,36 +314,6 @@ def _mail_btn_has_badge(frame) -> bool:
     return _btn_has_badge(frame, "mail")
 
 
-def _detect_active_mail_tab_x(frame) -> float | None:
-    """Detect the active mail tab by blue channel brightness in the tab row.
-
-    Active tab is light blue (high blue value), inactive are darker.
-    Uses blue channel to ignore red badge dots.
-    Returns pct_x of the active tab center, or None.
-    """
-    if frame is None:
-        return None
-    fh, fw = frame.shape[:2]
-    y1 = int(fh * 0.05)
-    y2 = int(fh * 0.12)
-    x1 = int(fw * 0.10)
-    x2 = int(fw * 0.55)
-    strip = frame[y1:y2, x1:x2]
-    if strip.size == 0:
-        return None
-    blue = strip[:, :, 0].astype(np.float32)
-    col_blue = blue.mean(axis=0)
-    kernel = np.ones(30) / 30
-    if len(col_blue) > 30:
-        col_blue = np.convolve(col_blue, kernel, mode="same")
-    peak_local_x = int(col_blue.argmax())
-    peak_val = col_blue[peak_local_x]
-    avg_val = col_blue.mean()
-    if peak_val < avg_val + 10:
-        return None
-    return (x1 + peak_local_x) / fw
-
-
 def _find_mail_tab_badges(frame) -> list[tuple[float, float]]:
     """Find red badge circles in the mail tab row.
 
@@ -352,10 +324,27 @@ def _find_mail_tab_badges(frame) -> list[tuple[float, float]]:
     if frame is None:
         return []
     fh, fw = frame.shape[:2]
-    y1 = int(fh * 0.03)
-    y2 = int(fh * 0.10)
+    # MEASURED, 2026-09-13, on the two frames the panel saved. The band used
+    # to start at 0.03 and the badges sit at y=0.015 -- it began just BELOW
+    # them, which is why this found nothing on 47 opens out of 47 while the
+    # mail button's own badge was being detected perfectly every time.
+    #
+    #   MAIL_NO_TAB_BADGES_130505   x=0.412 y=0.015  20x22  aspect 0.91
+    #   MAIL_NO_TAB_BADGES_180640   x=0.326 y=0.015  19x21  aspect 0.90
+    #                               x=0.412 y=0.015  20x22  aspect 0.91
+    #
+    # In the second, BAO CAO read 40 unread and LIEN MINH 6, and the operator
+    # spotted the alliance tab still being ignored.
+    #
+    # The right edge moves 0.60 -> 0.72 as well. A badge sits about 0.035 to
+    # the right of its tab's label, and the last tab (MUC UA THICH, label at
+    # x=0.633) would put one at 0.668 -- outside the old crop entirely. Over
+    # the whole top 12% of both frames the ONLY red blobs are the badges, so
+    # widening costs nothing.
+    y1 = int(fh * 0.00)
+    y2 = int(fh * 0.05)
     x1 = int(fw * 0.10)
-    x2 = int(fw * 0.60)
+    x2 = int(fw * 0.72)
     strip = frame[y1:y2, x1:x2]
 
     red_mask = ((strip[:, :, 2] > 150)
