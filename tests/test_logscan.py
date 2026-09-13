@@ -72,10 +72,26 @@ def test_circling_ignores_a_gap_in_the_attempt_sequence():
     assert logscan.circling_evidence(text) is None
 
 
-def test_an_unprecedented_attempt_count_still_alerts():
-    text = "".join(f"  [{i}] gather_btn conf=0.0\n" for i in range(1, 9))
+def test_an_impossible_attempt_count_still_alerts():
+    """What the count fallback means now.
+
+    It used to fire at 8, one above the highest index then in the log -- and
+    on 2026-09-13 a perfectly healthy mine reached 8, tried eight different
+    nodes and succeeded on the last. A threshold pinned to the observed
+    ceiling measures the ceiling.
+
+    It now sits above the flow's own max_attempts, so it can only fire if the
+    counter or the cap has changed. Detecting actual circling is left to the
+    pixel rule, which is the one that has ever been right.
+    """
+    n = logscan.EXTREME_ATTEMPTS
+    text = "".join(f"  [{i}] gather_btn conf=0.0\n" for i in range(1, n + 1))
     why = logscan.circling_evidence(text)
     assert why and "attempts within one mine" in why
+
+    ordinary = "".join(f"  [{i}] gather_btn conf=0.0\n" for i in range(1, n))
+    assert logscan.circling_evidence(ordinary) is None, \
+        "the alert still fires below the flow's own limit"
 
 
 def test_the_alert_does_not_fire_on_the_whole_recorded_history(real_log):
@@ -199,3 +215,58 @@ def test_a_planned_quit_is_not_a_dead_client(real_log):
                  "  [WARN] Restarting the game: waiting 9min for troops",
                  "  [INFO] Troops home in ~10min -- too long to sit here, quitting"):
         assert logscan.counts(line)["client_dead"] == 0, line
+
+
+# --- the count fallback must not measure the ceiling ---------------------
+
+def test_eight_different_nodes_in_one_mine_is_not_circling():
+    """Fired for real on 2026-09-13 08:55, and the mine was healthy.
+
+    Eight attempts, eight different places: three nodes another player was
+    already gathering, three that turned out not to be gem mines, and a
+    success on the eighth. Verbatim coordinates from the log.
+    """
+    from tools.dev.overnight.logscan import circling_evidence
+
+    places = [(652, 600), (1022, 496), (127, 384), (1316, 546),
+              (1172, 213), (1043, 406), (186, 541), (1270, 378)]
+    text = "\n".join(
+        f"  [INFO] [{i}] Clicking icon conf=0.7{i}0 at ({x}, {y}) -> screen (0,0)"
+        for i, (x, y) in enumerate(places, start=1))
+    assert circling_evidence(text) is None, (
+        "a busy patch that tries eight separate nodes and succeeds is being "
+        "reported as ban-shaped behaviour, which is noise in the one channel "
+        "a real pattern has to come through")
+
+
+def test_the_count_fallback_sits_above_what_the_flow_can_produce():
+    """8 was one above the record, so the record simply moved past it.
+
+    That is the 12-scan empty-streak mistake again: a threshold pinned to the
+    observed ceiling measures the ceiling. The flow's own cap is
+    max_attempts = 10, so 8, 9 and 10 are all behaviour it is designed to
+    produce.
+    """
+    import re
+
+    from rok_farm import PROJECT_ROOT
+    from tools.dev.overnight.logscan import EXTREME_ATTEMPTS
+
+    flow = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(
+        encoding="utf-8")
+    m = re.search(r"max_attempts = (\d+)", flow)
+    assert m, "the scan loop no longer declares max_attempts"
+    cap = int(m.group(1))
+    assert EXTREME_ATTEMPTS > cap, (
+        f"the alert fires at {EXTREME_ATTEMPTS} attempts but the flow is "
+        f"allowed {cap}, so normal behaviour trips it")
+
+
+def test_two_clicks_on_the_same_node_still_report():
+    """The rule that has ever been right must keep working."""
+    from tools.dev.overnight.logscan import circling_evidence
+
+    text = ("  [INFO] [3] Clicking icon conf=0.700 at (500, 400) -> screen (0,0)\n"
+            "  [INFO] [4] Clicking icon conf=0.700 at (520, 410) -> screen (0,0)")
+    why = circling_evidence(text)
+    assert why and "same node twice" in why

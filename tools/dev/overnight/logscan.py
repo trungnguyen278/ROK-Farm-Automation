@@ -94,8 +94,26 @@ ATTEMPT_RE = re.compile(
 CIRCLE_PX = 60
 
 # A count so far outside the record that it is worth saying regardless of where
-# the clicks landed. The highest attempt index in the entire log is 7.
-EXTREME_ATTEMPTS = 8
+# the clicks landed.
+#
+# Was 8, set to one above the highest attempt index then in the log. It fired
+# for real on 2026-09-13 08:55 -- and the mine it fired on had clicked eight
+# DIFFERENT nodes (three occupied by other players, three not gem mines) and
+# then succeeded on the eighth. Healthy behaviour in a busy patch, which is
+# exactly what the docstring below says a high count normally is.
+#
+# Sitting one above the observed ceiling is how a threshold ends up measuring
+# the ceiling instead of the thing: the same mistake as the 12-scan empty
+# streak, which turned out to be cutting off 6.9% of real finds. The flow's
+# own cap is max_attempts = 10, so anything from 8 to 10 is behaviour it is
+# designed to produce, and alerting there would put noise in the one channel
+# a real ban-shaped pattern has to come through.
+#
+# 11 is above what the flow can legally produce. The alert therefore now means
+# "the attempt counter went past the flow's own limit" -- a broken counter or
+# a raised cap -- and the actual detection of circling is left to the pixel
+# rule, which is the one that has ever been right.
+EXTREME_ATTEMPTS = 11
 
 TAIL = 6000
 
@@ -158,5 +176,6 @@ def circling_evidence(text, tail_chars=TAIL):
                     f"-- same node twice")
     n = max_attempt_index(text, tail_chars)
     if n >= EXTREME_ATTEMPTS:
-        return f"{n} attempts within one mine (record is 7)"
+        return (f"{n} attempts within one mine -- past the flow's own "
+                f"cap of 10, so the counter or the cap has changed")
     return None
