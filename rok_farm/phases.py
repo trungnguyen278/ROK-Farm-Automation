@@ -122,42 +122,28 @@ class PhasesMixin:
         if random.random() < 0.3:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
-    # How often the alliance gifts get a look on the way out. Mail is every
-    # time, because the whole reason it is back is to keep an honest record of
-    # when recall and warning letters arrive, and a patchy record is no
-    # record. Alliance carries no record, so it takes the operator's "khong
-    # can qua thuong xuyen" literally: gifts accumulate, half the exits is
-    # plenty, and it stops "quit" and "open two panels" from being one fixed
-    # ritual.
-    ALLIANCE_BEFORE_QUIT_CHANCE = 0.5
-
     def _check_panels_before_quit(self):
-        """Mail, and sometimes the alliance gifts -- only on the way OUT.
+        """Mail, and only mail -- and only on the way OUT of the client.
 
-        Both used to run during the city idle and both were taken out for the
-        same reason: they open a panel, and a panel that fails to close
-        strands the bot in a screen no step knows how to leave. It was the
-        alliance panel it was seen hanging on.
+        This used to run during the city idle and was taken out because it
+        opens a panel, and a panel that fails to close strands the bot in a
+        screen no step knows how to leave. That reasoning is sound everywhere
+        except here: the next thing this code does is ALT+F4, which closes the
+        window whatever panel is open, and the client comes back with none. It
+        is also when a player would do it -- you read your mail before you log
+        off, not in the middle of a march.
 
-        That reasoning is sound everywhere except here. The next thing this
-        code does is ALT+F4, which closes the window whatever panel is open,
-        and the client comes back with none -- the operator's own argument for
-        putting alliance back on 2026-09-13. The one failure that removed
-        these cannot happen on this path.
+        ALLIANCE WAS HERE AND IS GONE (operator's call, 2026-09-13, on the
+        measurement in act_alliance): 25 panel opens across the whole log and
+        zero gifts collected. Nothing on the benefit side of the scale, so
+        there was nothing to weigh the exposure against.
 
-        It is also when a player would do it: you read your mail and collect
-        your gifts before you log off, not in the middle of a march.
-
-        Each action skips when its button has no red badge, so this opens
-        nothing unless there is something there. Order is shuffled, because
-        doing the same two things in the same sequence before every exit is
-        itself a pattern.
+        act_mail skips when the mail button has no red badge, so this opens
+        nothing unless something is there. Whether mail itself survives is an
+        open question -- see the note in act_mail, which has never once got
+        past the panel to a letter.
         """
-        jobs = ["mail"]
-        if random.random() < self.ALLIANCE_BEFORE_QUIT_CHANCE:
-            jobs.append("alliance")
-        random.shuffle(jobs)
-        for job in jobs:
+        for job in ["mail"]:
             try:
                 self._actions.do(job)
             except Exception:

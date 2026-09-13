@@ -1,16 +1,18 @@
-"""Mail and alliance gifts are checked on the way OUT, and nowhere else.
+"""Mail is checked on the way OUT of the client, and nowhere else.
 
-Both used to run during the city idle and both were removed for the same
-reason: they open a panel, and a panel that fails to close strands the bot in
-a screen no step knows how to leave. It was the alliance panel it was seen
-hanging on.
+It used to run during the city idle and was removed because it opens a panel,
+and a panel that fails to close strands the bot in a screen no step knows how
+to leave -- it was the alliance panel it was seen hanging on.
 
 That reasoning holds everywhere except immediately before a planned quit. The
 next thing that runs there is ALT+F4, which closes the window whatever panel
-is open, and the client comes back with none -- which is the operator's own
-argument for putting alliance back on 2026-09-13. The one failure that removed
-these cannot happen on that path, and that is the whole point of the
+is open, and the client comes back with none. The one failure that removed
+the feature cannot happen on that path, and that is the whole point of the
 condition.
+
+Alliance briefly shared this moment on 2026-09-13 and was dropped the same
+day once its record was counted: 25 panel opens across the whole log and zero
+gifts collected. The tests at the bottom are what stop it drifting back in.
 """
 
 import ast
@@ -20,6 +22,24 @@ from rok_farm import PROJECT_ROOT
 PHASES = (PROJECT_ROOT / "rok_farm" / "phases.py").read_text(encoding="utf-8")
 ACTIONS = (PROJECT_ROOT / "anti_detection" / "player_actions.py").read_text(
     encoding="utf-8")
+
+
+def executable_body(func_name, src=None):
+    """A method's code with its DOCSTRING and comments removed.
+
+    Written the third time a test in this repo failed because someone
+    documented the thing it checks. A test that searches a function for a word
+    finds it in the paragraph explaining why the word is not there, so
+    everything that is prose has to go before the search runs.
+    """
+    src = PHASES if src is None else src
+    start = src.index(f"def {func_name}")
+    body = src[start:src.index("\n    def ", start + 10)]
+    if '"""' in body:                      # drop the docstring
+        first = body.index('"""')
+        body = body[body.index('"""', first + 3) + 3:]
+    return "\n".join(ln for ln in body.splitlines()
+                     if not ln.strip().startswith("#"))
 
 
 def calls_in(src, name):
@@ -93,55 +113,43 @@ def test_what_it_finds_reaches_the_log_not_only_the_terminal():
         "expected at least 'no badge', 'how many tabs' and 'read all'")
 
 
-# --- alliance, back on the operator's call 2026-09-13 --------------------
+# --- alliance: dropped on the measurement, 2026-09-13 -------------------
 
-def test_alliance_is_opened_here_and_only_here():
-    """It stays out of the random idle pools; this is its one caller."""
+def test_alliance_is_not_called_from_anywhere():
+    """25 panel opens across the whole log and zero gifts collected.
+
+    Nothing on the benefit side of the scale, so there was nothing to weigh
+    the exposure against. It had a caller for about an hour; this is what
+    stops it drifting back in.
+    """
     from anti_detection.player_actions import SELECTABLE, ACTION_REGISTRY
 
     assert "alliance" not in SELECTABLE, \
-        "alliance is selectable again, so it can fire at any moment instead " \
-        "of only on the way out"
+        "alliance is selectable again, so an idle pool can pick it"
     assert "alliance" in ACTION_REGISTRY, \
-        "the implementation is gone, so the deliberate call cannot work"
+        "the implementation was deleted; the note explaining WHY it is off " \
+        "went with it"
 
+    # Calls only. phases.py still holds _BTN_POS / _X_CLOSE_POS /
+    # _PANEL_ITEMS entries for the alliance panel, and those are measured UI
+    # positions -- data somebody paid for, worth keeping whether or not
+    # anything opens that panel today.
+    for path in ("phases.py", "flow_steps.py", "runner.py"):
+        src = (PROJECT_ROOT / "rok_farm" / path).read_text(encoding="utf-8")
+        code = "\n".join(ln for ln in src.splitlines()
+                         if not ln.strip().startswith("#"))
+        assert 'do("alliance")' not in code, f"{path} calls alliance again"
+
+    assert "alliance" not in executable_body("_check_panels_before_quit"), \
+        "alliance is back in the before-quit job list"
+
+
+def test_mail_is_not_behind_a_chance():
+    """The whole reason mail is here is the record of when letters arrive,
+    and a patchy record is no record. If mail is ever thinned it should be
+    dropped instead -- see the note in act_mail."""
     start = PHASES.index("def _check_panels_before_quit")
     body = PHASES[start:PHASES.index("\n    def ", start + 10)]
-    assert '"alliance"' in body
-
-
-def test_alliance_is_not_every_single_exit():
-    """The operator asked for it back but "khong can qua thuong xuyen".
-
-    Mail is every time, because the point of mail is an honest record of when
-    recall letters arrive and a patchy record is no record. Alliance carries
-    no record, so it can be thinned.
-    """
-    from rok_farm.phases import PhasesMixin
-
-    assert 0 < PhasesMixin.ALLIANCE_BEFORE_QUIT_CHANCE < 1, \
-        "alliance runs on every exit or never; neither is what was asked"
-
-
-def test_mail_is_not_thinned():
-    start = PHASES.index("def _check_panels_before_quit")
-    body = PHASES[start:PHASES.index("\n    def ", start + 10)]
-    at = body.index('jobs = ["mail"]')
-    assert "random.random()" not in body[:at], \
-        "mail is now behind a chance too, which breaks the frequency record"
-
-
-def test_the_order_is_not_fixed():
-    """Two panels in the same sequence before every exit is itself a pattern."""
-    start = PHASES.index("def _check_panels_before_quit")
-    body = PHASES[start:PHASES.index("\n    def ", start + 10)]
-    assert "shuffle" in body
-
-
-def test_one_failing_panel_does_not_skip_the_other_or_the_quit():
-    start = PHASES.index("def _check_panels_before_quit")
-    body = PHASES[start:PHASES.index("\n    def ", start + 10)]
-    loop = body[body.index("for job in jobs:"):]
-    assert "try:" in loop and "except Exception" in loop, \
-        "the try sits outside the loop, so the first failure skips the rest"
-    assert "raise" not in loop
+    assert "random." not in body, \
+        "mail now runs on a chance, which breaks the frequency record it " \
+        "exists to produce"

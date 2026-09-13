@@ -437,6 +437,24 @@ def _close_mail(ctx: PlayerActionCtx):
 
 
 def act_alliance(ctx: PlayerActionCtx):
+    """OFF since 2026-09-13, and kept only so the decision stays readable.
+
+    Nothing calls this: it is out of SELECTABLE, so no pool can pick it, and
+    the before-quit routine that briefly held it dropped it again the same
+    day. The measurement that settled it, over the whole log:
+
+        80 calls, 55 skipped on no badge, 25 opened the alliance panel
+        -- and ZERO gifts collected. Not one "gift icon at pct(...)" line.
+
+    It always either failed to find the gift icon (18) or found it without a
+    badge (7). So it opened a panel 25 times for nothing, and opening panels
+    is the exact failure that stranded the bot here in the first place. With
+    no benefit on the other side of the scale there was nothing to weigh.
+
+    Turning it back on means putting a caller back AND adding "alliance" to
+    SELECTABLE -- and fixing the gift detection first, or it will go on doing
+    nothing.
+    """
     print(f"  [{INFO}] Distraction: checking alliance gifts")
 
     frame = _grab_chat_frame(ctx)
