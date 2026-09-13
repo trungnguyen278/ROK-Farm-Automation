@@ -481,6 +481,30 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
 
                 if not self._mine_flow(i):
                     print(f"\n  Mine {i} FAILED")
+                    # A mine skipped because the game would not come to the
+                    # foreground is not a fault of the FLOW, and none of the
+                    # remedies below can reach it: recovery looks for
+                    # something COVERING the game, and restarting the client
+                    # cannot take a foreground that Windows is refusing to
+                    # give.
+                    #
+                    # Watched live 2026-09-13 19:08-19:17. Eight skips in a
+                    # row -- the IDE held the foreground and covered the game
+                    # -- spent the whole budget and killed and relaunched the
+                    # client, which changed nothing, because the relaunched
+                    # window could not take the foreground either. It also
+                    # cost an unnatural open/close of the game, and the flow's
+                    # own guard had to refuse the ALT+F4, since sending it
+                    # without the foreground would have closed the USER's
+                    # window.
+                    #
+                    # It still counts as a failed mine and still waits out its
+                    # own growing backoff. It simply stops spending a budget
+                    # meant for a confused flow.
+                    if getattr(self, "_focus_fail_streak", 0):
+                        self._wait(random.uniform(1.0, 3.0))
+                        i += 1
+                        continue
                     consecutive_fails += 1
                     if consecutive_fails >= 3:
                         print(f"  [{WARN}] {consecutive_fails} consecutive fails, attempting recovery...")

@@ -110,3 +110,41 @@ def test_the_retries_are_paced():
     body = CAP[at:CAP.index("\n    def ", at + 10)]
     loop = body[body.index("for _ in range(FOCUS_RETRIES)"):]
     assert "time.sleep(" in loop, "the retries fire back to back"
+
+
+# --- a skip must not spend a budget meant for a confused flow -------------
+
+def test_a_focus_skip_does_not_count_toward_the_client_restart():
+    """Watched live on 2026-09-13 between 19:08 and 19:17.
+
+    Eight skips in a row -- the IDE held the foreground and covered the game
+    -- spent the whole consecutive-failure budget and killed and relaunched
+    the client. That changed nothing, because the relaunched window could not
+    take the foreground either, and it cost an unnatural open/close of the
+    game. The flow's own guard also had to refuse the ALT+F4, because sending
+    it without the foreground would have closed the USER's window.
+
+    None of the remedies in that branch can reach this: recovery looks for
+    something COVERING the game, and no restart can take a foreground Windows
+    is refusing to give.
+    """
+    runner = (PROJECT_ROOT / "rok_farm" / "runner.py").read_text(
+        encoding="utf-8")
+    at = runner.index("consecutive_fails += 1")
+    before = runner[max(0, at - 1600):at]
+    assert "_focus_fail_streak" in before, \
+        "a mine skipped for want of the foreground still spends the budget " \
+        "that triggers recovery and a client restart"
+    assert "continue" in before
+
+
+def test_it_is_still_counted_as_a_failed_mine():
+    """Honest reporting: the mine did not happen, and the run summary and the
+    watchdog should both see that. Only the restart budget is exempt."""
+    runner = (PROJECT_ROOT / "rok_farm" / "runner.py").read_text(
+        encoding="utf-8")
+    at = runner.index("_focus_fail_streak", runner.index("def run"))
+    before = runner[max(0, at - 2000):at]
+    assert "Mine {i} FAILED" in before, \
+        "the skip no longer reports as a failed mine, so the log and the " \
+        "watchdog lose sight of it"
