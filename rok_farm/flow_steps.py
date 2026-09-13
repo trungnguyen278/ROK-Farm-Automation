@@ -431,6 +431,19 @@ class GemFlowMixin:
                           f"zoomed IN, not at icon level; scrolling out")
                     logger.warning("Zoom gauge says close zoom on arrival -- "
                                    "correcting before the scan")
+                    # One frame per session, the FIRST time this fires. The
+                    # correction works, so this is not about fixing it -- it
+                    # is about why the camera is close here at all. Every
+                    # source found so far has been closed (the full-queue skip,
+                    # the failure paths that never reach step 7) and it still
+                    # fires after a mine that took the fixed path, with a city
+                    # round trip and two alt-tab vigils in between. Inference
+                    # has run out; a picture has not.
+                    if not getattr(self, "_zoom_evidence_saved", False):
+                        self._zoom_evidence_saved = True
+                        shot = self._grab()
+                        if shot is not None:
+                            save_screenshot(shot, f"{tag}_ZOOM_CLOSE_ON_ARRIVAL")
                     self._scroll_at_center(-1, self._zoom_scrolls())
                     self._wait_zoom_settled()
                     gauge = self.read_zoom_gauge()

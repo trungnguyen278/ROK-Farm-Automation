@@ -121,13 +121,19 @@ def test_it_does_not_simply_zoom_out_further():
     city = branch[branch.index("if toggled_from_city"):]
     assert "_scroll_at_center(-1" in city
 
-    step1 = branch[:branch.index("def _step_stay_and_rezoom")]
+    # Comments stripped first. The rule below looks at what precedes each
+    # scroll, and comments cannot gate anything -- leaving them in meant a
+    # paragraph explaining WHY a scroll is gated could push the gate out of
+    # the window and fail the test, which is exactly what happened once.
+    code_lines = [ln.split("#", 1)[0] for ln in
+                  branch[:branch.index("def _step_stay_and_rezoom")].splitlines()]
+    step1 = "\n".join(ln for ln in code_lines if ln.strip())
     for line in step1.splitlines():
         if "_scroll_at_center(-1" not in line:
             continue
         before = step1[:step1.index(line)]
-        assert ("toggled_from_city" in before[-2000:]
-                or "read_zoom_gauge" in before[-2000:]), \
+        assert ("toggled_from_city" in before[-1200:]
+                or "read_zoom_gauge" in before[-1200:]), \
             f"this zoom-out is not gated on the city path or on a gauge " \
             f"reading, so it is a guess: {line.strip()}"
 
