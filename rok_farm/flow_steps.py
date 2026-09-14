@@ -1781,13 +1781,32 @@ class GemFlowMixin:
     def _step_return_city(self, tag: str):
         print(f"\n--- [{tag}] Return to city ---\n")
 
-        # Always called from the world map (after a burst / scan-fail / fog), so
-        # click the FIXED bottom-right corner to toggle to the city. We do NOT
-        # gate on _on_world_map(): right after a march the world map reads
+        # Called from the world map (after a burst / scan-fail / fog), so click
+        # the FIXED bottom-right corner to toggle to the city. We do NOT gate on
+        # _on_world_map() alone: right after a march the world map reads
         # ambiguously (city_btn ~tie globe) and the guard falsely said "already
         # in city", so the toggle was skipped and we never returned.
-        self._toggle_view("World map -> city")
-        self._wait(DELAY_WORLD_MAP)
+        #
+        # But it is ALSO called when we never left the city. The loop runs the
+        # full cycle whenever it finds the queue full, including straight after
+        # a wait that came back too early -- and that wait left us in the city,
+        # so the toggle took us OUT of it. Over every return in the log (534),
+        # the first view reading afterwards said WORLD 100 times: 62 of the 114
+        # that followed a "TOO EARLY" wait, 18 of the 283 that followed a march.
+        # Live 2026-09-14 13:25 the harvest then looked for bubbles on the map.
+        #
+        # So skip only when BOTH say city: the flow's own flag, which only a
+        # successful world navigation sets True -- so it is True after every
+        # march, the case the old guard got wrong -- and a fresh read of the
+        # corner glyph (5075 readings in the log: every WORLD verdict had the
+        # castle at 0.711+ with the map glyph at 0.521 or less, and nothing
+        # else reached one).
+        if not getattr(self, "_view_is_world", True) and not self._on_world_map():
+            print(f"  [{INFO}] Already in the city -- no toggle")
+            logger.info("return to city: already there (tracked and read)")
+        else:
+            self._toggle_view("World map -> city")
+            self._wait(DELAY_WORLD_MAP)
         self._view_is_world = False  # now in the city
 
         frame = self._grab()

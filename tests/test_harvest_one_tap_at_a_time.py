@@ -47,7 +47,8 @@ def grid():
 class City:
     """A city whose taps behave the way the test says the game does."""
 
-    def __init__(self, bubbles, takes="kind", sticky=(), opens=()):
+    def __init__(self, bubbles, takes="kind", sticky=(), opens=(), world=False):
+        self.world = world          # the view is the world map, not the city
         self.bubbles = list(bubbles)
         self.takes = takes          # "kind": a tap takes its whole kind; "one": itself
         self.sticky = set(sticky)   # spots whose bubble a tap does not take
@@ -84,6 +85,9 @@ class Fake(PhasesMixin):
 
     def _grab(self):
         return FRAME
+
+    def _on_world_map(self, frame=None):
+        return self.city.world
 
     def _harvest_look(self, templates):
         if self.city.covered:
@@ -149,6 +153,14 @@ def test_a_bubble_that_survives_its_tap_is_tapped_once_and_left(run):
     assert city.bubbles == [stuck]
     assert "HARVEST_LEFTOVER" in saved
     assert city.misses == 0
+
+
+def test_nothing_is_tapped_on_the_world_map(run):
+    """Live 2026-09-14 13:25 the harvest ran on the world map. It found no
+    bubbles there -- this makes sure it never gets as far as looking."""
+    city = City(grid(), world=True)
+    run(city)
+    assert city.taps == []
 
 
 def test_a_city_already_covered_is_not_tapped_at_all(run):

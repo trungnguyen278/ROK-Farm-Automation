@@ -179,6 +179,14 @@ class PhasesMixin:
             logger.warning("harvest: no templates in templates/city -- skipped")
             return
 
+        if self._on_world_map():
+            # Live 2026-09-14 13:25: a return-to-city toggle had taken the
+            # view OUT of the city, and this looked for bubbles on the world
+            # map. It found none; nothing promised it never would.
+            print(f"  [{WARN}] Harvest: on the world map, not in the city -- skipped")
+            logger.warning("harvest: on the world map, not in the city -- skipped")
+            return
+
         frame, ratio, bubbles = self._harvest_look(templates)
         if frame is None:
             return
