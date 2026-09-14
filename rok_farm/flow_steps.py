@@ -1397,10 +1397,13 @@ class GemFlowMixin:
                         # "unreadable" here has so far meant a popup caught
                         # mid fade-in: all three on 2026-09-14 (y=0.488, 0.551,
                         # 0.785; kept in screenshots/keep/wrong_place_unreadable).
-                        # A re-read after the fade would have let them through
-                        # -- and two were wood camps, the third a gem mine
-                        # with 30 left, so refusing cost nothing. Look at what
-                        # the nodes are before teaching this to wait and retry.
+                        # A re-read after the fade would have let them through:
+                        # two were wood camps, rightly refused, and one a
+                        # level-3 gem deposit -- reserve 30, which is simply
+                        # what every gem deposit here holds (deploy panel
+                        # load=30, gather reports "30 + N"), so that refusal
+                        # cost one ordinary gem march. Two of three would have
+                        # been wood: look at the nodes before adding a retry.
                         print(f"  [{FAIL}] Gather button in the wrong place "
                               f"(y={y_pct:.3f}, expected "
                               f"~{GATHER_BTN_Y_PCT:.3f}) and the text does not "
