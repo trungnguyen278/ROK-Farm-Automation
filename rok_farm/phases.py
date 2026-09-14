@@ -391,6 +391,12 @@ class PhasesMixin:
                 return False, (f"something covers the game (dim {cover:.2f}), "
                                "the badge cannot be seen")
         count = mail_badge_count(frame) if frame is not None else None
+        # Marches SENT, not gathers finished -- and between two checks those
+        # are the same number. The check only runs on the way out, and the
+        # farm only leaves with the queue full: every one of the 13 checks in
+        # the log up to 2026-09-14 07:21 came right after a 5/5 reading.
+        # Returned = sent + occupancy before - occupancy after = sent + 5 - 5.
+        # A quit with a part-empty queue would break that; none has happened.
         done = getattr(self, "_gathers_started", 0)
 
         prev, prev_done = self._mail_last_count, self._mail_last_gathers
