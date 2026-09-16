@@ -270,9 +270,15 @@ def spawn_detached(role, *args):
     return None
 
 
-def do_start(with_watchdog):
+def do_start(with_watchdog, force=False):
+    from rok_farm import run_window
+
     if farm_procs():
         return "Farm is already running -- !stop first."
+    if not force and not run_window.in_window():
+        return (f"Outside the run window {run_window.window_label()} -- not "
+                f"starting. The account needs its hours off: 3,006 gems were "
+                f"reclaimed on 2026-09-14 for being online too much.")
     pid = spawn_detached("farm")
     if pid is None:
         return ("Launched the farm but it never appeared in the process list. "

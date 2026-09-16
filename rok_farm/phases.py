@@ -484,12 +484,45 @@ class PhasesMixin:
                             reason, waited, seconds)
                 return False
 
+    def _window_check(self, planned_s: float = 0.0) -> bool:
+        """May the account be online -- and stay online for planned_s more?
+
+        Outside the window, or when the wait about to start would run past its
+        end, the client is closed and the farm stops. rok_farm/run_window.py
+        holds the 3,006-gem reclaim this exists to prevent; closing the client
+        is the point, since a farm that merely stops leaves the account logged
+        in.
+        """
+        from rok_farm import run_window
+
+        left = run_window.seconds_left()
+        if left > 0 and planned_s <= left:
+            return True
+        why = ("the run window is closed" if left <= 0 else
+               f"the next wait ({planned_s / 60:.0f}min) runs past its end")
+        print(f"\n  [{WARN}] Run window {run_window.window_label()}: {why} "
+              f"-- closing the client and stopping")
+        logger.warning("Run window %s: %s -- quitting the client and stopping",
+                       run_window.window_label(), why)
+        try:
+            self.game.quit_game(self)
+        except Exception:
+            logger.warning("could not close the client at the window edge",
+                           exc_info=True)
+        return False
+
     def _phase_wait_return(self):
         """Phase 3: alt-tab out and wait for the 'troops returned' toast.
 
         The toast only fires while ROK is in the background, so we genuinely tab
         away and read it from the OS (no screen capture). Cap at MAX_MARCH_MINUTES;
         if nothing arrives we tab back and let the OCR queue check sort it out."""
+        # No wait of any kind starts outside the window -- including the toast
+        # vigil at the bottom, which has no estimate to check against and keeps
+        # the client open while it listens.
+        if not self._window_check():
+            return
+
         # Decide HOW to wait from how long the wait is. The estimate comes from
         # the deploy panel, so this is a plan rather than a vigil.
         wait_s = self.seconds_until_first_return()
@@ -510,6 +543,13 @@ class PhasesMixin:
                     else min(wait_s,
                              max(TAB_CYCLE_COST, wait_s - WAIT_EARLY_MARGIN)))
             before = self._detect_march_queue()
+
+            # A wait is the farm's longest stretch of doing nothing, and the
+            # alt-tab kind keeps the client OPEN throughout. Starting one that
+            # outlives the window would hold the account online past the edge,
+            # so stop here instead and let the day end clean.
+            if not self._window_check(plan):
+                return
 
             # Shorter than the tab cycle itself? Then tabbing is pure overhead:
             # it takes LONGER than the wait it is supposed to cover, and leaves

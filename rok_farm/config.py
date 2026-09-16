@@ -310,6 +310,20 @@ MAIL_SURPRISE = 10
 # world_map_city_btn 0.662 still misses the city gate.
 MODAL_RATIO_MIN = 1.8       # centre/border brightness; 1.19 uncovered vs 4.78 modal
 
+# --- how much of the day the account may be online --------------------------
+# 2026-09-14 the game reclaimed 3,006 gems -- almost exactly everything the
+# farm gathered on 09-13 (+3,009 on the counter between 00:03 and 21:02 local).
+# The operator's reading: the account was online too long. At least ~8 hours a
+# day have to be offline, their own play counts toward it, and on 09-13 they
+# played through the farm's breaks.
+#
+# Local clock hours. The farm opens the client no earlier than the first and
+# closes it at the second; rok_farm/run_window.py enforces the same edge for
+# the watchdog and for a remote start. 08:00-23:00 leaves 9 hours off, an hour
+# more than the minimum, so finishing a little late does not spend the margin.
+RUN_WINDOW_START_H = 8
+RUN_WINDOW_END_H = 23
+
 # --- Why there is no frame-difference "client froze" detector ---
 # There was one, and the measurements above killed it. The idea was that a live
 # view animates while a crashed one repeats a frame. It does not hold here:

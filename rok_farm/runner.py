@@ -409,6 +409,11 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         print()
 
         try:
+            # Before anything opens the client: the account has hours it is
+            # not allowed to be online (rok_farm/run_window.py).
+            if not self._window_check():
+                return
+
             if not self._setup():
                 return
 
@@ -418,6 +423,11 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
             consecutive_fails = 0
             while True:
                 if not self.loop and i > self.count:
+                    break
+
+                # Every mine starts with the client open, so the window is
+                # asked here rather than only at the waits.
+                if not self._window_check():
                     break
 
                 # Client health: a window that vanished or a capture that went

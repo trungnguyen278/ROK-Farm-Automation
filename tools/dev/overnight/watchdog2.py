@@ -110,6 +110,14 @@ def restart_farm(reason):
     """
     global FARM_PID, supervisor_restarts, last_size, last_change
     global last_progress_at
+    from rok_farm.run_window import in_window, window_label
+
+    # A farm that stopped because its run window closed is not a farm that
+    # broke. Relaunching it there would put the account straight back online
+    # for the night, which is what the 2026-09-14 reclaim was about.
+    if not in_window():
+        log(f"   outside the run window {window_label()} -- not relaunching")
+        return False
     supervisor_restarts += 1
     kill_farm(reason)
     if supervisor_restarts > MAX_SUPERVISOR_RESTARTS:
