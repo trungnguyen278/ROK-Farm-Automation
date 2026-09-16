@@ -478,7 +478,8 @@ class DetectMixin:
                         "glyph": round(float(glyph), 2)}
         return None
 
-    def _check_icon_occupied(self, frame, icon: Match) -> tuple[bool, str]:
+    def _check_icon_occupied(self, frame, icon: Match,
+                             shot=None) -> tuple[bool, str]:
         """Check whether someone is already on this icon, at icon-zoom level.
 
         Two signs: an army still marching draws a line to the node, and an army
@@ -486,11 +487,21 @@ class DetectMixin:
         used to be invisible here -- the farm clicked the node, zoomed in, and
         only then read the pickaxe (21 such round trips in the saved frames, at
         roughly half a minute each).
+
+        `frame` is the raw capture, which is what the march lines were tuned on.
+        `shot` is the normalized one, and the badge wants that: every frame its
+        thresholds were measured on was a saved -- therefore normalized -- one.
+        That path is really taken in play: the pale KvK map reads brightness 139
+        with a blue cast, so the night filter fires on it and cuts saturation to
+        0.6. On a true night frame (brightness under 90) the filter also lifts
+        V by up to 2.0, which means a raw badge could sit at half the value
+        measured here, under the floor, and this check would quietly stop
+        firing without ever being wrong out loud.
         """
         has_line, line_info = self._has_march_line(frame, icon)
         if has_line:
             return True, f"march_line({line_info})"
-        badge = self._gather_badge(frame, icon)
+        badge = self._gather_badge(shot if shot is not None else frame, icon)
         if badge:
             # Logged, not just printed: the console scrolls away and the only
             # way to tell later how often this fires is to grep the log.

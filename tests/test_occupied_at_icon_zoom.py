@@ -105,3 +105,27 @@ def test_a_badge_that_belongs_to_a_neighbour_is_not_borrowed():
     assert p._gather_badge(frame, icon_at(612, 513)) is not None
     assert p._gather_badge(frame, icon_at(612, 513 + 120)) is None
     assert p._gather_badge(frame, icon_at(612 + 120, 513)) is None
+
+
+def test_the_badge_is_read_from_the_normalized_frame():
+    """Every threshold above was measured on saved frames, and what gets saved
+    is the normalized capture. The night filter really does fire in play -- the
+    pale KvK map reads brightness 139 with a blue cast -- and it cuts saturation
+    to 0.6 and, below brightness 90, lifts V by up to 2.0. So a raw badge can
+    sit at half the value measured here: the check would not go wrong, it would
+    go quiet. The scan must hand the badge check the normalized frame.
+    """
+    import ast
+    import inspect
+
+    from rok_farm import flow_steps
+
+    src = inspect.getsource(flow_steps)
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "_check_icon_occupied"]
+    assert calls, "the scan no longer asks whether an icon is occupied"
+    for call in calls:
+        kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
+        assert kw.get("shot") == "frame", ast.unparse(call)

@@ -973,7 +973,8 @@ class GemFlowMixin:
                        for px, py, r in clicked_positions):
                     continue
                 raw = self._raw_frame if self._raw_frame is not None else frame
-                occupied, occ_info = self._check_icon_occupied(raw, icon)
+                occupied, occ_info = self._check_icon_occupied(raw, icon,
+                                                               shot=frame)
                 if occupied:
                     print(f"  [{WARN}] Icon at {icon.center} occupied ({occ_info}) -- skip")
                     clicked_positions.append((*icon.center, SKIP_RADIUS))
@@ -1289,7 +1290,8 @@ class GemFlowMixin:
                     print(f"  [ -- ] Skip already-clicked icon at {icon.center}")
                     continue
                 raw = self._raw_frame if self._raw_frame is not None else frame
-                occupied, occ_info = self._check_icon_occupied(raw, icon)
+                occupied, occ_info = self._check_icon_occupied(raw, icon,
+                                                               shot=frame)
                 if occupied:
                     print(f"  [{WARN}] Icon at {icon.center} occupied ({occ_info}) -- skip")
                     clicked_positions.append((*icon.center, SKIP_RADIUS))
