@@ -48,6 +48,15 @@ HARVEST_NMS_PX = 30
 # claiming far more is not a city full of bubbles, it is a detector gone wrong,
 # and the cap stops that turning into a click storm.
 HARVEST_MAX_CLICKS = 30
+
+# How many taps in a row may leave their bubble on screen before the harvest
+# gives up. Over the six exits that were measured tap by tap (2026-09-14
+# 02:53-06:04, 116 bubbles in 29 taps) a survivor never repeated: three times
+# a collect animation hid a neighbour for a single look, and that was all. On
+# 2026-09-16 14:26 sixteen taps in a row left everything where it was, because
+# the game had gone behind the operator's editor and every click landed there.
+# Two in a row is already outside anything a working harvest produced.
+HARVEST_MAX_SURVIVOR_RUN = 3
 # The next tap goes to one of this many untapped bubbles nearest the last one.
 HARVEST_NEAREST = 3
 

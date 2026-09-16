@@ -47,8 +47,10 @@ def grid():
 class City:
     """A city whose taps behave the way the test says the game does."""
 
-    def __init__(self, bubbles, takes="kind", sticky=(), opens=(), world=False):
+    def __init__(self, bubbles, takes="kind", sticky=(), opens=(), world=False,
+                 behind=False):
         self.world = world          # the view is the world map, not the city
+        self.behind = behind        # the game is not the window in front
         self.bubbles = list(bubbles)
         self.takes = takes          # "kind": a tap takes its whole kind; "one": itself
         self.sticky = set(sticky)   # spots whose bubble a tap does not take
@@ -82,6 +84,9 @@ class Fake(PhasesMixin):
         self.city = city
         self._harvest_templates = [("food", FRAME[:10, :10])]
         self.dismissed = 0
+
+    def _ensure_game_focused(self, reason):
+        return not self.city.behind
 
     def _grab(self):
         return FRAME
@@ -232,3 +237,34 @@ def test_the_real_look_refuses_the_road_panel_and_reads_the_city():
 
     _, ratio, bubbles = Look(load(CITIES[0]))._harvest_look(templates)
     assert bubbles is not None and len(bubbles) == 20, (ratio, bubbles)
+
+
+def test_a_game_that_is_not_in_front_is_not_tapped_at_all(run):
+    """2026-09-16 14:26: twenty taps, nothing collected. The game had gone
+    behind the operator's editor and every tap landed in THAT window. The mine
+    flow has refused to click blind since 2026-08-19; this was the last burst
+    of clicks that still did."""
+    city = City(grid(), behind=True)
+    fake, _ = run(city)
+    assert city.taps == []
+    assert city.bubbles == grid()
+
+
+def test_taps_that_take_nothing_stop_the_harvest(run):
+    """Over the six exits measured tap by tap a survivor never repeated. A run
+    of them means the taps are not reaching the game, or the bubbles are not
+    there -- either way, more taps are just drumming."""
+    city = City(grid(), sticky=[(b.x, b.y) for b in grid()])
+    fake, saved = run(city)
+    assert len(city.taps) == 3
+    assert "HARVEST_TAKES_NOTHING" in saved
+
+
+def test_one_survivor_does_not_stop_it(run):
+    """A collect animation hid a neighbour for one look three times in the
+    measured runs. That must not end the harvest."""
+    stuck = grid()[0]
+    city = City(grid(), sticky=[(stuck.x, stuck.y)])
+    fake, _ = run(city)
+    assert len(city.taps) > 3
+    assert city.misses == 0

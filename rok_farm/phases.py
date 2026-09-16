@@ -169,6 +169,7 @@ class PhasesMixin:
         from collections import Counter
 
         from rok_farm.city_harvest import (HARVEST_MAX_CLICKS,
+                                           HARVEST_MAX_SURVIVOR_RUN,
                                            load_harvest_templates, pick_next,
                                            still_there, untapped)
         from rok_farm.screenshots import save_screenshot
@@ -187,6 +188,17 @@ class PhasesMixin:
             # map. It found none; nothing promised it never would.
             print(f"  [{WARN}] Harvest: on the world map, not in the city -- skipped")
             logger.warning("harvest: on the world map, not in the city -- skipped")
+            return
+
+        # The mine flow has refused to click at a game that is not in front
+        # since 2026-08-19; this burst of taps was the last one still doing it.
+        # 2026-09-16 14:26: twenty taps, nothing collected, the count drifting
+        # 19-20 the whole time because bubbles kept appearing -- the game had
+        # gone behind the operator's editor and every tap landed in THAT.
+        if not self._ensure_game_focused("city harvest"):
+            print(f"  [{WARN}] Harvest: the game is not in front -- skipped "
+                  f"rather than tapping into whatever is")
+            logger.warning("harvest: the game never took the foreground -- skipped")
             return
 
         frame, ratio, bubbles = self._harvest_look(templates)
@@ -208,6 +220,7 @@ class PhasesMixin:
         fh, fw = frame.shape[:2]
         tapped = []
         survivors = []
+        in_a_row = 0
         while len(tapped) < HARVEST_MAX_CLICKS:
             fresh = untapped(bubbles, tapped)
             if not fresh:
@@ -234,11 +247,26 @@ class PhasesMixin:
             here = still_there(now, target)
             if here is not None:
                 survivors.append(here)
+                in_a_row += 1
+            else:
+                in_a_row = 0
             logger.info("harvest: tap %d %s at (%d,%d): %d -> %d on screen%s",
                         len(tapped), target.kind, target.x, target.y,
                         len(bubbles), len(now),
                         ", and it is still there" if here is not None else "")
             bubbles = now
+
+            # Taps that take nothing, over and over, are not bad luck. Either
+            # the clicks are not reaching the game or the bubbles are not
+            # really there -- and both are reasons to stop, not to keep
+            # drumming on the same city.
+            if in_a_row >= HARVEST_MAX_SURVIVOR_RUN:
+                print(f"  [{WARN}] Harvest: {in_a_row} taps in a row took "
+                      f"nothing -- stopping")
+                logger.warning("harvest: %d taps in a row took nothing after "
+                               "%d taps -- stopping", in_a_row, len(tapped))
+                save_screenshot(frame, "HARVEST_TAKES_NOTHING")
+                return
 
         logger.info("harvest: tapped %d, %d still on screen", len(tapped),
                     len(bubbles))
