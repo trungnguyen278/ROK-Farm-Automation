@@ -212,16 +212,19 @@ def act_mail(ctx: PlayerActionCtx):
 
     if not badge_tabs:
         print("    no tab badges found")
-        # Every single time. Measured 2026-09-13 over the whole log: the mail
-        # button's own red badge was detected 47 times and the panel opened 47
-        # times, and _find_mail_tab_badges found nothing on all 47 -- zero tab
-        # clicks, zero "read & collect all". So the outer badge is real (there
-        # IS unread mail) and the detector inside the panel has never once
-        # worked. The action opens a panel and closes it again.
+        # Measured 2026-09-13 over the whole log: the mail button's own red
+        # badge was detected 47 times, the panel opened 47 times, and
+        # _find_mail_tab_badges found nothing on all 47. That read as a broken
+        # detector and it was not: the tab clicks were being dropped by the
+        # HUD's no-click zones (see _click_in_mail_panel), so the panel never
+        # changed tabs and nothing was ever read. With the clicks landing, the
+        # same detector has read and cleared 28, 22 and 10 unread mails.
         #
-        # One frame per session, so the next one can be looked at instead of
-        # argued about. Without it there is no way to tell a broken detector
-        # from a panel that genuinely has nothing in it.
+        # What reaches this branch now is a mailbox with genuinely nothing
+        # unread: 2026-09-16 09:56 the button said 5 and the frame saved here
+        # (MAIL_NO_TAB_BADGES_095616) shows every tab clean -- opening the
+        # mailbox marks the list it lands on as read. One frame per session, so
+        # the next one can be looked at instead of argued about.
         if not getattr(ctx, "_mail_panel_frame_saved", False):
             ctx._mail_panel_frame_saved = True
             try:

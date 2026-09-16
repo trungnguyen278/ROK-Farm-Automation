@@ -206,6 +206,13 @@ class MapMemory:
     # the home city stands from the edge, which is what makes it fire there.
     # Scoring is left at 6 on purpose -- this is the hard veto, which should
     # look further than the preference does.
+    #
+    # CONFIRMED IN PRODUCTION, 2026-09-16, same city and the same morning:
+    #     before    29 scans   6 crossings (207 per 1000)    3 vetoes
+    #     after    173 scans   0 crossings (  0 per 1000)   20 vetoes
+    # and the mines went 5 done / 10 failed to 10 done / 3 failed with it. The
+    # veto firing 6.7x more often per scan is the half that makes the zero mean
+    # something: it was being exercised, not merely never approached.
     BLOCK_REACH_CELLS = 16
 
     def blocked(self, x: int, y: int, heading: float,
