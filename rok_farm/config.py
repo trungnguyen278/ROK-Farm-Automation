@@ -231,7 +231,26 @@ DELAY_MICRO_PAUSE = (0.40, 0.15)
 # Waiting alt-tabbed for exactly the march duration, every single cycle, is the
 # pattern worth breaking -- not the notification API, which runs in this process
 # and is invisible to the game.
-WAIT_QUIT_MINUTES = 8.0      # expected wait above this -> quit the client
+#
+# WHEN to quit is not a fixed number of minutes. A wait is worth closing the
+# client for when it is longer than the round trip that closing it costs:
+# measured over 83 planned quit+relaunch cycles in the log, coming back takes
+# 78s MORE than the wait it covered (p25 58, p75 105) -- the random cooldown
+# plus the launch. Quitting for less than that buys no time offline, it only
+# moves the same minutes into a loading screen.
+#
+# It has to be a cost, not a constant, because the waits move with the game: a
+# KvK deposit holds 30 gems and takes ~27min to gather, an ordinary-map one
+# holds 10-20 and takes a fraction of that. The relaunch cost does not move
+# with them, so the farm measures its own (this is only the seed) and quits
+# when the wait is worth more than WAIT_QUIT_FACTOR of it.
+#
+# The old 8-minute threshold kept the client OPEN for every wait under it:
+# 110 of the 251 alt-tab waits in the log, 545 minutes of the account being
+# online for nothing -- which is what the 2026-09-14 reclaim was about.
+RELAUNCH_OVERHEAD_S = 78.0   # seed for the measured cost of a quit+relaunch
+WAIT_QUIT_FACTOR = 1.5       # quit when the wait is worth this many round trips
+WAIT_QUIT_FLOOR_S = 90.0     # never quit for less than this, whatever it learns
 WAIT_EARLY_MARGIN = 90.0     # come back this many seconds early
 
 # --- Game process lifecycle ---

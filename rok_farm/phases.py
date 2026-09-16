@@ -9,12 +9,14 @@ is why the wait is an alt-tab and not a game exit.
 from __future__ import annotations
 
 import random
+import statistics
 import time
 
 from anti_detection.player_actions import mail_badge_count
 from rok_farm.config import (MAIL_SURPRISE, MAX_MARCH_MINUTES,
-                             MODAL_RATIO_MIN, WAIT_EARLY_MARGIN,
-                             WAIT_QUIT_MINUTES)
+                             MODAL_RATIO_MIN, RELAUNCH_OVERHEAD_S,
+                             WAIT_EARLY_MARGIN, WAIT_QUIT_FACTOR,
+                             WAIT_QUIT_FLOOR_S)
 from rok_farm import wake
 from rok_farm.logging_setup import INFO, WARN, logger
 
@@ -484,6 +486,38 @@ class PhasesMixin:
                             reason, waited, seconds)
                 return False
 
+    def _quit_threshold_s(self) -> float:
+        """How long a wait must be before closing the client pays for itself.
+
+        Not a fixed number of minutes: the waits move with the game (a KvK
+        deposit holds 30 gems and gathers for ~27min, an ordinary-map one holds
+        10-20), while the cost of coming back does not. So the cost IS the
+        threshold -- measured, not assumed: 78s at the median over 83 planned
+        relaunches in the log, and re-measured as this run goes on.
+        """
+        seen = getattr(self, "_relaunch_overheads", None)
+        overhead = (statistics.median(seen) if seen and len(seen) >= 3
+                    else RELAUNCH_OVERHEAD_S)
+        return max(WAIT_QUIT_FLOOR_S, overhead * WAIT_QUIT_FACTOR)
+
+    def _note_relaunch_overhead(self, seconds: float):
+        """File what the last quit+relaunch cost beyond the wait it covered.
+
+        Outliers are dropped rather than averaged in: a wake request cuts a
+        wait short (negative) and a launcher that hung is not the cost of a
+        normal relaunch (the log's worst is 490s against a 78s median).
+        """
+        if seconds <= 0 or seconds > 300:
+            return
+        seen = getattr(self, "_relaunch_overheads", None)
+        if seen is None:
+            seen = self._relaunch_overheads = []
+        seen.append(seconds)
+        del seen[:-10]
+        logger.info("relaunch cost %.0fs (median of %d: %.0fs) -> quit when a "
+                    "wait beats %.0fs", seconds, len(seen),
+                    statistics.median(seen), self._quit_threshold_s())
+
     def _window_check(self, planned_s: float = 0.0) -> bool:
         """May the account be online -- and stay online for planned_s more?
 
@@ -567,16 +601,20 @@ class PhasesMixin:
                 self._score_wait_prediction(before, wait_s, "in-place")
                 return
 
-            if plan > WAIT_QUIT_MINUTES * 60:
-                print(f"  [{INFO}] Troops home in ~{wait_s / 60:.0f}min -- "
-                      f"too long to sit here, quitting the client")
-                logger.info("Computed wait %.0fs -> quit+relaunch", plan)
+            if plan > self._quit_threshold_s():
+                print(f"  [{INFO}] Troops home in ~{wait_s / 60:.1f}min -- "
+                      f"longer than the {self._quit_threshold_s() / 60:.1f}min "
+                      f"a relaunch costs, quitting the client")
+                logger.info("Computed wait %.0fs -> quit+relaunch "
+                            "(threshold %.0fs)", plan, self._quit_threshold_s())
                 # Only here. _restart_game is also the RECOVERY path, where the
                 # client may be the thing that is broken, and poking a panel
                 # into it would be the worst possible moment.
                 self._check_panels_before_quit()
+                away = time.time()
                 if self._restart_game(f"waiting {plan / 60:.0f}min for troops",
                                       extra_wait=plan):
+                    self._note_relaunch_overhead(time.time() - away - plan)
                     self._view_is_world = False
                     self._score_wait_prediction(before, wait_s, "quit")
                     return
