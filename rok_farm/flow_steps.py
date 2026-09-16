@@ -1826,6 +1826,17 @@ class GemFlowMixin:
         else:
             self._toggle_view("World map -> city")
             self._wait(DELAY_WORLD_MAP)
+            # One retry, never a loop. A toggle can simply not take: 2026-09-16
+            # 11:19 the click went to the corner of a window the operator had
+            # just moved, the glyph still read WORLD four seconds later, and
+            # the harvest then had to skip the city it was supposed to be
+            # standing in. A click on an unfocused window activates it instead
+            # of pressing what is under it, which is the likeliest reason.
+            if self._on_world_map():
+                print(f"  [{WARN}] Still on the world map -- toggling once more")
+                logger.warning("return to city: the first toggle did not take")
+                self._toggle_view("World map -> city (retry)")
+                self._wait(DELAY_WORLD_MAP)
         self._view_is_world = False  # now in the city
 
         frame = self._grab()

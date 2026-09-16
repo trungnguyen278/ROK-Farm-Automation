@@ -18,10 +18,13 @@ from rok_farm.flow_steps import GemFlowMixin
 class Fake(GemFlowMixin):
     def __init__(self, flag_world, reads_world):
         self._view_is_world = flag_world
+        # a bool, or a list read once per call: what the glyph says over time
         self.reads_world = reads_world
         self.toggles = 0
 
     def _on_world_map(self, frame=None):
+        if isinstance(self.reads_world, list):
+            return self.reads_world.pop(0) if self.reads_world else False
         return self.reads_world
 
     def _toggle_view(self, label):
@@ -55,13 +58,36 @@ def test_after_a_march_it_toggles_even_when_the_glyph_reads_city():
 def test_a_flag_that_says_city_is_overruled_by_a_world_reading():
     """The flag can be wrong -- a return whose toggle did not take still sets
     it to city. A clear world reading means toggle."""
-    f = Fake(flag_world=False, reads_world=True)
+    f = Fake(flag_world=False, reads_world=[True, False])
+    f._step_return_city("city_idle")
+    assert f.toggles == 1
+
+
+def test_a_toggle_that_did_not_take_is_tried_once_more():
+    """2026-09-16 11:19: the click went to the corner of a window the operator
+    had just moved, the view stayed on the world map, and the harvest skipped
+    the city it should have been in."""
+    f = Fake(flag_world=True, reads_world=[True])   # still world after the toggle
+    f._step_return_city("city_idle")
+    assert f.toggles == 2
+
+
+def test_the_retry_is_not_a_loop():
+    """Clicking the same corner over and over is the mechanical behaviour the
+    anti-detection work exists to avoid."""
+    f = Fake(flag_world=True, reads_world=True)     # the glyph never changes
+    f._step_return_city("city_idle")
+    assert f.toggles == 2
+
+
+def test_a_toggle_that_worked_is_not_repeated():
+    f = Fake(flag_world=True, reads_world=[False])
     f._step_return_city("city_idle")
     assert f.toggles == 1
 
 
 def test_an_unknown_flag_toggles_as_before():
-    f = Fake(flag_world=True, reads_world=True)
+    f = Fake(flag_world=True, reads_world=[False])
     del f._view_is_world
     f._step_return_city("city_idle")
     assert f.toggles == 1
