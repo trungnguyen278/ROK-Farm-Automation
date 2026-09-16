@@ -98,6 +98,33 @@ OCCUPIED_TEMPLATES = ["resources/occupied_green", "resources/occupied_red",
                       "resources/occupied_blue"]
 OCCUPIED_THRESHOLD = 0.62
 
+# The same pickaxe badge at ICON zoom, where the game draws the occupier as a
+# commander avatar with the badge on its lower right. The avatar itself is
+# useless as a signal -- it is whichever commander leads that march -- so only
+# the badge is measured.
+#
+# Measured 2026-09-16 over the 365 saved icon-zoom scan frames (978 gem icons):
+# 18 icons carried a badge, all 18 confirmed by eye as real occupied deposits,
+# and NO badge landed near an icon but outside this window. The badge centre
+# sits +12..+13 px across and 45..51 px above the icon centre; the window below
+# is about four times that spread.
+BADGE_DX = (-2, 28)
+BADGE_DY = (-65, -32)
+# Disc colour, from the 21 tile-zoom frames the farm itself confirmed occupied:
+# 17 green (H 50-65, S 104-255, V 126-255) and 4 blue (H 95-98, S 141-255,
+# V 185-252). Red is in OCCUPIED_TEMPLATES but was never drawn in that corpus,
+# so no hue band is claimed for it here.
+BADGE_HUE_BANDS = ((50, 70), (88, 104))
+BADGE_SAT_MIN = 100
+BADGE_VAL_MIN = 120
+BADGE_AREA = (120, 420)        # the disc is ~18x18 px at icon zoom (219-247)
+BADGE_FILL_MIN = 0.50          # measured 0.60-0.73 of its bounding box
+BADGE_GLYPH = (0.05, 0.45)     # white pickaxe inside, measured 0.14-0.18
+# The march-slot portraits in the right-hand HUD strip wear the very same badge
+# (x ~0.98 of the frame), so badges found in the HUD are not map badges.
+BADGE_HUD_X_PCT = 0.93
+BADGE_HUD_Y_PCT = 0.06
+
 # Deploy-flow buttons at FIXED client positions (measured from screenshots).
 # Clicked directly instead of template-matched: detection fails at night, and a
 # wrong/missed click here marches nothing while looking like success.

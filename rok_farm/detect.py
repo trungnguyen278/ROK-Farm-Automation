@@ -16,7 +16,10 @@ import numpy as np
 from vision.color_filter import is_gem_icon_color
 from vision.template_matcher import Match
 
-from rok_farm.config import (BUTTON_THRESHOLD, DARK_TERRAIN_THRESH,
+from rok_farm.config import (BADGE_AREA, BADGE_DX, BADGE_DY, BADGE_FILL_MIN,
+                             BADGE_GLYPH, BADGE_HUD_X_PCT, BADGE_HUD_Y_PCT,
+                             BADGE_HUE_BANDS, BADGE_SAT_MIN, BADGE_VAL_MIN,
+                             BUTTON_THRESHOLD, DARK_TERRAIN_THRESH,
                              FOG_HUE_LAP_MAX, FOG_HUE_STD_MAX, FOG_LAP_VAR_MAX,
                              FOG_SAT_LAP_MAX, FOG_SAT_MAX, MARCH_TEMPLATES,
                              OCCUPIED_TEMPLATES, OCCUPIED_THRESHOLD,
@@ -412,11 +415,93 @@ class DetectMixin:
 
         return False, "no march lines"
 
+    def _gather_badge(self, frame, icon: Match) -> dict | None:
+        """The round pickaxe badge of an army already gathering on this icon.
+
+        At icon zoom the game draws the occupier as a commander avatar with the
+        badge on its lower right. The avatar is no signal at all -- it is
+        whichever commander leads that march, and the operator's own samples
+        show two different ones -- so this reads the badge alone: a small
+        strongly coloured disc with a white pickaxe inside, at a fixed offset
+        above the deposit.
+
+        Returns the badge (colour, centre, area, glyph fraction) or None.
+        """
+        fh, fw = frame.shape[:2]
+        cx, cy = icon.center
+        # Crop wide enough that a disc whose centre sits at the edge of the
+        # accepted window is still whole -- a clipped blob fails the area gate.
+        pad = 20
+        x1 = max(0, cx + BADGE_DX[0] - pad)
+        x2 = min(fw, cx + BADGE_DX[1] + pad)
+        y1 = max(0, cy + BADGE_DY[0] - pad)
+        y2 = min(fh, cy + BADGE_DY[1] + pad)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+        strong = (s >= BADGE_SAT_MIN) & (v >= BADGE_VAL_MIN)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+
+        for lo, hi in BADGE_HUE_BANDS:
+            mask = ((h >= lo) & (h <= hi) & strong).astype(np.uint8) * 255
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            n, _, stats, cents = cv2.connectedComponentsWithStats(mask, 8)
+            for i in range(1, n):
+                bx, by, bw, bh, area = stats[i]
+                if not (BADGE_AREA[0] <= area <= BADGE_AREA[1]) or bw == 0 or bh == 0:
+                    continue
+                fill = area / float(bw * bh)
+                if fill < BADGE_FILL_MIN:
+                    continue
+                if not (0.65 <= bw / float(bh) <= 1.5):
+                    continue
+                box = hsv[by:by + bh, bx:bx + bw]
+                glyph = ((box[:, :, 1] < 60) & (box[:, :, 2] > 200)).sum()
+                glyph /= float(bw * bh)
+                if not (BADGE_GLYPH[0] <= glyph <= BADGE_GLYPH[1]):
+                    continue
+                gx = int(round(cents[i][0])) + x1
+                gy = int(round(cents[i][1])) + y1
+                # The HUD's march slots wear the very same badge.
+                if gx > fw * BADGE_HUD_X_PCT or gy < fh * BADGE_HUD_Y_PCT:
+                    continue
+                dx, dy = gx - cx, gy - cy
+                if not (BADGE_DX[0] <= dx <= BADGE_DX[1]):
+                    continue
+                if not (BADGE_DY[0] <= dy <= BADGE_DY[1]):
+                    continue
+                return {"hue": (lo, hi), "cx": gx, "cy": gy, "dx": dx, "dy": dy,
+                        "area": int(area), "fill": round(float(fill), 2),
+                        "glyph": round(float(glyph), 2)}
+        return None
+
     def _check_icon_occupied(self, frame, icon: Match) -> tuple[bool, str]:
-        """Check for march lines converging on the icon at icon-zoom level."""
+        """Check whether someone is already on this icon, at icon-zoom level.
+
+        Two signs: an army still marching draws a line to the node, and an army
+        that has arrived sits on it wearing the gathering badge. The badge case
+        used to be invisible here -- the farm clicked the node, zoomed in, and
+        only then read the pickaxe (21 such round trips in the saved frames, at
+        roughly half a minute each).
+        """
         has_line, line_info = self._has_march_line(frame, icon)
         if has_line:
             return True, f"march_line({line_info})"
+        badge = self._gather_badge(frame, icon)
+        if badge:
+            # Logged, not just printed: the console scrolls away and the only
+            # way to tell later how often this fires is to grep the log.
+            logger.info("icon %s taken: gathering badge at %+d,%+d "
+                        "(hue %d-%d, area %d, glyph %.2f)",
+                        icon.center, badge["dx"], badge["dy"],
+                        badge["hue"][0], badge["hue"][1], badge["area"],
+                        badge["glyph"])
+            return True, (f"gather_badge(hue={badge['hue'][0]}-{badge['hue'][1]} "
+                          f"at {badge['dx']:+d},{badge['dy']:+d} area={badge['area']} "
+                          f"glyph={badge['glyph']})")
         return False, "free"
 
     def _is_mine_occupied(self, frame, mine_match: Match) -> tuple[bool, str]:
