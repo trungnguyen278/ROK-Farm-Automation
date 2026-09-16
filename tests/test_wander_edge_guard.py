@@ -128,14 +128,47 @@ def test_the_veto_looks_further_than_the_camera_travels(book):
         f"the camera moves 83 tiles between reads at p90")
 
 
+def test_it_fires_from_the_city_the_bot_returns_to(book):
+    """2026-09-16: the city sat 123 tiles from the west edge, and every mine
+    starts there. At 96 tiles of reach a due-west heading sampled out to x=27
+    and passed -- 6 crossings in 29 scans, 207 per 1000, against 0 per 1000
+    the week before from a city in the middle of the map."""
+    assert book.blocked(123, 226, math.pi), (
+        "standing where the camera lands after every city return, a heading "
+        "straight at the west edge is still not vetoed")
+    assert not book.blocked(123, 226, 0.0), \
+        "inland from the same spot must stay open"
+
+
 def test_a_wall_beyond_the_old_reach_is_now_seen(book):
     """The specific gap: a wall 10 cells out was invisible, and is not now."""
-    import math
     book.record_wall(100 + 10 * CELL, 100)
     assert book.blocked(100, 100, 0.0), \
         "a wall ten cells ahead is still invisible to the veto"
-    assert not book.blocked(100, 100, math.pi), \
+    assert not book.blocked(500, 500, math.pi), \
         "the veto now fires in every direction, which would pin the wander"
+
+
+def test_near_an_edge_the_position_is_read_every_scan():
+    """A veto is only as fresh as the reading under it. Off the home map the
+    readings are rejected, so the last one freezes -- on 2026-09-16 all six
+    crossings were judged from the same (123,226)."""
+    from rok_farm import PROJECT_ROOT
+    from rok_farm.flow_steps import GemFlowMixin
+
+    class Near(GemFlowMixin):
+        def __init__(self, pos):
+            self._last_map_xy = pos
+
+    assert Near((123, 226))._near_map_edge()
+    assert Near((300, 60))._near_map_edge()
+    assert not Near((600, 700))._near_map_edge()
+    assert not Near(None)._near_map_edge()
+
+    flow = (PROJECT_ROOT / "rok_farm" / "flow_steps.py").read_text(encoding="utf-8")
+    at = flow.index("self._map_sync(frame, bool(icons)")
+    assert "force=self._near_map_edge()" in flow[at:at + 200], \
+        "the wander still reads the position on the slow cadence near the edge"
 
 
 def test_scoring_still_uses_the_shorter_horizon(book):

@@ -192,10 +192,21 @@ class MapMemory:
     # the guarded zone entirely, which is how 67 real crossings into kingdom
     # 4096 happened with the veto switched on.
     #
-    # 12 cells is 96 tiles and covers 92% of steps. Scoring is left at 6 on
-    # purpose -- this is the hard veto, which should look further than the
-    # preference does.
-    BLOCK_REACH_CELLS = 12
+    # 12 cells is 96 tiles and covers 92% of steps, and it held: 0 crossings
+    # in 561 scans after the change, against 11.6 per 1000 before.
+    #
+    # It stopped holding the moment the city moved. 2026-09-16, a city 123
+    # tiles from the west edge: 6 crossings in 29 scans -- 207 per 1000, 18x
+    # the worst rate ever measured here -- and every one of them started from
+    # the city itself at (123,226). From there a due-west heading samples out
+    # to x=27 and passes, so the veto could not fire at the one position the
+    # bot returns to between every single mine.
+    #
+    # 16 cells is 128 tiles: further than the p90 step (83) and further than
+    # the home city stands from the edge, which is what makes it fire there.
+    # Scoring is left at 6 on purpose -- this is the hard veto, which should
+    # look further than the preference does.
+    BLOCK_REACH_CELLS = 16
 
     def blocked(self, x: int, y: int, heading: float,
                 reach_cells: int = BLOCK_REACH_CELLS) -> bool:

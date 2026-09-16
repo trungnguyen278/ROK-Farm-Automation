@@ -177,6 +177,19 @@ class GemFlowMixin:
         self._last_map_xy = (x, y)
         return self._last_map_xy
 
+    # Inside this many tiles of x=0 or y=0 the position is read every scan
+    # instead of every MAP_READ_EVERY. It is the zone where a stale reading is
+    # the difference between turning and leaving the kingdom, and where the
+    # city itself sits since the 2026-09-14 teleport: (123,226).
+    EDGE_WATCH_TILES = 200
+
+    def _near_map_edge(self) -> bool:
+        """Is the last known position close enough to an edge to read often?"""
+        pos = getattr(self, "_last_map_xy", None)
+        if not pos:
+            return False
+        return pos[0] < self.EDGE_WATCH_TILES or pos[1] < self.EDGE_WATCH_TILES
+
     def _steer_heading(self, heading: float):
         """Nudge the wander toward ground the book likes, away from walls.
 
@@ -1034,7 +1047,13 @@ class GemFlowMixin:
             save_screenshot(frame, f"{tag}_scan_{scan_count:02d}")
 
             icons = self._find_all_icons(frame)
-            self._map_sync(frame, bool(icons), scan_count=scan_count)
+            # Near an edge the position has to be current. Off the home map the
+            # readings are REJECTED (the map id disagrees), so _last_map_xy
+            # freezes at the last home reading and the veto keeps answering for
+            # ground the camera left minutes ago -- on 2026-09-16 all six
+            # crossings were judged from the same frozen (123,226).
+            self._map_sync(frame, bool(icons), scan_count=scan_count,
+                           force=self._near_map_edge())
 
             # Crossed into another kingdom. On a KvK map the ground beyond the
             # border is not white fog but another participating kingdom's
