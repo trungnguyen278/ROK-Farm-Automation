@@ -168,7 +168,8 @@ class PhasesMixin:
         """
         from collections import Counter
 
-        from rok_farm.city_harvest import (HARVEST_MAX_CLICKS,
+        from rok_farm.city_harvest import (HARVEST_BURST_GAP,
+                                           HARVEST_MAX_CLICKS,
                                            HARVEST_MAX_SURVIVOR_RUN,
                                            load_harvest_templates, pick_next,
                                            still_there, untapped)
@@ -221,6 +222,58 @@ class PhasesMixin:
         tapped = []
         survivors = []
         in_a_row = 0
+
+        # One tap per kind, in a burst, before looking again. Every click this
+        # bot has ever sent waited for a fresh frame first, which is why not
+        # one of 4,156 measured gaps was under a second while a person
+        # collecting a city empties it in a few. Taking one kind does not move
+        # another's bubbles, so these positions are all still good when their
+        # turn comes -- unlike the old sweep, which tapped all twenty spots and
+        # found fifteen of them bare.
+        first = {}
+        for b in bubbles:
+            first.setdefault(b.kind, b)
+        burst = list(first.values())
+        random.shuffle(burst)
+        for b in burst:
+            self._click_pct(b.x / fw, b.y / fh, jitter_px=4)
+            tapped.append(b)
+            time.sleep(random.uniform(*HARVEST_BURST_GAP))
+            # A tap that finds bare ground opens the plot's panel, and the
+            # rest of a blind burst would then be clicking buttons on it.
+            # This costs a frame grab and two means, not a template pass.
+            frame, ratio, covered = self._harvest_cover()
+            if covered:
+                logger.info("harvest: the burst stopped after %d tap(s) -- "
+                            "something covers the city (dim %.2f)",
+                            len(tapped), ratio)
+                self._harvest_covered(frame, ratio, tapped)
+                return
+        logger.info("harvest: burst of %d tap(s), one per kind: %s",
+                    len(burst), ", ".join(b.kind for b in burst))
+
+        time.sleep(random.uniform(0.6, 1.2))
+        frame, ratio, now = self._harvest_look(templates)
+        if frame is None:
+            logger.info("harvest: no frame after the burst -- stopping")
+            return
+        if now is None:
+            self._harvest_covered(frame, ratio, tapped)
+            return
+        logger.info("harvest: after the burst %d bubble(s) left of %d",
+                    len(now), len(bubbles))
+        if all(still_there(now, t) is not None for t in tapped):
+            # Five taps, one per kind, and every single one still sitting
+            # there. That is not bad luck; the clicks are not reaching the
+            # game or the bubbles were never there.
+            print(f"  [{WARN}] Harvest: the burst took nothing -- stopping")
+            logger.warning("harvest: the burst of %d took nothing -- stopping",
+                           len(tapped))
+            save_screenshot(frame, "HARVEST_TAKES_NOTHING")
+            return
+        bubbles = now
+
+        # Anything the burst missed goes back through the careful path.
         while len(tapped) < HARVEST_MAX_CLICKS:
             fresh = untapped(bubbles, tapped)
             if not fresh:
@@ -273,6 +326,24 @@ class PhasesMixin:
         if survivors and not getattr(self, "_harvest_leftover_saved", False):
             self._harvest_leftover_saved = True
             save_screenshot(frame, "HARVEST_LEFTOVER")
+
+    def _harvest_cover(self):
+        """Is something covering the city? (frame, ratio, covered).
+
+        The burst needs this between taps and cannot afford the template pass
+        that _harvest_look does -- the whole point is clicks under a second
+        apart. A dim ratio is two means over a frame the capture thread
+        already has: microseconds, and it is the signal that separates a city
+        view (1.04-1.24 over 23 frames) from the mail panel (2.40) or the road
+        plot's panel (5.18).
+        """
+        from rok_farm.state_probe import dim_ratio
+
+        frame = self._grab()
+        if frame is None:
+            return None, 0.0, True
+        ratio = dim_ratio(frame)
+        return frame, ratio, ratio >= MODAL_RATIO_MIN
 
     def _harvest_look(self, templates):
         """A fresh frame as (frame, dim ratio, bubbles).

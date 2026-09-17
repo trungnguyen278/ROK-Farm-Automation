@@ -60,6 +60,22 @@ HARVEST_MAX_SURVIVOR_RUN = 3
 # The next tap goes to one of this many untapped bubbles nearest the last one.
 HARVEST_NEAREST = 3
 
+# One tap per KIND, sent as a burst from a single frame.
+#
+# Measured over 4,156 gaps between consecutive clicks across six days: the
+# median is 6.6s, a third of the gaps are over 10s, and NOT ONE of the 4,156
+# was under a second (5th percentile 2.2s). A person collecting a city taps
+# five bubbles in a couple of seconds; this bot has never once produced two
+# clicks less than a second apart, because every click waits for a fresh look
+# first. That "never fast, often slow" shape is the tell.
+#
+# A burst is safe here in a way the old 20-tap sweep was not: one tap takes
+# every bubble of ITS kind (116 bubbles in 29 taps over six exits), and taking
+# the wood does not move the stone, so one position per kind picked from a
+# single frame is still a bubble when its turn comes. The old sweep tapped all
+# twenty, and fifteen of those spots were bare ground by then.
+HARVEST_BURST_GAP = (0.25, 0.80)
+
 
 @dataclass(frozen=True)
 class Bubble:

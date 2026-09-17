@@ -99,6 +99,12 @@ class Fake(PhasesMixin):
             return FRAME, 5.18, None
         return FRAME, 1.2, list(self.city.bubbles)
 
+    def _harvest_cover(self):
+        """The cheap check the burst makes between taps: is the city covered?"""
+        if self.city.covered:
+            return FRAME, 5.18, True
+        return FRAME, 1.2, False
+
     def _click_pct(self, px, py, jitter_px=0):
         self.city.tap(px * W, py * H)
 
@@ -253,10 +259,16 @@ def test_a_game_that_is_not_in_front_is_not_tapped_at_all(run):
 def test_taps_that_take_nothing_stop_the_harvest(run):
     """Over the six exits measured tap by tap a survivor never repeated. A run
     of them means the taps are not reaching the game, or the bubbles are not
-    there -- either way, more taps are just drumming."""
+    there -- either way, more taps are just drumming.
+
+    The burst is the unit now: five taps, one per kind, sent as one decision.
+    If every one of them is still sitting there afterwards, that is the whole
+    evidence needed and the harvest ends there -- it does not go on to the
+    careful loop to learn the same thing five more times.
+    """
     city = City(grid(), sticky=[(b.x, b.y) for b in grid()])
     fake, saved = run(city)
-    assert len(city.taps) == 3
+    assert len(city.taps) == 5, "one tap per kind, then stop"
     assert "HARVEST_TAKES_NOTHING" in saved
 
 
@@ -268,3 +280,31 @@ def test_one_survivor_does_not_stop_it(run):
     fake, _ = run(city)
     assert len(city.taps) > 3
     assert city.misses == 0
+
+
+def test_the_burst_is_one_tap_per_kind(run):
+    """Five kinds, five taps, and each kind tapped once -- the burst must not
+    spend two taps on the same kind when one takes all of it."""
+    city = City(grid())
+    fake, _ = run(city)
+    hit = []
+    for x, y in city.taps:
+        for b in grid():
+            if abs(b.x - x) < 5 and abs(b.y - y) < 5:
+                hit.append(b.kind)
+                break
+    assert len(city.taps) == 5
+    assert sorted(hit) == sorted(HARVEST_KINDS)
+
+
+def test_the_burst_clicks_faster_than_a_second():
+    """The tell this exists to remove: of 4,156 gaps between consecutive
+    clicks measured over six days, the median was 6.6s and NOT ONE was under a
+    second, while a person empties a city in a few. If the burst gap creeps
+    back over a second the bot is right back to never clicking fast."""
+    from rok_farm.city_harvest import HARVEST_BURST_GAP
+
+    assert HARVEST_BURST_GAP[1] < 1.0, "the burst is not a burst any more"
+    assert HARVEST_BURST_GAP[0] >= 0.15, (
+        "faster than a person can physically tap is its own tell"
+    )
