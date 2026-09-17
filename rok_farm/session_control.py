@@ -357,12 +357,19 @@ def session_summary():
 
     if len(gems) >= 2:
         gained = gems[-1] - gems[0]
-        line = f"Gems: {gems[0]:,} -> {gems[-1]:,} ({gained:+,})"
+        # The ACCOUNT's figure, not the farm's output, and the difference is
+        # not small: the counter moves for the operator's own play and for
+        # marches landing while the client is shut, and with the client now
+        # shut for most of a run those are exactly the gaps the operator plays
+        # in. 2026-09-16 into 09-17 the counter rose 1,240 overnight with the
+        # game closed. Only the mail's gathering reports say who gathered what,
+        # so until those are read this number must not be labelled as the bot's.
+        line = f"Gems on the account: {gems[0]:,} -> {gems[-1]:,} ({gained:+,})"
         if hours and hours >= 0.05:
             line += f", {gained / hours:,.0f}/h"
         out.append(line)
     elif gems:
-        out.append(f"Gems: {gems[0]:,} (only one reading, no total)")
+        out.append(f"Gems on the account: {gems[0]:,} (only one reading, no total)")
 
     if done or failed:
         pct = 100.0 * done / (done + failed)
