@@ -45,9 +45,9 @@ from rok_farm import wake
 # the command handlers below read as prose with the bare names.
 from rok_farm.session_control import (       # noqa: F401
     CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, HELP, HUMAN_IDLE_GUARD,
-    SERIAL_PORT, do_report, do_start, do_stop, farm_procs, find_procs,
-    game_proc, idle_seconds, kill_tree, shutdown_board, spawn_detached,
-    wd_procs,
+    SERIAL_PORT, START_SETTLE_S, START_SETTLE_WAIT_S, do_report, do_start,
+    do_stop, farm_procs, find_procs, game_proc, idle_seconds, kill_tree,
+    shutdown_board, spawn_detached, wait_until_idle, wd_procs,
 )
 
 import discord
@@ -662,15 +662,32 @@ async def on_message(message):
                             "finish that first.")
 
         elif cmd == "start":
+            # Typing !start is itself input, so the old "was the machine used
+            # in the last five minutes" test refused the very person asking.
+            # Over every !start in the Discord log: 15 plain ones, 11 of them
+            # followed by "!start force" 6-26 seconds later with the farm only
+            # coming up after the force, and the other four started nothing --
+            # plain !start had never once worked. Those eleven forced starts
+            # ran seconds after the operator's hands left the keyboard and not
+            # one of them fought anybody for the mouse. So wait for the
+            # operator to step away instead of refusing them.
             idle = idle_seconds()
-            if "force" not in args and 0 <= idle < HUMAN_IDLE_GUARD:
+            if "force" not in args and 0 <= idle < START_SETTLE_S:
                 await reply(message,
-                            f"Someone used this machine {idle:.0f}s ago -- the "
-                            f"ESP32 would fight them for the mouse.\n"
-                            f"Send `!start force` to run anyway.")
-            else:
-                await reply(message,
-                            await asyncio.to_thread(do_start, "solo" not in args))
+                            f"Machine was in use {idle:.0f}s ago -- starting as "
+                            f"soon as it has been quiet for "
+                            f"{START_SETTLE_S:.0f}s (giving up after "
+                            f"{START_SETTLE_WAIT_S / 60:.0f} min). "
+                            f"`!start force` skips the wait.")
+                if not await asyncio.to_thread(wait_until_idle):
+                    await reply(message,
+                                f"Still in use after "
+                                f"{START_SETTLE_WAIT_S / 60:.0f} min -- not "
+                                f"starting, the board would fight you for the "
+                                f"mouse. `!start force` runs anyway.")
+                    return
+            await reply(message,
+                        await asyncio.to_thread(do_start, "solo" not in args))
 
         elif cmd == "stop":
             # Tell the watcher this one was asked for. Without it, !stop is

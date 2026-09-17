@@ -45,6 +45,37 @@ SERIAL_PORT = None
 # Starting the farm then means the ESP32 fights the player for the mouse.
 HUMAN_IDLE_GUARD = 300.0
 
+# !start used to be refused outright when the machine had been touched inside
+# HUMAN_IDLE_GUARD -- which is always, because typing the command IS touching
+# it. Measured over every !start in the Discord log: 15 plain ones, 11 of them
+# followed by "!start force" 6-26 seconds later and the farm only coming up
+# after the force; the other four started nothing. Plain !start has never once
+# worked. Meanwhile those eleven forced starts ran with the operator's hands
+# off the keyboard for a matter of seconds and none of them fought anyone for
+# the mouse.
+#
+# So the question is not "was the machine used recently" but "has the operator
+# stepped away since asking". Wait for that instead of refusing.
+START_SETTLE_S = 30.0        # quiet for this long counts as stepped away
+START_SETTLE_WAIT_S = 180.0  # how long to keep waiting for that quiet
+
+
+def wait_until_idle(settle_s=START_SETTLE_S, give_up_after=START_SETTLE_WAIT_S):
+    """Block until nobody has touched the machine for `settle_s`.
+
+    Returns True once it is quiet, False if it never went quiet in time. An
+    unavailable idle reading (-1) counts as quiet: the guard must not be able
+    to block a start on a machine it cannot measure.
+    """
+    deadline = time.time() + give_up_after
+    while True:
+        idle = idle_seconds()
+        if idle < 0 or idle >= settle_s:
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(min(2.0, max(0.5, settle_s - idle)))
+
 
 def _print_log(msg):
     print(msg, flush=True)
