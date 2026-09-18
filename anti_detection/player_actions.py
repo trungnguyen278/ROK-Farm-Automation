@@ -19,6 +19,7 @@ Standalone test:
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -300,34 +301,18 @@ def act_mail(ctx: PlayerActionCtx):
                         last = after
                         _log_tab_after_read(after, bx, before)
 
-    # Then the system tab, badge or no badge. That is where the anti-cheat
-    # team writes, and a letter the operator has already opened leaves no
-    # badge at all -- on 2026-09-18 09:59 the tab row showed LIEN MINH with a
-    # 2 and HE THONG clean, which says nothing about whether a letter arrived
-    # overnight. A person checks their system mail; this reads it once per
-    # session and keeps the picture.
-    try:
-        tab = ctx.matcher.match_single(last, "ui/mail_tab_system")
-        if tab and tab.confidence >= 0.70:
-            fh, fw = last.shape[:2]
-            tx = (tab.x + tab.w / 2) / fw
-            ty = (tab.y + tab.h / 2) / fh
-            print(f"    -> system tab at pct({tx:.3f},{ty:.3f})")
-            if _click_in_mail_panel(ctx, last, tx, ty):
-                time.sleep(random.uniform(1.5, 3.0))
-                sys_frame = _grab_chat_frame(ctx)
-                if sys_frame is not None:
-                    last = sys_frame
-                    from rok_farm.screenshots import save_screenshot
-                    save_screenshot(sys_frame, "MAIL_SYSTEM_TAB")
-                    logger.info("mail: system tab opened and kept "
-                                "(conf %.2f at pct(%.3f,%.3f))",
-                                tab.confidence, tx, ty)
-        else:
-            logger.info("mail: the system tab template did not match (%s)",
-                        f"{tab.confidence:.2f}" if tab else "no match")
-    except Exception:
-        logger.warning("mail: could not open the system tab", exc_info=True)
+    # Then the system tab -- but rarely. That is where the anti-cheat team
+    # writes, and a letter the operator has already opened leaves no badge at
+    # all, so the badge loop above can walk straight past it. The first cut of
+    # this opened the tab once per SESSION, and the farm starts a new session
+    # every quarter of an hour: thirty visits a day to a mailbox nobody reads
+    # thirty times a day, added while the account was already under a warning.
+    #
+    # A new letter still arrives with a badge and is opened by the loop above.
+    # This is only the safety net for one already read, so it runs about twice
+    # a day at uneven times.
+    if _system_tab_due():
+        _open_system_tab(ctx, last)
 
     # One picture of the panel after reading, per session. What is still in it
     # is the answer the numbers above can only point at.
@@ -1801,3 +1786,62 @@ def _cli_main():
 
 if __name__ == "__main__":
     _cli_main()
+
+
+def _system_tab_state_path():
+    from rok_farm import PROJECT_ROOT
+    return PROJECT_ROOT / "data" / "mail_system_tab.json"
+SYSTEM_TAB_MIN_GAP_H = 9.0     # never twice in the same stretch of a day
+SYSTEM_TAB_CHANCE = 0.45       # and then only sometimes, so it is not a clock
+
+
+def _system_tab_due() -> bool:
+    """Is it time to glance at the system mail, the way a person would?
+
+    Persisted, because the farm starts a new session every quarter of an hour
+    and anything held in memory would mean "every session" all over again.
+    """
+    try:
+        last = json.loads(_system_tab_state_path().read_text(encoding="utf-8")).get("last", 0)
+    except Exception:
+        last = 0
+    if time.time() - float(last) < SYSTEM_TAB_MIN_GAP_H * 3600:
+        return False
+    return random.random() < SYSTEM_TAB_CHANCE
+
+
+def _note_system_tab_opened():
+    try:
+        path = _system_tab_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"last": time.time()}),
+                        encoding="utf-8")
+    except Exception:
+        logger.warning("mail: could not record the system tab visit",
+                       exc_info=True)
+
+
+def _open_system_tab(ctx, frame):
+    """Open HE THONG by its own template and keep the picture."""
+    try:
+        tab = ctx.matcher.match_single(frame, "ui/mail_tab_system")
+        if not (tab and tab.confidence >= 0.70):
+            logger.info("mail: the system tab template did not match (%s)",
+                        f"{tab.confidence:.2f}" if tab else "no match")
+            return
+        fh, fw = frame.shape[:2]
+        tx = (tab.x + tab.w / 2) / fw
+        ty = (tab.y + tab.h / 2) / fh
+        print(f"    -> system tab at pct({tx:.3f},{ty:.3f})")
+        if not _click_in_mail_panel(ctx, frame, tx, ty):
+            return
+        _note_system_tab_opened()
+        time.sleep(random.uniform(1.5, 3.0))
+        shot = _grab_chat_frame(ctx)
+        if shot is not None:
+            from rok_farm.screenshots import save_screenshot
+            save_screenshot(shot, "MAIL_SYSTEM_TAB")
+            logger.info("mail: system tab opened and kept (conf %.2f)",
+                        tab.confidence)
+    except Exception:
+        logger.warning("mail: could not open the system tab", exc_info=True)
