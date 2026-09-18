@@ -260,6 +260,24 @@ def act_mail(ctx: PlayerActionCtx):
         frame2 = _grab_chat_frame(ctx)
         if frame2 is not None:
             last = frame2
+            # A picture of every tab the bot opens, once each per session. The
+            # anti-cheat team's letters live on the HE THONG tab and the farm
+            # has been opening that tab for days without anyone ever seeing
+            # what it said -- on 2026-09-17 it kept farming for six hours after
+            # a warning arrived. Until these are read automatically, at least
+            # keep the frame.
+            seen = getattr(ctx, "_mail_tab_frames", None)
+            if seen is None:
+                seen = ctx._mail_tab_frames = set()
+            key = round(bx, 2)
+            if key not in seen:
+                seen.add(key)
+                try:
+                    from rok_farm.screenshots import save_screenshot
+                    save_screenshot(frame2, f"MAIL_TAB_{int(key * 1000):03d}")
+                except Exception:
+                    logger.warning("mail: could not save the tab frame",
+                                   exc_info=True)
             still_has_badge = any(
                 abs(b2x - bx) < 0.08 for b2x, _ in _find_mail_tab_badges(frame2)
             )
