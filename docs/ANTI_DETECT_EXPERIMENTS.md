@@ -75,7 +75,46 @@ every click waits for a fresh frame first. A person collecting a city, closing
 a panel or confirming a dialog does it constantly. "Never fast, often slow" is
 a shape, and it is ours.
 
-## The experiments
+## 2026-09-18: the design above does not work
+
+UTC 09-17 drew **no letter**. Checked three ways on the evening of 09-18, well
+past the 14:55-15:52 window both earlier letters arrived in: the tab row at
+16:25 carried no badge on any tab, the system tab's list at 10:25 held nothing
+newer than the 09-17 warning, and every mail check from 16:25 to 17:47
+accounted for the new mail exactly against finished gathers -- "0 unexplained"
+each time. The gem counter only rose, 73,368 to 75,128.
+
+So:
+
+| UTC day | alive | gathers | quit cadence | burst clicks | letter |
+|---------|-------|---------|--------------|--------------|--------|
+| 09-16 | 206 min | 61 | 16 min | no | **yes** |
+| 09-17 | 194 min | 59 | 15 min | no | **no** |
+
+Two days alike in every measured way, opposite outcomes. Nothing measured here
+explains the letters. One variable per day cannot work against a signal that
+gives two answers to the same question, and it was never going to: a coarse
+yes/no read once a day needs many days per configuration before a difference
+means anything.
+
+There is a second problem underneath it. The letter judging UTC day D arrives
+at ~15:00 on D+1, and UTC day D+1 began at 07:00 that morning -- **eight hours
+of the next test day are already spent by the time the verdict lands**. Two
+ways out, neither free:
+
+* hold each configuration for several days and count letters per day, so the
+  overlap stops mattering. Slow, and what this now does.
+* farm only from ~16:00 to 23:00, after the letter window. Then no farming has
+  happened in the current UTC day when the verdict arrives, and each day can be
+  configured knowing the last one's result. It costs more than half the running
+  hours -- and leaves the account offline about 17 hours a day, which is its
+  own kind of safe.
+
+**What this does now:** keep the configuration still, keep running, and change
+nothing until a letter arrives. The record then carries several days of the
+same setup on both sides of it rather than one day of each.
+
+## The experiments as originally planned
 
 One variable per UTC day, because the letters only give a coarse yes/no.
 
