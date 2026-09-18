@@ -162,4 +162,7 @@ def test_act_mail_clicks_nothing_in_the_panel_past_the_gate():
     code = ast.unparse(fn)
     assert code.count("_click_pct(") == 1, "a panel click bypasses the gate"
     assert "_click_pct(*BTN_POS['mail'])" in code
-    assert code.count("_click_in_mail_panel(") == 2
+    # tab switch, read-all, and since 2026-09-18 the system tab -- the one
+    # place the anti-cheat team writes, opened once a session whether or not
+    # it carries an unread badge. Every one of them goes through the gate.
+    assert code.count("_click_in_mail_panel(") == 3

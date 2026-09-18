@@ -300,6 +300,35 @@ def act_mail(ctx: PlayerActionCtx):
                         last = after
                         _log_tab_after_read(after, bx, before)
 
+    # Then the system tab, badge or no badge. That is where the anti-cheat
+    # team writes, and a letter the operator has already opened leaves no
+    # badge at all -- on 2026-09-18 09:59 the tab row showed LIEN MINH with a
+    # 2 and HE THONG clean, which says nothing about whether a letter arrived
+    # overnight. A person checks their system mail; this reads it once per
+    # session and keeps the picture.
+    try:
+        tab = ctx.matcher.match_single(last, "ui/mail_tab_system")
+        if tab and tab.confidence >= 0.70:
+            fh, fw = last.shape[:2]
+            tx = (tab.x + tab.w / 2) / fw
+            ty = (tab.y + tab.h / 2) / fh
+            print(f"    -> system tab at pct({tx:.3f},{ty:.3f})")
+            if _click_in_mail_panel(ctx, last, tx, ty):
+                time.sleep(random.uniform(1.5, 3.0))
+                sys_frame = _grab_chat_frame(ctx)
+                if sys_frame is not None:
+                    last = sys_frame
+                    from rok_farm.screenshots import save_screenshot
+                    save_screenshot(sys_frame, "MAIL_SYSTEM_TAB")
+                    logger.info("mail: system tab opened and kept "
+                                "(conf %.2f at pct(%.3f,%.3f))",
+                                tab.confidence, tx, ty)
+        else:
+            logger.info("mail: the system tab template did not match (%s)",
+                        f"{tab.confidence:.2f}" if tab else "no match")
+    except Exception:
+        logger.warning("mail: could not open the system tab", exc_info=True)
+
     # One picture of the panel after reading, per session. What is still in it
     # is the answer the numbers above can only point at.
     if after is not None and not getattr(ctx, "_mail_after_read_saved", False):
