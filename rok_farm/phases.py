@@ -14,9 +14,9 @@ import time
 
 from anti_detection.player_actions import mail_badge_count
 from rok_farm.config import (MAIL_SURPRISE, MAX_MARCH_MINUTES,
-                             MODAL_RATIO_MIN, RELAUNCH_OVERHEAD_S,
-                             WAIT_EARLY_MARGIN, WAIT_QUIT_FACTOR,
-                             WAIT_QUIT_FLOOR_S)
+                             MODAL_RATIO_MIN, QUITS_PER_HOUR_MAX,
+                             RELAUNCH_OVERHEAD_S, WAIT_EARLY_MARGIN,
+                             WAIT_QUIT_FACTOR, WAIT_QUIT_FLOOR_S)
 from rok_farm import wake
 from rok_farm.logging_setup import INFO, WARN, logger
 
@@ -617,6 +617,41 @@ class PhasesMixin:
                     "wait beats %.0fs", seconds, len(seen),
                     statistics.median(seen), self._quit_threshold_s())
 
+    def _may_quit_again(self) -> bool:
+        """Has the client been closed too often in the last hour?
+
+        The threshold beside this is pure arithmetic -- quit whenever the wait
+        costs more than a relaunch -- and it cannot see that restarts have a
+        shape of their own. It never changed, yet the gap between them drifted
+        from 31 minutes to 12 over ten days, because the marches started coming
+        home sooner and every wait cleared the bar anyway. 2026-09-19 08:20 to
+        09:22: seven restarts, median gap 8.2 minutes, two of them five apart.
+
+        Past the cap the wait is spent alt-tabbed instead, which is what the
+        farm did before the threshold was written.
+        """
+        seen = getattr(self, "_quit_times", None)
+        if seen is None:
+            seen = self._quit_times = []
+        now = time.time()
+        del seen[:len(seen) - 40]
+        recent = [t for t in seen if now - t < 3600]
+        if len(recent) < QUITS_PER_HOUR_MAX:
+            return True
+        oldest = min(recent)
+        print(f"  [{INFO}] {len(recent)} client restarts in the last hour "
+              f"already -- staying in and alt-tabbing this wait instead")
+        logger.info("quit cap: %d restarts since %s -- alt-tab instead",
+                    len(recent),
+                    time.strftime("%H:%M", time.localtime(oldest)))
+        return False
+
+    def _note_quit(self):
+        seen = getattr(self, "_quit_times", None)
+        if seen is None:
+            seen = self._quit_times = []
+        seen.append(time.time())
+
     def _window_check(self, planned_s: float = 0.0) -> bool:
         """May the account be online -- and stay online for planned_s more?
 
@@ -700,7 +735,7 @@ class PhasesMixin:
                 self._score_wait_prediction(before, wait_s, "in-place")
                 return
 
-            if plan > self._quit_threshold_s():
+            if plan > self._quit_threshold_s() and self._may_quit_again():
                 print(f"  [{INFO}] Troops home in ~{wait_s / 60:.1f}min -- "
                       f"longer than the {self._quit_threshold_s() / 60:.1f}min "
                       f"a relaunch costs, quitting the client")
@@ -710,6 +745,7 @@ class PhasesMixin:
                 # client may be the thing that is broken, and poking a panel
                 # into it would be the worst possible moment.
                 self._check_panels_before_quit()
+                self._note_quit()
                 away = time.time()
                 if self._restart_game(f"waiting {plan / 60:.0f}min for troops",
                                       extra_wait=plan):

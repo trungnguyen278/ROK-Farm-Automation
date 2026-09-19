@@ -278,6 +278,22 @@ DELAY_MICRO_PAUSE = (0.40, 0.15)
 RELAUNCH_OVERHEAD_S = 78.0   # seed for the measured cost of a quit+relaunch
 WAIT_QUIT_FACTOR = 1.5       # quit when the wait is worth this many round trips
 WAIT_QUIT_FLOOR_S = 90.0     # never quit for less than this, whatever it learns
+
+# ...and never more often than this, however the arithmetic comes out.
+#
+# The threshold above is pure efficiency: quit whenever the wait costs more
+# than a relaunch. It has no idea that thirty restarts a day look like
+# something. Measured over ten days, the gap between restarts drifted from 31
+# minutes to 12 WITHOUT the threshold being touched -- the marches simply
+# started coming home sooner (median wait 27 min on 09-09, 9 min on 09-18), so
+# every wait cleared the bar. On 2026-09-19 the first hour of the day held
+# SEVEN restarts, a median gap of 8.2 minutes, two of them five minutes apart.
+#
+# The days that never drew a letter ran 19-34 restarts over a 10-12 hour
+# window: two to three an hour. That is what this cap restores. When the cap
+# is reached the farm alt-tabs through the wait instead, which is what it did
+# before the threshold existed.
+QUITS_PER_HOUR_MAX = 3
 WAIT_EARLY_MARGIN = 90.0     # come back this many seconds early
 
 # --- Game process lifecycle ---
