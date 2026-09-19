@@ -36,15 +36,28 @@ RESTART_LIMIT = 5
 # for troops to return (cap 15min)'). A 900s limit equalled it exactly and
 # killed a perfectly healthy farm at the boundary; give it real headroom.
 SILENT_LIMIT = 1500
-STUCK_MINUTES = 75          # no mine started or finished for this long
+# 2026-09-19: tightened from 75 for the move to a new kingdom. The map book
+# is keyed by map id, so arriving on 4096 left the farm with none of the 37
+# terrain cells and 1,302 reach cells it had learned on S11465 -- it is
+# rediscovering walls and edges from scratch, which is exactly when it can
+# circle without finishing anything. Put this back to 75 once 4096.json has
+# filled out and the fault rate is back to where it was.
+STUCK_MINUTES = 50          # no mine started or finished for this long
 # Reporting cadence, NOT detection cadence -- POLL below stays at 15s, so a hang
 # is still caught within seconds. These only control how often the watchdog
 # TALKS. Dropped from 3min/5min once the run went hours without a fault: at that
 # error rate a summary every 3 minutes is noise that hides the lines that matter,
 # and the 5-minute oracle burned real API budget (it was already hitting
 # OpenRouter 429s). Raise the frequency again if faults start clustering.
-SUMMARY_EVERY = 3600        # hourly summary
-ORACLE_EVERY = 3600         # hourly screen check (was 12/hr)
+#
+# 2026-09-19: both dropped to 15 minutes for the new kingdom, on the same
+# reasoning as STUCK_MINUTES above -- and because the oracle is the only
+# check that can see the SCREEN rather than the log, which is what catches a
+# farm that is busy and getting nowhere. Four calls an hour against the old
+# one; if OpenRouter starts returning 429s again, this is the first thing to
+# put back. Restore both to 3600 when the map is no longer new.
+SUMMARY_EVERY = 900         # was 3600
+ORACLE_EVERY = 900          # was 3600
 POLL = 15
 # How long before the same circling evidence is worth saying again. The old
 # alert used a high-water mark that was never reset, so once it had seen a 7
