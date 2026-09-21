@@ -62,15 +62,57 @@ AUTO_BTN_BLUE_MIN = 0.25
 
 # --- Reading the bar -------------------------------------------------------
 # The action-point bar is the green arc under the commander portrait, top left
-# of the CITY view. Counting its bright-green pixels in a fixed band is enough:
-# over 60 saved city frames the count sat at 138-139 in 55 of them (the bar
-# pinned at full) and near 98-100 in the few where it was not.
+# of the CITY view -- a shallow smile, filling left to right.
+#
+# It was first read by counting bright-green pixels in a box and dividing by
+# 139, the count on a frame where the bar was full. The operator killed that
+# measure on 2026-09-21: three city frames it scored 99%, 67%, 67% all looked
+# full to them, and they were right. Two faults, both fatal:
+#
+#   * the gate was S>150 V>180, so when the scene lit differently the arc's
+#     dimmer pixels dropped out. Under a looser gate the same three frames
+#     read 154, 141, 141 -- and drawn as a mask they are the same arc, the
+#     right tip 2px apart on a 52px span. The count was tracking the
+#     LIGHTING, and 80% of the readings it fed were the wrong side of the
+#     threshold that decides whether to spend.
+#   * a count cannot tell a long thin arc from a short fat one, and it counts
+#     anything green. On world-map frames, where that corner holds grass
+#     instead of the portrait, it returned 44%, 96%, even 152% of "full".
+#
+# So measure the arc as an arc. Fitting a circle to the green of three full
+# frames put the centre at (39.4, 27.4) with radius 34.4 and a spread of only
+# 1.16px, and the sweep runs 138.2 degrees (left tip, empty) to 43.9 (right
+# tip, full). Fill is how far round that sweep the green reaches -- an angle,
+# which does not care how bright or how thick the arc is drawn.
+#
+# Measured on a 1533x862 client and left in absolute pixels: whether this HUD
+# scales with the window is not something any saved frame can answer, so it is
+# not assumed either way.
 #
 # The operator's cap is 1500 points, but no arithmetic here needs that: they
-# asked for "80 or 90 percent, roughly", so the fraction of a full arc is the
+# asked for "80 or 90 percent, roughly", so the fraction of the sweep is the
 # whole measurement.
-AP_ARC_BAND = (40, 72, 2, 80)       # y1, y2, x1, x2 in client pixels
-AP_ARC_FULL_PX = 139.0
+AP_ARC_BAND = (30, 85, 0, 95)       # y1, y2, x1, x2 in client pixels
+AP_ARC_CENTRE = (39.4, 27.4)        # x, y of the circle the arc lies on
+AP_ARC_RADIUS = (31.0, 40.0)        # the ring the arc's pixels fall in
+AP_ARC_SWEEP = (138.2, 43.9)        # degrees, empty end -> full end
+AP_ARC_HUE = (40, 70)
+AP_ARC_GATE = (90, 120)             # S, V minimums -- loose, on purpose
+AP_ARC_STEP_DEG = 1.0
+# A tip is anti-aliased away, so a bar the operator calls full reads ~99%.
+# Two blank bins are forgiven before the arc is taken to have ended.
+AP_ARC_GAP_BINS = 2
+
+# Telling the arc from a hillside. Both of these separate cleanly on the eight
+# city frames and six map frames kept under screenshots/keep/ap_arc:
+#   radial spread  arc 1.16-1.76   grass 2.46-2.78
+#   green inside   arc 0 every one grass 16-1039
+# The second is the portrait's own disc, which is brown and gold and has no
+# business being green.
+AP_ARC_SPREAD_MAX = 2.1
+AP_ARC_INNER_MAX = 8
+AP_ARC_MIN_PX = 20
+
 AP_BURN_AT = 0.80                   # spend when the arc is at least this full
 
 # How long to leave the auto running before quitting ends it.
@@ -110,22 +152,64 @@ AP_SPENT_EPS = 0.05
 AP_STATE = PROJECT_ROOT / "data" / "ap_burn.json"
 
 
-def arc_fill(frame) -> float:
-    """How full the action-point arc is, 0.0 to 1.0, or -1.0 if unreadable.
-
-    Only meaningful on a CITY frame: on the world map that corner holds the
-    coordinate readout instead of the portrait.
-    """
-    if frame is None:
-        return -1.0
+def _arc_pixels(frame):
+    """Green pixels of the arc band, as (angle, radius, inside-count)."""
     y1, y2, x1, x2 = AP_ARC_BAND
     band = frame[y1:y2, x1:x2]
     if band.size == 0:
-        return -1.0
+        return None
     hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
-    green = ((hsv[:, :, 0] >= 40) & (hsv[:, :, 0] <= 70) &
-             (hsv[:, :, 1] > 150) & (hsv[:, :, 2] > 180)).sum()
-    return float(green) / AP_ARC_FULL_PX
+    lo, hi = AP_ARC_HUE
+    smin, vmin = AP_ARC_GATE
+    mask = ((hsv[:, :, 0] >= lo) & (hsv[:, :, 0] <= hi) &
+            (hsv[:, :, 1] > smin) & (hsv[:, :, 2] > vmin))
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    cx, cy = AP_ARC_CENTRE
+    xs = xs.astype(float) + x1
+    ys = ys.astype(float) + y1
+    rad = np.hypot(xs - cx, ys - cy)
+    rmin, rmax = AP_ARC_RADIUS
+    on = (rad >= rmin) & (rad <= rmax)
+    inside = int((rad < rmin - 3).sum())
+    if not on.any():
+        return None
+    ang = np.degrees(np.arctan2(ys[on] - cy, xs[on] - cx))
+    return ang, rad[on], inside
+
+
+def arc_fill(frame) -> float:
+    """How far the action-point arc has filled, 0.0 to 1.0, or -1.0 if there
+    is no arc to read.
+
+    Only the CITY view has one: on the world map that corner holds terrain,
+    and the guards below exist because green terrain used to be read as a
+    full bar.
+    """
+    if frame is None:
+        return -1.0
+    found = _arc_pixels(frame)
+    if found is None:
+        return -1.0
+    ang, rad, inside = found
+    if len(ang) < AP_ARC_MIN_PX:
+        return -1.0
+    if inside > AP_ARC_INNER_MAX or rad.std() > AP_ARC_SPREAD_MAX:
+        return -1.0
+
+    empty, full = AP_ARC_SWEEP
+    bins = int(round((empty - full) / AP_ARC_STEP_DEG))
+    edges = np.linspace(empty, full, bins + 1)
+    reached, gap = 0, 0
+    for i in range(bins):
+        if ((ang <= edges[i]) & (ang > edges[i + 1])).any():
+            reached, gap = i + 1, 0
+        else:
+            gap += 1
+            if gap > AP_ARC_GAP_BINS:
+                break
+    return reached / bins
 
 
 def tab_saturation(frame, pct=BARB_TAB_PCT) -> float:

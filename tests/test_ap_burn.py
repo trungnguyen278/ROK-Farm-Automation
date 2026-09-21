@@ -14,6 +14,7 @@ Their three constraints, each with a test here:
 """
 
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -22,24 +23,96 @@ import pytest
 from rok_farm import ap_burn
 
 
-def frame_with_arc(px: int):
-    """A black client frame with `px` bright-green pixels in the arc band."""
+KEEP = Path(__file__).resolve().parents[1] / "screenshots" / "keep" / "ap_arc"
+
+
+def kept(name):
+    """A frame saved out of a live session. Skipped rather than failed when it
+    is gone: screenshots/ is not in the repo, so a fresh clone has none."""
+    path = KEEP / name
+    if not path.exists():
+        pytest.skip(f"{name} is not kept any more")
+    im = cv2.imread(str(path))
+    if im is None:
+        pytest.skip(f"{name} did not decode")
+    return im
+
+
+def drawn_arc(fraction: float, value: int = 230):
+    """A black client frame with the arc drawn `fraction` of the way round.
+
+    Drawn on the fitted circle rather than as a block of pixels: the measure
+    is an angle now, and a rectangle of green is exactly the thing it is
+    supposed to refuse.
+    """
     im = np.zeros((862, 1533, 3), np.uint8)
-    y1, y2, x1, x2 = ap_burn.AP_ARC_BAND
-    # Written straight into the frame: reshaping a non-contiguous slice hands
-    # back a COPY, so filling that leaves the picture black and the first cut
-    # of this test "proved" a full bar reads empty.
-    ys, xs = np.divmod(np.arange(px), x2 - x1)
-    im[y1 + ys, x1 + xs] = (60, 230, 60)   # BGR green, saturated and bright
+    cx, cy = ap_burn.AP_ARC_CENTRE
+    empty, full = ap_burn.AP_ARC_SWEEP
+    if fraction > 0:
+        cv2.ellipse(im, (int(round(cx)), int(round(cy))), (34, 34), 0.0,
+                    empty - (empty - full) * fraction, empty,
+                    (60, value, 60), 3)
     return im
 
 
 def test_a_full_arc_reads_full():
-    assert ap_burn.arc_fill(frame_with_arc(139)) == pytest.approx(1.0, abs=0.02)
+    assert ap_burn.arc_fill(drawn_arc(1.0)) == pytest.approx(1.0, abs=0.05)
 
 
-def test_a_flat_arc_reads_empty():
-    assert ap_burn.arc_fill(frame_with_arc(0)) == 0.0
+def test_a_flat_arc_reads_unreadable():
+    """No arc is not the same as an empty one, and both mean do not spend."""
+    assert ap_burn.arc_fill(drawn_arc(0.0)) == -1.0
+
+
+def test_the_arc_reads_the_same_on_the_frames_the_operator_called_full():
+    """The bug this measure exists for.
+
+    On 2026-09-21 three city frames scored 99%, 67% and 67% by pixel count and
+    the operator said all three looked full. Drawing the masks settled it: the
+    arcs are the same length, and the two "67%" frames were simply lit
+    dimmer, so the old S>150 V>180 gate dropped half their pixels. The
+    threshold that decides whether to spend sits at 80%, right between the
+    two answers.
+    """
+    readings = [ap_burn.arc_fill(kept(n)) for n in (
+        "city_idle_return_city_143910.png",
+        "city_idle_return_city_145339.png",
+        "city_idle_return_city_145621.png")]
+    assert min(readings) >= 0.90, readings
+    assert max(readings) - min(readings) <= 0.10, readings
+
+
+def test_dimming_the_arc_does_not_move_the_reading():
+    """The defect itself, with no saved frame needed to catch it.
+
+    The same arc drawn dim and bright. The old measure counted pixels above a
+    fixed brightness, so it read these two as 67% and 99% -- one side of the
+    spend threshold each.
+    """
+    dim = ap_burn.arc_fill(drawn_arc(1.0, value=140))
+    bright = ap_burn.arc_fill(drawn_arc(1.0, value=230))
+    assert dim == pytest.approx(bright, abs=0.05), (dim, bright)
+
+
+def test_dimming_a_whole_saved_frame_does_not_move_the_reading():
+    """Same thing against a real city frame, lighting taken out of all of it."""
+    im = kept("city_idle_return_city_142533.png")
+    hsv = cv2.cvtColor(im, cv2.COLOR_BGR2HSV)
+    hsv[:, :, 2] = (hsv[:, :, 2] * 0.75).astype(np.uint8)
+    dim = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    assert ap_burn.arc_fill(dim) == pytest.approx(ap_burn.arc_fill(im), abs=0.05)
+
+
+def test_a_partly_spent_arc_reads_part():
+    """12:01 on 2026-09-21: the left arm stops a quarter of the way round."""
+    assert 0.15 <= ap_burn.arc_fill(kept("city_idle_return_city_120143.png")) <= 0.40
+
+
+def test_grass_is_not_a_full_bar():
+    """On the world map that corner holds terrain, and the count used to read
+    it as 44%, 96%, even 152% of a full bar."""
+    for name in sorted(p.name for p in KEEP.glob("NOT_AN_ARC_*.png")):
+        assert ap_burn.arc_fill(kept(name)) == -1.0, name
 
 
 def test_the_threshold_matches_what_was_asked_for():
