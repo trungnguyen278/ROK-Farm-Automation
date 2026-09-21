@@ -225,6 +225,14 @@ def arc_fill(frame) -> float:
             gap += 1
             if gap > AP_ARC_GAP_BINS:
                 break
+    if reached == 0:
+        # Green on the ring, but none of it at the left tip. The bar fills
+        # left to right, so a real one is never empty there while showing
+        # elsewhere -- an empty bar has no green at all and was turned away by
+        # the pixel count above. This is something else wearing the ring:
+        # live at 16:00:43 on 2026-09-21 a frame caught during the client's
+        # relaunch read 0% seven minutes after the same bar read 99%.
+        return -1.0
     return reached / bins
 
 

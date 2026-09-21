@@ -340,3 +340,16 @@ def test_the_dwell_survives_a_queue_that_never_reads(monkeypatch):
     """Queue OCR fails often enough that it cannot be a precondition."""
     fake = DwellFake([])
     assert fake.dwell(200.0, monkeypatch) == []
+
+
+def test_a_ring_that_is_empty_at_the_left_tip_is_not_the_bar():
+    """The bar fills left to right, so a real one is never blank at the left
+    tip while showing further round.
+
+    Live at 16:00:43 on 2026-09-21, forty seconds after a client relaunch, a
+    frame showed the RIGHT arm alone and scored 0% -- seven minutes after the
+    same bar read 99%. An empty bar has no green at all and is turned away by
+    the pixel-count guard, so anything reaching here with a blank left tip is
+    something else wearing the ring.
+    """
+    assert ap_burn.arc_fill(kept("RIGHT_ARM_ONLY_160043.png")) == -1.0
