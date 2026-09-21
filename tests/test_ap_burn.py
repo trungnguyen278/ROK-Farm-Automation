@@ -114,3 +114,45 @@ def test_the_flow_ends_by_quitting_the_client():
     assert "_restart_game" in code, "it never ends the run"
     assert "note_burn" in code, "it never records that it ran"
     assert "_ensure_game_focused" in code, "it would click into another window"
+
+
+def test_reading_the_bar_and_spending_it_are_separate():
+    """They happen in different places, and that is the whole point.
+
+    The arc is legible only in the CITY, and the barbarian auto can only send
+    an army when a march slot is FREE -- which is never true in the city
+    phase, because that phase is reached exactly when the queue filled up.
+    The first cut had them in one place and would have pressed BAT DAU with
+    nowhere to send troops, every single time. The operator caught it: "hang
+    cho day sao xa ap duoc".
+    """
+    import ast
+    import inspect
+
+    import rok_farm.phases as ph
+    import rok_farm.runner as rn
+
+    city = ast.unparse(ast.parse(
+        inspect.getsource(ph.PhasesMixin._phase_city_idle).lstrip()))
+    assert "_note_ap_bar" in city, "the city phase no longer reads the bar"
+    assert "_maybe_burn_ap" not in city, (
+        "the city phase acts on the bar again -- the queue is full there"
+    )
+
+    loop = inspect.getsource(rn.GemFarmRunner.run)
+    assert "_maybe_burn_ap" in loop, (
+        "nothing spends the bar where a march slot is actually free"
+    )
+    assert "slot(s) free" in loop, "the hook moved away from the free slot"
+
+
+def test_the_burn_refuses_when_nothing_is_pending():
+    """Without a reading from the city it must not act on a guess."""
+    import ast
+    import inspect
+
+    import rok_farm.phases as ph
+
+    code = ast.unparse(ast.parse(
+        inspect.getsource(ph.PhasesMixin._maybe_burn_ap).lstrip()))
+    assert "_ap_pending" in code, "it no longer waits to be told"

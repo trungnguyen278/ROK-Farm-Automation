@@ -463,6 +463,12 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                         # still out; keep the prediction bookkeeping in step.
                         self.sync_open_marches(used)
                         print(f"  [{INFO}] Queue: {used}/{total}, {total - used} slot(s) free")
+                        # A slot is free RIGHT NOW, which is the only moment
+                        # the barbarian auto can send an army anywhere. The
+                        # city phase can only ever see a full queue, so it
+                        # reads the bar and this spends it.
+                        if self._maybe_burn_ap():
+                            continue
                     elif self.mines_completed >= self.max_marches:
                         print(f"\n  [{INFO}] Queue likely full ({self.mines_completed}/{self.max_marches} by counter) -- burst done, city + wait for return")
                         self._queue_before_mine = None

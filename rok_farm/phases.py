@@ -135,7 +135,12 @@ class PhasesMixin:
         # Both of these need the city, and only the city: the arc under the
         # portrait and the troop buildings are not on the world map.
         self._maybe_train_troops()
-        self._maybe_burn_ap()
+        # The arc is only READ here. Acting on it here would never work: this
+        # phase is reached when the march queue is full, and the barbarian
+        # auto needs a free slot to send an army to. The operator caught that
+        # -- "hang cho day sao xa ap duoc". So the reading is remembered and
+        # spent at the top of the next mine, where a slot has just come free.
+        self._note_ap_bar()
 
     def _maybe_train_troops(self) -> int:
         """Collect any finished batch and start the next one. Returns how many.
@@ -223,6 +228,26 @@ class PhasesMixin:
             print(f"  [{INFO}] training: {done} batch(es) started")
         return done
 
+    def _note_ap_bar(self) -> float:
+        """Read the action-point arc and remember whether it is worth spending.
+
+        Reading and acting are separate because they happen in different
+        places: the arc is legible only in the city, and the auto can only run
+        when a march slot is free -- which is never true in the city phase.
+        """
+        from rok_farm import ap_burn
+
+        fill = ap_burn.arc_fill(self._grab())
+        if fill < 0:
+            return fill
+        self._ap_pending = ap_burn.due(fill)
+        if self._ap_pending:
+            logger.info("AP arc %.0f%% full -- will spend it when a march "
+                        "slot frees", fill * 100)
+        else:
+            logger.debug("AP arc %.0f%% full -- nothing to do", fill * 100)
+        return fill
+
     def _maybe_burn_ap(self) -> bool:
         """Send the game's own auto after barbarians when the bar is near full.
 
@@ -240,13 +265,9 @@ class PhasesMixin:
         from rok_farm import ap_burn
         from rok_farm.screenshots import save_screenshot
 
-        frame = self._grab()
-        fill = ap_burn.arc_fill(frame)
-        if fill < 0:
+        if not getattr(self, "_ap_pending", False):
             return False
-        if not ap_burn.due(fill):
-            logger.debug("AP arc %.0f%% full -- nothing to do", fill * 100)
-            return False
+        fill = 1.0
 
         planned = ap_burn.AP_DWELL_S[1] + ap_burn.AP_AWAY_S[1]
         if not self._window_check(planned):
@@ -317,6 +338,7 @@ class PhasesMixin:
             return False
 
         ap_burn.note_burn()
+        self._ap_pending = False
         dwell = random.uniform(*ap_burn.AP_DWELL_S)
         away = random.uniform(*ap_burn.AP_AWAY_S)
         print(f"  [{INFO}] AP burn running -- staying in for {dwell / 60:.1f}min, "
