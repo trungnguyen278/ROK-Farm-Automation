@@ -1686,8 +1686,9 @@ def _cli_main():
 
         def _clamp_to_window(self, sx, sy, pad=5):
             x = max(win["left"] + pad, min(win["left"] + win["width"] - pad, sx))
-            top_pad = max(pad, TITLE_BAR_H)
-            y = max(win["top"] + top_pad, min(win["top"] + win["height"] - pad, sy))
+            # See the note in rok_farm/capture_svc._clamp_to_window: top is
+            # already the client top, so no title bar comes off it here.
+            y = max(win["top"] + pad, min(win["top"] + win["height"] - pad, sy))
             return x, y
 
         def _moveto(self, sx, sy):

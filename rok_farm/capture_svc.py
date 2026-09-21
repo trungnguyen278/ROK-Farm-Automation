@@ -287,8 +287,18 @@ class CaptureMixin:
 
     def _clamp_to_window(self, sx: int, sy: int, pad: int = 5) -> tuple[int, int]:
         x = max(self.win["left"] + pad, min(self.win["left"] + self.win["width"] - pad, sx))
-        top_pad = max(pad, TITLE_BAR_H)
-        y = max(self.win["top"] + top_pad, min(self.win["top"] + self.win["height"] - pad, sy))
+        # No title-bar allowance here. win["top"] is already the CLIENT top
+        # -- screen_capture builds it from ClientToScreen(hwnd, (0,0)) and
+        # keeps the frame's own top in "full_top" -- so subtracting a title
+        # bar again just pushes clicks 40px down into the client.
+        #
+        # Measured 2026-09-21: every one of the day's nine off-target clicks
+        # was in the mail panel's tab strip, every one landed 10-12px low
+        # with almost no sideways error, and every one had been aimed at
+        # y=219-225 with the window top at 193 -- exactly the 233 this floor
+        # produced. The launcher's rect comes from ClientToScreen too, so
+        # nothing was relying on the extra room.
+        y = max(self.win["top"] + pad, min(self.win["top"] + self.win["height"] - pad, sy))
         return x, y
 
     def _clamp_to_play_area(self, sx: int, sy: int) -> tuple[int, int]:
