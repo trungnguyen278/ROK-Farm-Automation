@@ -352,7 +352,7 @@ class PhasesMixin:
               f"then out for {away / 60:.1f}min while the troops walk back")
         logger.info("AP burn started: dwell %.0fs then quit for %.0fs",
                     dwell, away)
-        self._sleep_until_woken(dwell, "AP burn dwell")
+        self._ap_dwell(dwell)
 
         # Quitting is what ENDS the run -- their warning, and the reason this
         # needs no sums about how many points to spend.
@@ -366,6 +366,61 @@ class PhasesMixin:
                            extra_wait=away)
         self._view_is_world = False
         return True
+
+    def _ap_dwell(self, dwell: float) -> list:
+        """Sit out the auto run, watching what it does to the march queue.
+
+        This used to be one blind sleep. The operator said why that is not
+        safe to guess at: the auto does not take one march slot, it takes
+        however many are free -- "kha dung bao nhieu march da setup truoc do
+        se dung bay nhieu", depending on the queue and on how many troops
+        there are. So the one measurement taken off the 14:42 run, where
+        exactly one slot happened to be free, is not a rate and cannot be
+        multiplied out to a longer dwell.
+
+        Their own log says what a longer dwell would meet: the queue fell 5->4
+        at 14:37:05 and again at 14:41:56, a gathering march home every four
+        or five minutes. Twenty minutes of blind dwell therefore hands the
+        auto roughly four more slots as they free, and the quit recalls all of
+        them with four to six minutes set aside for the walk home.
+
+        Nothing is clamped here. How much of the queue the barbarians may hold
+        is the operator's call about their own account, and it needs numbers
+        under it rather than another single sample. What this does is look:
+        read the queue through the run and write down what actually happens.
+
+        The interval is randomised on purpose. A fixed beat is what drew the
+        detection warning before, and this is only a screen read -- no input
+        reaches the game from here.
+        """
+        started = time.time()
+        end = started + dwell
+        seen = []
+        while True:
+            left = end - time.time()
+            if left <= 0:
+                break
+            if not self._sleep_until_woken(
+                    min(left, random.uniform(70.0, 140.0)), "AP burn dwell"):
+                break
+            queue = self._detect_march_queue(retries=2)
+            if not queue:
+                continue
+            used, total = queue
+            at = time.time() - started
+            seen.append((at, used, total))
+            logger.info("AP dwell %.0fs in: queue %d/%d", at, used, total)
+        if seen:
+            held = max(u for _, u, _ in seen) - seen[0][1]
+            logger.info("AP dwell over after %.0fs: queue %s, the auto took "
+                        "%d slot(s) beyond the one it started with",
+                        time.time() - started,
+                        " -> ".join(f"{u}/{t}" for _, u, t in seen),
+                        max(0, held))
+        else:
+            logger.info("AP dwell over after %.0fs: the queue never read",
+                        time.time() - started)
+        return seen
 
     def _harvest_city_before_quit(self):
         """Tap the resource bubbles in the city, on the way out of the client.

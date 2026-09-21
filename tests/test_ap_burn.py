@@ -21,6 +21,8 @@ import numpy as np
 import pytest
 
 from rok_farm import ap_burn
+from rok_farm import phases as ph
+from rok_farm.phases import PhasesMixin
 
 
 KEEP = Path(__file__).resolve().parents[1] / "screenshots" / "keep" / "ap_arc"
@@ -257,3 +259,84 @@ def test_the_burn_refuses_when_nothing_is_pending():
     code = ast.unparse(ast.parse(
         inspect.getsource(ph.PhasesMixin._maybe_burn_ap).lstrip()))
     assert "_ap_pending" in code, "it no longer waits to be told"
+
+
+# --- Watching the queue through the auto run -------------------------------
+#
+# The operator corrected the arithmetic on 2026-09-21: the auto does not send
+# one march, it sends as many as there are free slots, "kha dung bao nhieu
+# march da setup truoc do se dung bay nhieu", depending on the queue and on
+# how many troops there are. That makes a single sample taken with one slot
+# free useless as a rate, and it makes a blind sleep through the dwell the
+# wrong shape -- their log has a gathering march coming home every four or
+# five minutes, and the auto takes each slot as it frees.
+
+class FakeClock:
+    """Time that only moves when something sleeps.
+
+    The first cut of these tests let the fake return from its sleep instantly
+    while the dwell measured the real wall clock, so the loop never ran down
+    and pytest hung. The stub has to own the clock, not just the sleeping.
+    """
+
+    def __init__(self):
+        self.now = 1_000_000.0
+
+    def time(self):
+        return self.now
+
+
+class DwellFake(PhasesMixin):
+    """A runner that only knows how to sleep and read a queue."""
+
+    def __init__(self, readings, wake_after=None):
+        self.readings = list(readings)
+        self.wake_after = wake_after
+        self.slept = []
+        self.clock = FakeClock()
+
+    def _sleep_until_woken(self, seconds, reason):
+        self.slept.append(seconds)
+        self.clock.now += seconds
+        if self.wake_after is not None and len(self.slept) >= self.wake_after:
+            return False
+        return True
+
+    def _detect_march_queue(self, retries=3):
+        return self.readings.pop(0) if self.readings else None
+
+    def dwell(self, seconds, monkeypatch):
+        monkeypatch.setattr(ph.time, "time", self.clock.time)
+        return self._ap_dwell(seconds)
+
+
+def test_the_dwell_reads_the_queue_instead_of_sleeping_blind(monkeypatch):
+    fake = DwellFake([(4, 5), (5, 5), (5, 5)])
+    seen = fake.dwell(300.0, monkeypatch)
+    assert seen, "the dwell recorded nothing about the queue"
+    assert [u for _, u, _ in seen] == [4, 5, 5]
+
+
+def test_the_dwell_never_probes_on_a_fixed_beat(monkeypatch):
+    """A fixed interval is the fingerprint that drew the warning before."""
+    fake = DwellFake([(4, 5)] * 20)
+    fake.dwell(1500.0, monkeypatch)
+    assert len(set(fake.slept[:-1])) > 1, fake.slept
+
+
+def test_the_dwell_still_adds_up_to_the_time_it_was_given(monkeypatch):
+    fake = DwellFake([(4, 5)] * 40)
+    fake.dwell(900.0, monkeypatch)
+    assert sum(fake.slept) == pytest.approx(900.0, abs=1.0)
+
+
+def test_a_wake_request_cuts_the_dwell_short(monkeypatch):
+    fake = DwellFake([(4, 5)] * 20, wake_after=2)
+    fake.dwell(1800.0, monkeypatch)
+    assert sum(fake.slept) < 1800.0
+
+
+def test_the_dwell_survives_a_queue_that_never_reads(monkeypatch):
+    """Queue OCR fails often enough that it cannot be a precondition."""
+    fake = DwellFake([])
+    assert fake.dwell(200.0, monkeypatch) == []
