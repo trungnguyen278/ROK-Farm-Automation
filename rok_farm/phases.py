@@ -132,6 +132,125 @@ class PhasesMixin:
         if random.random() < 0.3:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
+        # The city is the only view where the action-point arc is readable --
+        # the world map puts a coordinate readout in that corner instead.
+        self._maybe_burn_ap()
+
+    def _maybe_burn_ap(self) -> bool:
+        """Send the game's own auto after barbarians when the bar is near full.
+
+        Not for the points: the operator said plainly that spending them hardly
+        matters. It is that an account which gathers all day and does nothing
+        else is a strange shape, and none of the anti-cheat letters has been
+        explained by anything smaller.
+
+        Every screen here was measured with the operator watching it, and the
+        detail that shapes the ending is theirs: closing the client stops an
+        auto run and sends the troops home. That is not an obstacle to work
+        around, it is the brake -- the farm lets it run a short random while
+        and then quits, which caps what gets spent without any arithmetic.
+        """
+        from rok_farm import ap_burn
+        from rok_farm.screenshots import save_screenshot
+
+        frame = self._grab()
+        fill = ap_burn.arc_fill(frame)
+        if fill < 0:
+            return False
+        if not ap_burn.due(fill):
+            logger.debug("AP arc %.0f%% full -- nothing to do", fill * 100)
+            return False
+
+        planned = ap_burn.AP_DWELL_S[1] + ap_burn.AP_AWAY_S[1]
+        if not self._window_check(planned):
+            return False
+
+        proc = None
+        try:
+            from rok_farm.session_control import game_proc
+            proc = game_proc()
+        except Exception:
+            pass
+        if proc is not None:
+            up = time.time() - proc.create_time()
+            if up < ap_burn.AP_WARMUP_S:
+                logger.info("AP arc %.0f%% full but the client is only %.0fs "
+                            "old; the auto errors before %.0fs -- leaving it",
+                            fill * 100, up, ap_burn.AP_WARMUP_S)
+                return False
+
+        print("")
+        print(f"  [{INFO}] AP bar is {fill * 100:.0f}% full -- sending the "
+              f"game's auto after barbarians")
+        logger.info("AP burn: arc %.0f%% full, starting", fill * 100)
+        if not self._ensure_game_focused("AP burn"):
+            return False
+
+        if not self._on_world_map():
+            self._toggle_view("ap_burn")
+            self._wait(random.uniform(1.5, 2.5))
+
+        self._click_pct(*ap_burn.SEARCH_BTN_PCT, jitter_px=6)
+        self._wait(random.uniform(1.8, 2.6))
+        frame = self._grab()
+        if not ap_burn.auto_button_visible(frame):
+            print(f"  [{WARN}] AP burn: the search panel did not open -- giving up")
+            logger.warning("AP burn: search panel never appeared")
+            save_screenshot(frame, "AP_NO_SEARCH_PANEL")
+            return False
+
+        sat = ap_burn.tab_saturation(frame)
+        if sat < ap_burn.TAB_ACTIVE_SAT:
+            logger.info("AP burn: panel is on the other tab (sat %.0f) -- "
+                        "switching to the barbarian one", sat)
+            self._click_pct(*ap_burn.BARB_TAB_PCT, jitter_px=5)
+            self._wait(random.uniform(1.0, 1.8))
+            frame = self._grab()
+
+        self._click_pct(*ap_burn.AUTO_BTN_PCT, jitter_px=5)
+        self._wait(random.uniform(2.0, 3.0))
+        frame = self._grab()
+        from rok_farm.state_probe import dim_ratio
+        if frame is None or dim_ratio(frame) <= MODAL_RATIO_MIN:
+            print(f"  [{WARN}] AP burn: the auto panel did not open -- giving up")
+            logger.warning("AP burn: auto panel never appeared")
+            if frame is not None:
+                save_screenshot(frame, "AP_NO_AUTO_PANEL")
+            self._dismiss_modal()
+            return False
+
+        self._click_pct(*ap_burn.START_BTN_PCT, jitter_px=6)
+        self._wait(random.uniform(2.5, 3.5))
+        frame = self._grab()
+        if frame is not None and dim_ratio(frame) > MODAL_RATIO_MIN:
+            print(f"  [{WARN}] AP burn: the panel is still up after START")
+            logger.warning("AP burn: panel still open after pressing start")
+            save_screenshot(frame, "AP_START_DID_NOTHING")
+            self._dismiss_modal()
+            return False
+
+        ap_burn.note_burn()
+        dwell = random.uniform(*ap_burn.AP_DWELL_S)
+        away = random.uniform(*ap_burn.AP_AWAY_S)
+        print(f"  [{INFO}] AP burn running -- staying in for {dwell / 60:.1f}min, "
+              f"then out for {away / 60:.1f}min while the troops walk back")
+        logger.info("AP burn started: dwell %.0fs then quit for %.0fs",
+                    dwell, away)
+        self._sleep_until_woken(dwell, "AP burn dwell")
+
+        # Quitting is what ENDS the run -- their warning, and the reason this
+        # needs no sums about how many points to spend.
+        #
+        # No harvest or mail check on the way out. Those belong to the ordinary
+        # planned quit, and a test holds them to exactly one call site so that
+        # "only before quitting" stays a fact rather than a habit. The bubbles
+        # keep until the next ordinary exit, minutes later.
+        self._note_quit()
+        self._restart_game("ending the AP run and bringing the troops home",
+                           extra_wait=away)
+        self._view_is_world = False
+        return True
+
     def _harvest_city_before_quit(self):
         """Tap the resource bubbles in the city, on the way out of the client.
 
