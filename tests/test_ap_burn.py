@@ -49,23 +49,47 @@ def test_the_threshold_matches_what_was_asked_for():
 
 def test_a_half_full_bar_is_left_alone(monkeypatch):
     monkeypatch.setattr(ap_burn, "last_burn", lambda: 0.0)
-    assert not ap_burn.due(0.5)
+    assert not ap_burn.due(0.5, gap=2400.0)
 
 
 def test_a_near_full_bar_is_due(monkeypatch):
     monkeypatch.setattr(ap_burn, "last_burn", lambda: 0.0)
-    assert ap_burn.due(0.85)
+    assert ap_burn.due(0.85, gap=2400.0)
 
 
 def test_it_does_not_run_twice_in_a_row(monkeypatch):
-    """The bar takes hours to refill; a second run inside minutes means the
-    reading was wrong, not that there is more to spend."""
+    """A second attempt a minute later would be a loop, not a decision."""
     monkeypatch.setattr(ap_burn, "last_burn", lambda: time.time() - 60)
-    assert not ap_burn.due(1.0)
+    assert not ap_burn.due(1.0, gap=2400.0)
 
 
-def test_the_gap_outlasts_a_farm_session(monkeypatch):
-    assert ap_burn.AP_MIN_GAP_S >= 3 * 3600
+def test_it_may_try_again_within_the_hour(monkeypatch):
+    """Six hours was the first guess and it was wrong twice: the operator
+    refills the bar from a potion, and a run cut short spends almost nothing,
+    so the bar is still full and the wait forbade exactly the retry that was
+    wanted."""
+    monkeypatch.setattr(ap_burn, "last_burn", lambda: time.time() - 3000)
+    assert ap_burn.due(1.0, gap=2400.0)
+
+
+def test_the_gap_is_not_a_fixed_number():
+    lo, hi = ap_burn.AP_MIN_GAP_S
+    assert lo < hi, "a fixed spacing between visits is its own pattern"
+    assert 1800 <= lo and hi <= 7200
+
+
+def test_a_run_that_changed_nothing_is_noticed(tmp_path, monkeypatch):
+    """If the bar is where it was, the auto found no free march slot."""
+    state = tmp_path / "ap.json"
+    monkeypatch.setattr(ap_burn, "AP_STATE", state)
+    ap_burn.note_burn(1.0)
+    assert ap_burn.spent_nothing(0.99)
+    assert not ap_burn.spent_nothing(0.40)
+
+
+def test_nothing_is_claimed_before_the_first_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap_burn, "AP_STATE", tmp_path / "none.json")
+    assert not ap_burn.spent_nothing(1.0)
 
 
 def test_the_warmup_matches_the_operators_warning():

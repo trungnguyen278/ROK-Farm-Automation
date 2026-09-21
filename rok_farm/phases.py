@@ -241,7 +241,12 @@ class PhasesMixin:
         if fill < 0:
             return fill
         self._ap_pending = ap_burn.due(fill)
+        self._ap_fill = fill
         if self._ap_pending:
+            if ap_burn.spent_nothing(fill):
+                logger.warning("AP arc still %.0f%% full -- the last run "
+                               "spent nothing; the auto may have had no free "
+                               "march slot", fill * 100)
             logger.info("AP arc %.0f%% full -- will spend it when a march "
                         "slot frees", fill * 100)
         else:
@@ -339,7 +344,7 @@ class PhasesMixin:
             self._dismiss_modal()
             return False
 
-        ap_burn.note_burn()
+        ap_burn.note_burn(getattr(self, "_ap_fill", 0.0))
         self._ap_pending = False
         dwell = random.uniform(*ap_burn.AP_DWELL_S)
         away = random.uniform(*ap_burn.AP_AWAY_S)

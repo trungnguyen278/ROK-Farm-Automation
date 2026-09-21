@@ -91,9 +91,22 @@ AP_WARMUP_S = 180.0
 # farming resumes.
 AP_AWAY_S = (270.0, 360.0)
 
-# Never twice in the same stretch of a day. The bar takes hours to refill, so
-# this is a backstop against a misread rather than a real limit.
-AP_MIN_GAP_S = 6 * 3600.0
+# How long before trying again.
+#
+# This started at six hours, on the reasoning that the bar takes hours to
+# refill so anything sooner must be a misreading. That was wrong twice over.
+# The operator refills it from a potion, and -- as they pointed out after the
+# first live run -- a run that ends early spends almost nothing, so the bar is
+# still full afterwards and the six hours were forbidding exactly the retry
+# that was called for.
+#
+# The bar itself is the evidence, so the gap only has to stop a tight loop.
+# Randomised, because a fixed spacing between visits is its own pattern.
+AP_MIN_GAP_S = (2400.0, 4800.0)
+
+# If a run leaves the bar no lower than it found it, the auto is not actually
+# spending anything -- worth saying out loud rather than quietly retrying.
+AP_SPENT_EPS = 0.05
 AP_STATE = PROJECT_ROOT / "data" / "ap_burn.json"
 
 
@@ -148,24 +161,43 @@ def auto_button_visible(frame) -> bool:
     return bool(blue >= AUTO_BTN_BLUE_MIN)
 
 
-def last_burn() -> float:
+def last_run() -> tuple[float, float]:
+    """When the last run started, and how full the bar was then."""
     try:
-        return float(json.loads(AP_STATE.read_text(encoding="utf-8"))["last"])
+        d = json.loads(AP_STATE.read_text(encoding="utf-8"))
+        return float(d.get("last", 0.0)), float(d.get("fill", 0.0))
     except Exception:
-        return 0.0
+        return 0.0, 0.0
 
 
-def note_burn() -> None:
+def last_burn() -> float:
+    return last_run()[0]
+
+
+def note_burn(fill: float = 0.0) -> None:
     try:
         AP_STATE.parent.mkdir(parents=True, exist_ok=True)
-        AP_STATE.write_text(json.dumps({"last": time.time()}), encoding="utf-8")
+        AP_STATE.write_text(json.dumps({"last": time.time(), "fill": fill}),
+                            encoding="utf-8")
     except Exception:
         pass
 
 
-def due(fill: float, now: float | None = None) -> bool:
+def spent_nothing(fill_now: float) -> bool:
+    """Did the last run leave the bar exactly where it found it?"""
+    when, fill_then = last_run()
+    if not when or fill_then <= 0:
+        return False
+    return fill_now >= fill_then - AP_SPENT_EPS
+
+
+def due(fill: float, now: float | None = None,
+        gap: float | None = None) -> bool:
     """Is the bar full enough, and has it been long enough since the last run?"""
     if fill < AP_BURN_AT:
         return False
     now = now if now is not None else time.time()
-    return now - last_burn() >= AP_MIN_GAP_S
+    if gap is None:
+        import random
+        gap = random.uniform(*AP_MIN_GAP_S)
+    return now - last_burn() >= gap
