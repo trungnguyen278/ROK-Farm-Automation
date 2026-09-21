@@ -132,9 +132,96 @@ class PhasesMixin:
         if random.random() < 0.3:
             self._actions.do(random.choice(["stare", "micro_afk", "idle_drag"]))
 
-        # The city is the only view where the action-point arc is readable --
-        # the world map puts a coordinate readout in that corner instead.
+        # Both of these need the city, and only the city: the arc under the
+        # portrait and the troop buildings are not on the world map.
+        self._maybe_train_troops()
         self._maybe_burn_ap()
+
+    def _maybe_train_troops(self) -> int:
+        """Collect any finished batch and start the next one. Returns how many.
+
+        Four clicks per building, each verified before the next: collect,
+        select, open the panel, press HUAN LUYEN. Nothing here trusts the
+        ordering of anything -- the gem button sits one click from the free
+        one, so the target is re-checked for orange immediately before it is
+        pressed.
+        """
+        from rok_farm import training
+        from rok_farm.screenshots import save_screenshot
+        from rok_farm.state_probe import dim_ratio
+
+        frame = self._grab()
+        banners = training.find_banners(frame)
+        if not banners:
+            return 0
+        if not self._window_check(120.0):
+            return 0
+        if not self._ensure_game_focused("troop training"):
+            return 0
+
+        print("")
+        print(f"  [{INFO}] {len(banners)} troop building(s) finished -- "
+              f"collecting and starting the next batch")
+        logger.info("training: %d banner(s) ready", len(banners))
+        done = 0
+        for _ in range(len(banners)):
+            frame = self._grab()
+            banners = training.find_banners(frame)
+            if not banners:
+                break
+            h, w = frame.shape[:2]
+            tx, ty = training.building_point(banners[0])
+
+            self._click_pct(tx / w, ty / h, jitter_px=3)     # collect
+            self._wait(random.uniform(1.2, 2.0))
+            self._click_pct(tx / w, ty / h, jitter_px=3)     # select
+            self._wait(random.uniform(1.4, 2.2))
+
+            frame = self._grab()
+            hexes = training.menu_hexes(frame)
+            if not hexes:
+                logger.info("training: no menu after selecting -- collected "
+                            "only")
+                continue
+            hx, hy = hexes[-1][0], hexes[-1][1]
+            self._click_pct(hx / w, hy / h, jitter_px=4)     # open the panel
+            self._wait(random.uniform(1.6, 2.4))
+
+            frame = self._grab()
+            if frame is None or dim_ratio(frame) < training.TRAIN_PANEL_DIM_MIN:
+                logger.warning("training: the panel did not open")
+                if frame is not None:
+                    save_screenshot(frame, "TRAIN_NO_PANEL")
+                self._dismiss_modal()
+                continue
+
+            point = training.train_point(frame)
+            if point is None:
+                # Either the panel is not what was expected or the free button
+                # is not where it should be. Both mean: do not click.
+                print(f"  [{WARN}] training: cannot place HUAN LUYEN safely "
+                      f"-- leaving this one")
+                logger.warning("training: no safe HUAN LUYEN point")
+                save_screenshot(frame, "TRAIN_NO_SAFE_POINT")
+                self._dismiss_modal()
+                continue
+            self._click_pct(point[0] / w, point[1] / h, jitter_px=4)
+            self._wait(random.uniform(1.8, 2.6))
+
+            frame = self._grab()
+            if frame is not None and dim_ratio(frame) >= training.TRAIN_PANEL_DIM_MIN:
+                logger.warning("training: the panel is still up after HUAN "
+                               "LUYEN")
+                save_screenshot(frame, "TRAIN_STILL_OPEN")
+                self._dismiss_modal()
+                continue
+            done += 1
+            logger.info("training: batch %d started", done)
+            self._wait(random.uniform(0.8, 1.6))
+
+        if done:
+            print(f"  [{INFO}] training: {done} batch(es) started")
+        return done
 
     def _maybe_burn_ap(self) -> bool:
         """Send the game's own auto after barbarians when the bar is near full.
