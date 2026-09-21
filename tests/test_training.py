@@ -131,3 +131,43 @@ def test_the_farm_asks_before_clicking_anything():
 def test_it_does_nothing_when_no_batch_is_ready():
     """The common case: the farm passes through the city many times a day."""
     assert training.find_banners(load(CITY_NONE_READY)) == []
+
+
+# --- Four buildings at once ------------------------------------------------
+#
+# The operator asked what happens when all four troop types finish together.
+# The loop handles them one at a time in the same city visit, and it used to
+# take banners[0] on every pass -- which is right only while each one clears.
+# 2 of the first 3 live runs failed at "no menu after selecting", and a banner
+# whose sequence fails is still there, still first, on the next look.
+
+def test_a_stuck_building_does_not_eat_the_other_three():
+    banners = [(100, 100, 50, 40), (300, 100, 50, 40),
+               (100, 300, 50, 40), (300, 300, 50, 40)]
+    tried = []
+    picked = []
+    for _ in range(len(banners)):
+        b = training.not_yet_tried(banners, tried)
+        if b is None:
+            break
+        tried.append((b[0], b[1]))
+        picked.append((b[0], b[1]))
+    assert picked == [(100, 100), (300, 100), (100, 300), (300, 300)]
+
+
+def test_a_banner_that_drifts_a_few_pixels_is_still_the_same_one():
+    """Re-detection between clicks moves a centre slightly; that is not a
+    second building."""
+    tried = [(100, 100)]
+    assert training.not_yet_tried([(103, 97, 50, 40)], tried) is None
+
+
+def test_a_neighbour_is_not_mistaken_for_the_one_already_tried():
+    tried = [(100, 100)]
+    b = training.not_yet_tried([(100 + training.TRAIN_SAME_BANNER_PX + 5,
+                                 100, 50, 40)], tried)
+    assert b is not None
+
+
+def test_nothing_left_to_try_stops_rather_than_looping():
+    assert training.not_yet_tried([(100, 100, 50, 40)], [(100, 100)]) is None

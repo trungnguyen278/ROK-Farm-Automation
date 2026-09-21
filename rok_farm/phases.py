@@ -169,13 +169,20 @@ class PhasesMixin:
               f"collecting and starting the next batch")
         logger.info("training: %d banner(s) ready", len(banners))
         done = 0
+        tried: list[tuple[int, int]] = []
         for _ in range(len(banners)):
             frame = self._grab()
             banners = training.find_banners(frame)
             if not banners:
                 break
+            banner = training.not_yet_tried(banners, tried)
+            if banner is None:
+                logger.info("training: the %d banner(s) still up have all had "
+                            "their turn this visit", len(banners))
+                break
+            tried.append((banner[0], banner[1]))
             h, w = frame.shape[:2]
-            tx, ty = training.building_point(banners[0])
+            tx, ty = training.building_point(banner)
 
             self._click_pct(tx / w, ty / h, jitter_px=3)     # collect
             self._wait(random.uniform(1.2, 2.0))
@@ -185,8 +192,13 @@ class PhasesMixin:
             frame = self._grab()
             hexes = training.menu_hexes(frame)
             if not hexes:
+                # 2 of the first 3 live runs ended here and none of them left
+                # a picture, so there is still nothing to say WHY the two
+                # clicks did not open the building menu.
                 logger.info("training: no menu after selecting -- collected "
                             "only")
+                if frame is not None:
+                    save_screenshot(frame, "TRAIN_NO_MENU")
                 continue
             hx, hy = hexes[-1][0], hexes[-1][1]
             self._click_pct(hx / w, hy / h, jitter_px=4)     # open the panel

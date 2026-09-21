@@ -78,6 +78,28 @@ NGAY_TO_TRAIN_DX = 251
 TRAIN_PANEL_DIM_MIN = 2.0
 
 
+# Two banners are the same building if their centres are this close. The
+# banners themselves are 34-70px wide and 28-60 tall and sit over separate
+# buildings, so nothing legitimate lands inside this of its neighbour.
+TRAIN_SAME_BANNER_PX = 40
+
+
+def not_yet_tried(banners, tried, near=TRAIN_SAME_BANNER_PX):
+    """The first banner that is not one already attempted this visit.
+
+    The loop used to take banners[0] every time. That is right only while
+    each building clears: a banner whose sequence fails -- and 2 of the first
+    3 live runs failed, at "no menu after selecting" -- is still there on the
+    next look, still first, and takes every remaining attempt with it. With
+    four buildings ready that means one stuck one and three never touched.
+    """
+    for b in banners:
+        if all(abs(b[0] - tx) > near or abs(b[1] - ty) > near
+               for tx, ty in tried):
+            return b
+    return None
+
+
 def find_banners(frame) -> list[tuple[int, int, int, int]]:
     """Every "troops ready" banner, as (cx, cy, w, h), top-left first."""
     if frame is None:
