@@ -79,10 +79,14 @@ def test_the_client_is_shut_long_enough_for_troops_to_walk_back():
     assert lo >= 240 and hi <= 600
 
 
-def test_the_dwell_is_random_and_short():
+def test_the_dwell_is_random_and_long_enough_to_matter():
+    """Two to five minutes was the first guess and the operator rejected it:
+    the farm can spare one march slot, so the auto sends one army at a time
+    and a few minutes barely touches the bar. Twenty-odd is their number."""
     lo, hi = ap_burn.AP_DWELL_S
     assert lo < hi, "a fixed dwell is a fingerprint"
-    assert hi <= 360, "the auto is meant to be a visit, not a second job"
+    assert lo >= 600, "too short to spend anything with a single march slot"
+    assert hi <= 2100, "the client is online for all of this"
 
 
 def test_the_panel_open_check_separates_the_two_states():

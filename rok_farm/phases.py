@@ -269,6 +269,8 @@ class PhasesMixin:
             return False
         fill = 1.0
 
+        # The window has to hold the whole thing: the dwell with the client
+        # open, and the stretch out while the recalled troops walk home.
         planned = ap_burn.AP_DWELL_S[1] + ap_burn.AP_AWAY_S[1]
         if not self._window_check(planned):
             return False

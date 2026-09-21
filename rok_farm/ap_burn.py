@@ -73,9 +73,18 @@ AP_ARC_BAND = (40, 72, 2, 80)       # y1, y2, x1, x2 in client pixels
 AP_ARC_FULL_PX = 139.0
 AP_BURN_AT = 0.80                   # spend when the arc is at least this full
 
-# Long enough that the auto gets a few attacks in, short enough that it is not
-# a second job. Randomised because a fixed dwell is a fingerprint.
-AP_DWELL_S = (120.0, 300.0)
+# How long to leave the auto running before quitting ends it.
+#
+# The first cut was two to five minutes, and the operator watched it and said
+# that is nowhere near enough: the farm can spare exactly ONE march slot, so
+# the auto sends one army at a time and a few minutes barely dents the bar.
+# Twenty-odd minutes is their number.
+#
+# It costs online time -- the client stays up throughout -- but only once in
+# six hours, and the queue is full for that whole stretch anyway, so the farm
+# would have been waiting for returns regardless. Randomised because a fixed
+# dwell is a fingerprint of its own.
+AP_DWELL_S = (900.0, 1500.0)
 # What the client has to have been up for before the auto will run at all.
 AP_WARMUP_S = 180.0
 # And how long to stay out afterwards, so the recalled troops are home before
