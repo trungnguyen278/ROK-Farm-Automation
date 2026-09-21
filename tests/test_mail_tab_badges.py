@@ -82,3 +82,31 @@ def test_the_wrong_active_tab_check_is_gone():
                      if not ln.strip().startswith("#"))
     assert "_detect_active_mail_tab_x" not in code, \
         "the active-tab detector is back; it was wrong on every frame tested"
+
+
+# --- The alert border ------------------------------------------------------
+
+def test_an_alert_border_is_not_an_empty_mailbox():
+    """2026-09-21 16:01:05 reported 0 badged tabs off a panel whose HE THONG
+    tab carries a red 3. A red border round the whole client had filled the
+    strip the badges are counted in.
+
+    Measured on the 26px edge ring: 42.3% and 55.9% red on the three alert
+    frames, 1.8% on an ordinary city frame, and nothing else in 645 frames
+    came near.
+    """
+    from rok_farm.state_probe import alert_border, under_alert
+    keep = PROJECT_ROOT / "screenshots"
+    alert = keep / "gem_farm_test" / "MAIL_NO_TAB_BADGES_160038.png"
+    if not alert.exists():
+        pytest.skip("the alert frame is not kept any more")
+    im = cv2.imread(str(alert))
+    assert under_alert(im), alert_border(im)
+
+    calm = sorted(keep.glob("**/MAIL_AFTER_READ_*.png"))
+    if not calm:
+        pytest.skip("no ordinary mail panels are kept any more")
+    for f in calm:
+        c = cv2.imread(str(f))
+        if c is not None:
+            assert not under_alert(c), (f.name, alert_border(c))

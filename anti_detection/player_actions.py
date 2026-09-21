@@ -212,6 +212,21 @@ def act_mail(ctx: PlayerActionCtx):
     logger.info("mail: %d tab(s) with unread badges", len(badge_tabs))
 
     if not badge_tabs:
+        # Unless the alert border is up, in which case nothing red near the
+        # edge of the frame means what it usually does. 2026-09-21 16:01:05
+        # this branch reported an empty mailbox off a panel whose HE THONG tab
+        # plainly carries a red 3: the border's own red filled the strip the
+        # badges are counted in. An empty mailbox and an unreadable frame are
+        # not the same answer, and only one of them should be written down.
+        from rok_farm.state_probe import alert_border, ALERT_BORDER_MIN
+        edge = alert_border(frame)
+        if edge >= ALERT_BORDER_MIN:
+            print("    tab badges unreadable -- the alert border is up")
+            logger.warning("mail: %.0f%% of the frame's edge is alert red; the "
+                           "tab badges cannot be counted through it, leaving "
+                           "the mail for the next check", edge * 100)
+            _close_mail(ctx)
+            return
         print("    no tab badges found")
         # Measured 2026-09-13 over the whole log: the mail button's own red
         # badge was detected 47 times, the panel opened 47 times, and

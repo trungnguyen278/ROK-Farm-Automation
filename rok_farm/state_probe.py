@@ -134,3 +134,50 @@ class StateProbeMixin:
         overlay = "modal" if verdict.blocked else "none"
         return ScreenState(view=verdict.view, overlay=overlay, confidence=0.8,
                            note=f"{state.note} | oracle:{verdict.source}")
+
+
+# --- The alert border ------------------------------------------------------
+# A red border round the whole client. It appeared on exactly 3 of 645 saved
+# frames, all of them between 16:00:38 and 16:00:43 on 2026-09-21, and in
+# those five seconds it broke two colour detectors at once:
+#
+#   * the action-point arc read 0% full, because the red tint pulled the left
+#     half of the arc from hue 46 to hue 33 and out of the green gate, seven
+#     minutes after the same bar read 99%;
+#   * the mail check found "0 tab(s) with unread badges" on a panel whose
+#     HE THONG tab plainly carries a red 3, because the border's own red
+#     swamped the strip the badges are counted in.
+#
+# Measured on the ring 26px deep round the edge: 42.3% and 55.9% red on the
+# three alert frames against 1.8% on an ordinary city frame, and interiors of
+# 0.3-2.3% either way. Nothing else in 645 frames came near.
+#
+# What the border MEANS in game is the operator's to say. What it means here
+# is narrower and enough: while it is up, a detector that reads colour off the
+# HUD is not to be believed.
+ALERT_BORDER_PX = 26
+ALERT_BORDER_MIN = 0.25
+
+
+def alert_border(frame) -> float:
+    """How much of the client's edge is alert red, 0.0 to 1.0."""
+    if frame is None:
+        return 0.0
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    red = (((hsv[:, :, 0] <= 10) | (hsv[:, :, 0] >= 170)) &
+           (hsv[:, :, 1] > 120) & (hsv[:, :, 2] > 100))
+    h, w = red.shape
+    t = ALERT_BORDER_PX
+    if h <= 2 * t or w <= 2 * t:
+        return 0.0
+    ring = np.zeros_like(red)
+    ring[:t, :] = True
+    ring[-t:, :] = True
+    ring[:, :t] = True
+    ring[:, -t:] = True
+    return float(red[ring].mean())
+
+
+def under_alert(frame) -> bool:
+    """True while the alert border is up, so colour readings are unsafe."""
+    return alert_border(frame) >= ALERT_BORDER_MIN
