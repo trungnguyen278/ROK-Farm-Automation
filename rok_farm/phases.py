@@ -14,7 +14,7 @@ import time
 
 from anti_detection.player_actions import mail_badge_count
 from rok_farm.config import (MAIL_SURPRISE, MAX_MARCH_MINUTES,
-                             MODAL_RATIO_MIN, QUITS_PER_HOUR_MAX,
+                             MODAL_RATIO_MIN, QUIT_GAP_TARGET_S,
                              RELAUNCH_OVERHEAD_S, WAIT_EARLY_MARGIN,
                              WAIT_QUIT_FACTOR, WAIT_QUIT_FLOOR_S)
 from rok_farm import wake
@@ -846,32 +846,43 @@ class PhasesMixin:
                     statistics.median(seen), self._quit_threshold_s())
 
     def _may_quit_again(self) -> bool:
-        """Has the client been closed too often in the last hour?
+        """Has enough time passed since the last restart -- probably?
 
-        The threshold beside this is pure arithmetic -- quit whenever the wait
-        costs more than a relaunch -- and it cannot see that restarts have a
-        shape of their own. It never changed, yet the gap between them drifted
-        from 31 minutes to 12 over ten days, because the marches started coming
-        home sooner and every wait cleared the bar anyway. 2026-09-19 08:20 to
-        09:22: seven restarts, median gap 8.2 minutes, two of them five apart.
+        The threshold beside this is pure arithmetic and cannot see that
+        restarts have a shape of their own. It never changed, yet the gap
+        between them drifted from 31 minutes to 8 over ten days, because the
+        marches started coming home sooner and every wait cleared the bar.
 
-        Past the cap the wait is spent alt-tabbed instead, which is what the
-        farm did before the threshold was written.
+        The first fix was a cap of three an hour. The operator asked whether a
+        fixed number is itself recognisable, and it is: every busy hour would
+        show exactly three restarts and never four, which is a flatter, more
+        artificial line than the rhythm it replaced. So this is a chance, not
+        a limit. It rises with the time since the last quit and reaches
+        certainty at a target drawn fresh for each session, so short gaps
+        happen occasionally and long ones usually -- with no edge anywhere for
+        anyone to notice.
         """
         seen = getattr(self, "_quit_times", None)
-        if seen is None:
-            seen = self._quit_times = []
-        now = time.time()
-        del seen[:len(seen) - 40]
-        recent = [t for t in seen if now - t < 3600]
-        if len(recent) < QUITS_PER_HOUR_MAX:
+        if not seen:
             return True
-        oldest = min(recent)
-        print(f"  [{INFO}] {len(recent)} client restarts in the last hour "
-              f"already -- staying in and alt-tabbing this wait instead")
-        logger.info("quit cap: %d restarts since %s -- alt-tab instead",
-                    len(recent),
-                    time.strftime("%H:%M", time.localtime(oldest)))
+        target = getattr(self, "_quit_gap_target", None)
+        if target is None:
+            target = self._quit_gap_target = random.uniform(*QUIT_GAP_TARGET_S)
+            logger.info("this session will aim for about %.0f min between "
+                        "client restarts", target / 60)
+        gap = time.time() - seen[-1]
+        # Cubed, not linear. A linear chance fires far too early: with a
+        # target of 20 minutes and a wait asking every 4, simulating a day
+        # gave 61-82 restarts at a median gap of 8-12 minutes -- worse than
+        # the fixed cap it replaced. The cube keeps early gaps unlikely
+        # without ever forbidding them.
+        chance = min(1.0, (gap / target) ** 3)
+        if random.random() < chance:
+            return True
+        print(f"  [{INFO}] last restart was {gap / 60:.0f}min ago -- staying "
+              f"in and alt-tabbing this wait instead")
+        logger.info("quit spacing: %.0fmin since the last, %.0f%% chance "
+                    "taken -- alt-tab instead", gap / 60, chance * 100)
         return False
 
     def _note_quit(self):

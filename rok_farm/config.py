@@ -279,21 +279,23 @@ RELAUNCH_OVERHEAD_S = 78.0   # seed for the measured cost of a quit+relaunch
 WAIT_QUIT_FACTOR = 1.5       # quit when the wait is worth this many round trips
 WAIT_QUIT_FLOOR_S = 90.0     # never quit for less than this, whatever it learns
 
-# ...and never more often than this, however the arithmetic comes out.
+# ...and, separately, not too often -- but without a hard ceiling, because a
+# ceiling is a pattern of its own. The first cut of this capped restarts at
+# three an hour, and the operator asked the right question about it: a busy
+# hour would then land on exactly three, every time, never four. A flat limit
+# like that is as recognisable as the rhythm it was meant to hide.
 #
-# The threshold above is pure efficiency: quit whenever the wait costs more
-# than a relaunch. It has no idea that thirty restarts a day look like
-# something. Measured over ten days, the gap between restarts drifted from 31
-# minutes to 12 WITHOUT the threshold being touched -- the marches simply
-# started coming home sooner (median wait 27 min on 09-09, 9 min on 09-18), so
-# every wait cleared the bar. On 2026-09-19 the first hour of the day held
-# SEVEN restarts, a median gap of 8.2 minutes, two of them five minutes apart.
+# So the rule is soft. The chance of quitting rises with the time since the
+# last quit: certain once the gap passes a target, and proportionally less
+# likely before that. Nothing is ever forbidden, nothing is guaranteed, and
+# the target is drawn fresh per session from the range below.
 #
-# The days that never drew a letter ran 19-34 restarts over a 10-12 hour
-# window: two to three an hour. That is what this cap restores. When the cap
-# is reached the farm alt-tabs through the wait instead, which is what it did
-# before the threshold existed.
-QUITS_PER_HOUR_MAX = 3
+# The range comes from the days that never drew an anti-cheat letter: 19-34
+# restarts over a 10-12 hour window, a median gap of 24-31 minutes. By
+# 2026-09-19 the gap had drifted to 8 minutes without the threshold being
+# touched -- the marches simply started coming home sooner.
+QUIT_GAP_TARGET_S = (900.0, 1800.0)
+
 WAIT_EARLY_MARGIN = 90.0     # come back this many seconds early
 
 # --- Game process lifecycle ---
