@@ -251,11 +251,21 @@ class HidInputMixin:
         if self._in_no_click_zone(sx, sy):
             logger.debug("Click blocked: (%d,%d) in no-click zone", sx, sy)
             return False
+        # Where the pointer already is decides how much of the "find it,
+        # recognise it" cost is real. Read BEFORE the move, because the move
+        # is what takes it away.
+        from anti_detection.mouse_humanizer import NEAR_SETTLE_PX
+        try:
+            _cx, _cy = get_cursor_pos()
+            already_there = max(abs(_cx - sx), abs(_cy - sy)) <= NEAR_SETTLE_PX
+        except Exception:
+            already_there = False
         if not self._moveto(sx, sy):
             return False
-        if self._mm_speed:
-            # Known button: no visual search, just the reaction floor. Still
-            # jittered -- a human is fast here, not metronomic.
+        if self._mm_speed or already_there:
+            # Known button, or the hand is already on it: no visual search,
+            # just the reaction floor. Still jittered -- a human is fast here,
+            # not metronomic.
             time.sleep(random.uniform(0.04, 0.13))
         else:
             perceive = random.lognormvariate(-0.5, 0.4)

@@ -130,6 +130,12 @@ def _comb(n: int, k: int) -> int:
 # MouseHumanizer
 # ---------------------------------------------------------------------------
 
+# How close counts as "the hand is already there", and how often it behaves
+# that way rather than drifting off and coming back.
+NEAR_SETTLE_PX = 24
+NEAR_SETTLE_CHANCE = 0.75
+
+
 class MouseHumanizer:
     def __init__(self, profile: dict):
         m = profile.get("mouse", {})
@@ -336,6 +342,8 @@ class MouseHumanizer:
         dist = _hypot(x2 - x1, y2 - y1)
         if dist < 2:
             return [(x2, y2, 0)]
+        if dist <= NEAR_SETTLE_PX and random.random() < NEAR_SETTLE_CHANCE:
+            return self._settle_move(x1, y1, x2, y2)
 
         # Pick generator with weighted random. In strict acceleration-noise mode
         # this stays inside the force integrator; no coordinate noise is added
@@ -347,6 +355,37 @@ class MouseHumanizer:
             path = self._insert_mid_pause(path)
 
         return path
+
+    def _settle_move(
+        self, x1: int, y1: int, x2: int, y2: int,
+    ) -> list[tuple[int, int, int]]:
+        """A nudge from a hand that is already on the button.
+
+        Every move used to be a full approach -- accelerate, cruise, brake --
+        however short. Measured on the generator: 257ms for 20 pixels. And
+        measured on 9,327 consecutive click pairs in the logs, 11.5% of them
+        land within 20px of the one before (4.0% within 5px), so better than
+        one click in nine paid a full approach to somewhere it already was.
+
+        That is what put a wall under the click rhythm. Of 9,121 measured
+        gaps between clicks, ONE was under a second and NONE under half a
+        second. A person clicking two things side by side does it in a
+        fraction of a second; a floor with nothing below it is not a person.
+
+        Not every time -- a hand does drift off and come back -- which is why
+        this is a chance rather than a rule.
+        """
+        n = random.randint(2, 4)
+        out = []
+        for i in range(1, n + 1):
+            t = i / n
+            last = i == n
+            out.append((
+                int(round(x1 + (x2 - x1) * t)) + (0 if last else random.randint(-1, 1)),
+                int(round(y1 + (y2 - y1) * t)) + (0 if last else random.randint(-1, 1)),
+                random.randint(8, 26),
+            ))
+        return out
 
     def _pick_and_generate(
         self, x1: int, y1: int, x2: int, y2: int, dist: float,
