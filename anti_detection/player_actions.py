@@ -640,18 +640,48 @@ def _dismiss_reward_popup(ctx: PlayerActionCtx):
         time.sleep(random.uniform(0.8, 1.5))
 
 
+# Where the mail panel's X actually is. Measured on all 32 saved mail-panel
+# frames: x 0.8232, y 0.0394 on every single one, spread 0.0000 in both, with
+# the match scoring 0.907 to 0.999. A button that never moves does not need a
+# search that can land anywhere.
+MAIL_X_AT = (0.8232, 0.0394)
+MAIL_X_TOL = 0.02
+
+
 def _close_mail(ctx: PlayerActionCtx):
-    """Close mail panel by clicking X button."""
+    """Close the mail panel by clicking its X.
+
+    The search used to accept whatever scored over 0.60 anywhere in the top
+    15% of the frame, and click it. Live on 2026-09-21 at 16:01:06 that put a
+    click at pct(0.352, 0.115) -- the gift icon on the first message row,
+    which the template matches at 0.866 when shrunk to scale 0.4. The HUD's
+    no-click zone then dropped it, the panel stayed open, and the run only
+    recovered because the next step happened to quit the client.
+
+    Two things were missing, and the read-all button next door already has
+    both. The match has to be where the button IS, not merely template-shaped:
+    across every saved panel frame the X sits at one point with no spread at
+    all, so anything more than a couple of percent away is a decoy and gets
+    the generic dismiss instead. And the click goes through the mail-panel
+    path, which drops the zones once the panel is confirmed and says so out
+    loud when a click is blocked anyway, rather than failing at DEBUG level
+    under a line claiming the mail was read.
+    """
     frame = _grab_chat_frame(ctx)
     if frame is not None:
         m = _match_on_frame(frame, "ui/btn_x_close_mail", threshold=0.60,
                             roi=(0.0, 0.15),
                             scales=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-        if m:
+        if m and (abs(m[0] - MAIL_X_AT[0]) <= MAIL_X_TOL and
+                  abs(m[1] - MAIL_X_AT[1]) <= MAIL_X_TOL):
             print(f"    -> close mail X at pct({m[0]:.3f},{m[1]:.3f})")
-            ctx._click_pct(m[0], m[1], jitter_px=3)
-            ctx._wait(DELAY_AFTER_DISMISS)
-            return
+            if _click_in_mail_panel(ctx, frame, m[0], m[1], jitter_px=3):
+                ctx._wait(DELAY_AFTER_DISMISS)
+                return
+        elif m:
+            logger.warning("mail: X-shaped match at pct(%.3f,%.3f) score %.2f "
+                           "is not where the button is (%.3f,%.3f) -- not "
+                           "clicking it", m[0], m[1], m[2], *MAIL_X_AT)
     _dismiss_panel(ctx)
 
 

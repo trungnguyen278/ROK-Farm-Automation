@@ -178,3 +178,98 @@ def test_the_system_tab_click_also_goes_through_the_gate():
     code = ast.unparse(fn)
     assert "_click_in_mail_panel(" in code
     assert "_click_pct(" not in code, "a panel click bypasses the gate"
+
+
+# --- Closing the panel -----------------------------------------------------
+#
+# The X search accepted anything template-shaped scoring over 0.60 anywhere in
+# the top 15% of the frame. Live 2026-09-21 16:01:06 it clicked pct(0.352,
+# 0.115) -- the gift icon on the first message row, which the template matches
+# at 0.866 once shrunk to scale 0.4. The no-click zone then dropped that click
+# at DEBUG level, the panel stayed open, and only the client quit that followed
+# cleared it.
+
+class CloseCtx:
+    """Just enough context for _close_mail."""
+
+    def __init__(self, frame="a frame"):
+        self.win = dict(WIN)
+        self.frame = frame
+        self.clicks = []
+        self.waited = 0
+
+    def _grab(self):
+        return self.frame
+
+    @contextmanager
+    def _pointer_scope(self, rect):
+        yield
+
+    def _click_pct(self, px, py, jitter_px=0):
+        self.clicks.append((px, py))
+        return True
+
+    def _wait(self, *a, **k):
+        self.waited += 1
+
+
+@pytest.fixture
+def close_ctx(monkeypatch):
+    monkeypatch.setattr(pa, "_mail_panel_open", lambda frame: True)
+    dismissed = []
+    monkeypatch.setattr(pa, "_dismiss_panel", lambda ctx: dismissed.append(ctx))
+    return CloseCtx(), dismissed
+
+
+def test_the_x_is_clicked_where_the_button_is(close_ctx, monkeypatch):
+    ctx, dismissed = close_ctx
+    at = pa.MAIL_X_AT
+    monkeypatch.setattr(pa, "_match_on_frame",
+                        lambda *a, **k: (at[0], at[1], 0.91, 56, 51))
+    pa._close_mail(ctx)
+    assert ctx.clicks == [at]
+    assert not dismissed
+
+
+def test_an_x_shaped_thing_elsewhere_is_not_clicked(close_ctx, monkeypatch):
+    """The gift icon on the first message row, at scale 0.4, score 0.866."""
+    ctx, dismissed = close_ctx
+    monkeypatch.setattr(pa, "_match_on_frame",
+                        lambda *a, **k: (0.352, 0.115, 0.866, 22, 20))
+    pa._close_mail(ctx)
+    assert ctx.clicks == [], "clicked a decoy inside the message list"
+    assert dismissed, "no fallback when the X was not found"
+
+
+def test_the_close_click_goes_through_the_panel_path(close_ctx, monkeypatch):
+    """Not ctx._click_pct directly -- the zones have to be dropped, and a
+    click that is blocked anyway has to say so."""
+    ctx, dismissed = close_ctx
+    at = pa.MAIL_X_AT
+    monkeypatch.setattr(pa, "_match_on_frame",
+                        lambda *a, **k: (at[0], at[1], 0.91, 56, 51))
+    monkeypatch.setattr(pa, "_mail_panel_open", lambda frame: False)
+    pa._close_mail(ctx)
+    assert ctx.clicks == [], "clicked without the panel confirmed open"
+    assert dismissed
+
+
+def test_the_x_sits_where_the_saved_panels_put_it():
+    """Every saved mail-panel frame agrees to four decimal places."""
+    frames = sorted((PROJECT_ROOT / "screenshots").glob("**/MAIL_AFTER_READ_*.png"))
+    frames += sorted((PROJECT_ROOT / "screenshots").glob("**/MAIL_NO_TAB_BADGES_*.png"))
+    seen = []
+    for f in frames:
+        im = cv2.imread(str(f))
+        if im is None:
+            continue
+        m = pa._match_on_frame(im, "ui/btn_x_close_mail", threshold=0.60,
+                               roi=(0.0, 0.15),
+                               scales=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        if m:
+            seen.append((m[0], m[1]))
+    if not seen:
+        pytest.skip("no mail panel frames are kept any more")
+    for x, y in seen:
+        assert abs(x - pa.MAIL_X_AT[0]) <= pa.MAIL_X_TOL, (x, y)
+        assert abs(y - pa.MAIL_X_AT[1]) <= pa.MAIL_X_TOL, (x, y)
