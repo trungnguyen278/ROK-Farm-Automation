@@ -231,7 +231,22 @@ def screen_state():
         return "screen check failed"
 
 
-WD_LOG.write_text("", encoding="utf-8")
+# Do NOT wipe this. It used to start every run with write_text(""), which on
+# 2026-09-21 -- six watchdog starts in a day -- left a three-line file and no
+# way to answer whether it had ever restarted a healthy farm. A supervisor
+# that erases its own history cannot be audited, and the only evidence that
+# its thresholds are right is the record of what it did with them.
+try:
+    _old = WD_LOG.read_text(encoding="utf-8", errors="replace") if WD_LOG.exists() else ""
+    if len(_old) > 2_000_000:
+        # Keep the recent half. No attempt to cut on a line boundary: the
+        # first surviving line being a fragment costs nothing, and writing
+        # that escape through a heredoc is what broke this file once already.
+        _old = _old[-1_000_000:]
+    WD_LOG.write_text(_old, encoding="utf-8")
+except Exception:
+    pass
+log("=" * 60)
 log(f"watchdog v2 up: farm pid={FARM_PID}, deadline={DEADLINE}")
 log(f"halt on: {CONSEC_FAIL_LIMIT} consec fails / {RESTART_LIMIT} restarts per hr "
     f"/ {SILENT_LIMIT}s silence / {STUCK_MINUTES}min with no mine")

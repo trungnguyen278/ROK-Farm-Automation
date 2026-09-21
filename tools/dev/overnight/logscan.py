@@ -33,7 +33,19 @@ PATTERNS = {
     # out a gather. It produces no mines and no flow steps BY DESIGN, so
     # every "is it stuck" clock must count it as activity. Three separate
     # thresholds tripped on this before it was handled.
-    "planned_wait": r"Staying out for|Still out, \d+ min to go",
+    # Every line where the farm says, in its own words, that it is waiting on
+    # purpose. The stuck clock resets on these, so a phrase belongs here only
+    # if a stuck farm cannot produce it over and over -- that is what makes a
+    # watchdog unable to time out.
+    #
+    # "AP dwell Ns in" is safe by that test: it comes from the barbarian run,
+    # which AP_MIN_GAP_S holds to once every 40-80 minutes, and it repeats
+    # every 70-140s WHILE the run is on, which is liveness rather than noise.
+    # Without it a 15-25 minute dwell spends half the 50-minute budget saying
+    # nothing, and the operator has waits of their own near 45 minutes --
+    # measured, mine-to-mine p99 is 43.1 minutes over 1,154 gaps.
+    "planned_wait": (r"Staying out for|Still out, \d+ min to go"
+                     r"|AP dwell \d+s in|AP burn running"),
     # The farm quit its client for a planned wait and then could not get it
     # back: the launcher would not come to the front, the Play button matched
     # at 0.634, and after 180s there was no game window. Terminal -- on
