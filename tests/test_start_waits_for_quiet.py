@@ -54,7 +54,10 @@ def test_it_waits_for_the_operator_to_step_away(monkeypatch, clock):
 
 
 def test_a_machine_in_constant_use_gives_up(monkeypatch, clock):
-    idle_is(monkeypatch, 1.0)
+    # 3s, not 1s: a person working gives gaps that rise well past the point
+    # where a pinned clock is declared unreadable. At 1s this scenario is
+    # indistinguishable from the laptop whose touchpad never lets the clock go.
+    idle_is(monkeypatch, 3.0)
     assert not sc.wait_until_idle(settle_s=30.0, give_up_after=180.0)
     assert clock[0] <= 1000.0 + 180.0 + 2.0
 
@@ -93,3 +96,32 @@ def test_the_command_no_longer_refuses_without_waiting():
     assert "wait_until_idle" in text, (
         "!start no longer waits for the machine to go quiet"
     )
+
+
+def test_a_machine_that_never_goes_quiet_does_not_block_forever(monkeypatch, clock):
+    """2026-09-21: the operator sent !start, was told "still in use" three
+    minutes later, and was not touching the machine at all.
+
+    This one is a laptop -- Windows lists a touchpad, an I2C HID device and
+    several mice -- and something nudges the input clock every fraction of a
+    second. With the farm stopped AND the board's jitter off it was never seen
+    above 1.3s over 28 seconds of sampling. Waiting for 30s of silence there is
+    waiting forever, and a guard that can never pass is worse than no guard.
+    """
+    idle_is(monkeypatch, 0.3)
+    assert sc.wait_until_idle(settle_s=30.0, give_up_after=180.0)
+    assert clock[0] - 1000.0 < sc.START_SETTLE_WAIT_S, (
+        "it burned the whole wait before giving up on the reading"
+    )
+
+
+def test_a_machine_that_is_merely_busy_still_blocks(monkeypatch, clock):
+    """The probe must not excuse a real person at the keyboard: their idle
+    clock DOES rise between keystrokes, it just never reaches the settle."""
+    idle_is(monkeypatch, 5.0)
+    assert not sc.wait_until_idle(settle_s=30.0, give_up_after=180.0)
+
+
+def test_the_probe_is_shorter_than_the_wait_it_guards():
+    assert sc.IDLE_CLOCK_PROBE_S < sc.START_SETTLE_WAIT_S
+    assert sc.IDLE_CLOCK_DEAD_S < sc.START_SETTLE_S

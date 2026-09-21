@@ -59,6 +59,12 @@ HUMAN_IDLE_GUARD = 300.0
 # stepped away since asking". Wait for that instead of refusing.
 START_SETTLE_S = 30.0        # quiet for this long counts as stepped away
 START_SETTLE_WAIT_S = 180.0  # how long to keep waiting for that quiet
+# How long to watch the idle clock before deciding it tells us nothing, and the
+# ceiling under which it counts as pinned. Measured on this machine with the
+# farm stopped and the board's jitter off: 14 samples over 28 seconds, highest
+# 1.3s.
+IDLE_CLOCK_PROBE_S = 12.0
+IDLE_CLOCK_DEAD_S = 2.0
 
 
 def wait_until_idle(settle_s=START_SETTLE_S, give_up_after=START_SETTLE_WAIT_S):
@@ -69,9 +75,26 @@ def wait_until_idle(settle_s=START_SETTLE_S, give_up_after=START_SETTLE_WAIT_S):
     to block a start on a machine it cannot measure.
     """
     deadline = time.time() + give_up_after
+    started = time.time()
+    seen_max = 0.0
     while True:
         idle = idle_seconds()
+        seen_max = max(seen_max, idle)
         if idle < 0 or idle >= settle_s:
+            return True
+        # Some machines never go quiet at all. This one is a laptop: Windows
+        # lists a touchpad, an I2C HID device and several mice, and one of them
+        # nudges the input clock every fraction of a second, so it has never
+        # been seen above 1.3s even with the farm stopped and the board's
+        # jitter off. Waiting for 30s of silence there is waiting forever, and
+        # a guard that can never pass is worse than no guard: 2026-09-21 the
+        # operator sent !start, was told "still in use" three minutes later,
+        # and was not touching the machine at all.
+        if time.time() - started >= IDLE_CLOCK_PROBE_S and seen_max < IDLE_CLOCK_DEAD_S:
+            logger_msg = ("idle clock never rose above %.1fs in %.0fs -- this "
+                          "machine always reports input, so the quiet check "
+                          "cannot measure anything; starting anyway")
+            _print_log(logger_msg % (seen_max, IDLE_CLOCK_PROBE_S))
             return True
         if time.time() >= deadline:
             return False
