@@ -411,12 +411,14 @@ class PhasesMixin:
             seen.append((at, used, total))
             logger.info("AP dwell %.0fs in: queue %d/%d", at, used, total)
         if seen:
-            held = max(u for _, u, _ in seen) - seen[0][1]
-            logger.info("AP dwell over after %.0fs: queue %s, the auto took "
-                        "%d slot(s) beyond the one it started with",
+            from rok_farm import ap_burn
+            held = max(0, max(u for _, u, _ in seen) - seen[0][1])
+            logger.info("AP dwell over after %.0fs: queue %s -- the auto took "
+                        "%d more slot(s) (its own limit is %d marches, and "
+                        "troops at home cap it below that)",
                         time.time() - started,
                         " -> ".join(f"{u}/{t}" for _, u, t in seen),
-                        max(0, held))
+                        held, ap_burn.AP_AUTO_MARCHES)
         else:
             logger.info("AP dwell over after %.0fs: the queue never read",
                         time.time() - started)

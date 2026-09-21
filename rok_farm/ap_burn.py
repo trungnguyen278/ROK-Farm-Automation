@@ -115,6 +115,22 @@ AP_ARC_MIN_PX = 20
 
 AP_BURN_AT = 0.80                   # spend when the arc is at least this full
 
+# What the auto is allowed to send, and what actually limits it.
+#
+# The operator set the auto's own march count to FOUR. That is a ceiling, not
+# a promise: "no phu thuoc vao 2 van de, 1 la con slot khong, 2 la luong quan
+# san co co du tao ra march day hay khong". So a run sends up to four marches,
+# bounded by free slots and by whether there are troops at home to fill them.
+#
+# Both bounds move during a run. A gathering march coming home frees its slot
+# AND returns its troops, so a long dwell feeds the auto on both counts -- and
+# the farm has five slots in total, so four of them is nearly all of it.
+#
+# Nothing here enforces the number; the game does. It is written down because
+# every question about how long to dwell is really a question about how much
+# of the march queue the barbarians may hold, and that starts here.
+AP_AUTO_MARCHES = 4
+
 # How long to leave the auto running before quitting ends it.
 #
 # The first cut was two to five minutes, and the operator watched it and said
