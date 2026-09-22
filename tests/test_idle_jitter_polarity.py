@@ -58,6 +58,27 @@ def test_the_firmware_still_reads_one_as_suppressed():
                      src), "idle_noise no longer honours idle_suppressed"
 
 
+def test_the_board_starts_quiet_and_stays_quiet_through_a_reset():
+    """The case the operator actually hit: farm not running at all, only the
+    ESP32 plugged in, and the screen would not sleep after locking.
+
+    Nothing was sending commands then, so no amount of Python could have
+    stopped it -- suppressing at the farm's bring-up only covers a board the
+    farm has spoken to. Only the firmware's own default reaches a board that
+    was merely plugged in.
+    """
+    if not FIRMWARE.exists():
+        pytest.skip("firmware source is not in this checkout")
+    src = FIRMWARE.read_text(encoding="utf-8", errors="replace")
+    assert re.search(r"static\s+bool\s+idle_suppressed\s*=\s*true\s*;", src), (
+        "the board boots nudging again; a plugged-in ESP32 with nothing "
+        "running will hold the screen awake")
+    reset = src[src.index("void handle_reset("):]
+    reset = reset.split("send_ack")[0]
+    assert "idle_suppressed = true" in reset, (
+        "RESET hands the board back to idle_noise(): " + reset)
+
+
 def test_the_board_nudges_the_pointer_while_it_is_not_suppressed():
     """What is at stake: this is a real mouse report, not a no-op."""
     if not FIRMWARE.exists():

@@ -11,7 +11,21 @@ USBHIDKeyboard Keyboard;
 static char line_buf[MAX_LINE_LEN];
 static int line_pos = 0;
 static bool executing = false;
-static bool idle_suppressed = false;
+// Starts SUPPRESSED, so a board that nobody has spoken to sits still.
+//
+// It used to start false, which meant idle_noise() began nudging the pointer
+// every 500-3000ms the moment the board had power. The operator found it from
+// the outside on 2026-09-22: with the ESP32 plugged in and the farm not
+// running at all, the machine would not turn its screen off after locking.
+// Nothing was sending commands, so nothing could have stopped it -- only this
+// default could. Measured with Windows' own idle clock on an untouched
+// machine: highest idle 1.0s over 25s while nudging, 27.2s once suppressed.
+//
+// Nothing turns it back on any more. The jitter was added on the idea that a
+// still pointer looks fake; measured across 13 days of logs it was the
+// opposite -- ~137,000 micro moves against 9,559 real clicks, and a pointer
+// that never rested longer than three seconds while the client was up.
+static bool idle_suppressed = true;
 static unsigned long last_cmd_time = 0;
 static unsigned long last_mouse_idle = 0;
 
@@ -400,7 +414,10 @@ void handle_reset(const ParsedCommand& cmd) {
     Mouse.release(MOUSE_RIGHT);
     Mouse.release(MOUSE_MIDDLE);
     Keyboard.releaseAll();
-    idle_suppressed = false;
+    // RESET means "let go of everything", and that includes the
+    // pointer. It used to clear this flag and hand the board straight
+    // back to idle_noise().
+    idle_suppressed = true;
     send_ack(cmd.cmd_id);
 }
 
