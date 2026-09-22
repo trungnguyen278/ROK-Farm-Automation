@@ -222,8 +222,12 @@ class GemFlowMixin:
         prev_xy = getattr(self, "_last_map_xy", None)
         if prev_xy:
             step = max(abs(x - prev_xy[0]), abs(y - prev_xy[1]))
-            logger.debug("map step: %d tiles (%d,%d -> %d,%d)",
-                         step, prev_xy[0], prev_xy[1], x, y)
+            # The pixels dragged since the last fix travel with the step, so
+            # each line is a complete (drag -> tiles) pair ready to fit.
+            px, py = getattr(self, "_pan_pixels", (0, 0))
+            logger.debug("map step: %d tiles (%d,%d -> %d,%d) after %+d,%+d px",
+                         step, prev_xy[0], prev_xy[1], x, y, px, py)
+            self._pan_pixels = (0, 0)
         self._last_map_xy = (x, y)
         # Coming back from the city puts the camera on the city, so the first
         # reading after one is where home is. No configuration, no template --
@@ -1114,6 +1118,30 @@ class GemFlowMixin:
                 sx, sy = self._clamp_to_play_area(sx, sy)
                 ex, ey = self._clamp_to_play_area(ex, ey)
                 self._human_drag(sx, sy, ex, ey, speed_factor=scan_speed, easing="in")
+                # Record the pixels dragged, so the tiles they buy can be
+                # measured later.
+                #
+                # The operator's point, 2026-09-22: the coordinates are
+                # already being read, so the relationship between a drag and
+                # the ground it covers is learnable rather than assumable.
+                # With it the wander could aim AT a cell instead of picking a
+                # heading and hoping; without it the pan is the one step in
+                # the flow with no idea how far it went.
+                #
+                # Logging only. Fitting the transform on guesses would be the
+                # thing this whole day has been about not doing -- the map is
+                # isometric, so the axes are rotated by an unknown angle and a
+                # sign error steers the opposite way. "map step: N tiles" from
+                # _map_sync is the other half of each pair.
+                self._pan_pixels = (getattr(self, "_pan_pixels", (0, 0))[0]
+                                    + (ex - sx),
+                                    getattr(self, "_pan_pixels", (0, 0))[1]
+                                    + (ey - sy))
+                logger.debug("pan: %+d,%+d px (heading %.0f deg, total "
+                             "%+d,%+d since the last fix)",
+                             ex - sx, ey - sy,
+                             math.degrees(wander_heading) % 360,
+                             self._pan_pixels[0], self._pan_pixels[1])
                 if _sw < num_swipes - 1:
                     # mid-sequence: barely pause -- we haven't arrived yet, so
                     # there's nothing new to load; no big delay needed.
