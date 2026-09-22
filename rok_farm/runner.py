@@ -450,6 +450,14 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                     print(f"  [{WARN}] {broken}, continuing without a restart")
                     self._last_frame_ok = time.time()
 
+                # Before anything is clicked: is the server even up? A
+                # maintenance notice looks like an empty world to every
+                # detector the farm owns, so it scans it, finds nothing, and
+                # fails the mine -- while dragging the map about on top of a
+                # screen that is plainly telling it to go away.
+                if self._maintenance_hold():
+                    continue
+
                 if self.loop:
                     queue = self._detect_march_queue()
                     if queue:

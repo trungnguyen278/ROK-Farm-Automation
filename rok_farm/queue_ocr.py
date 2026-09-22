@@ -31,6 +31,21 @@ except ImportError:
         _OCR_BACKEND = None
 
 
+def ocr_texts(roi) -> list[str]:
+    """Every string RapidOCR finds in a crop. Shared, because more than one
+    reader needs it now and reaching into another module's private engine is
+    how two of them end up disagreeing about which backend is loaded."""
+    if roi is None or getattr(roi, "size", 0) == 0:
+        return []
+    if _OCR_BACKEND != "rapidocr" or _ocr_engine is None:
+        return []
+    try:
+        result, _ = _ocr_engine(roi)
+    except Exception:
+        return []
+    return [r[1] for r in (result or []) if len(r) > 1 and r[1]]
+
+
 class QueueMixin:
     """March queue reading. Mixed into GemFarmRunner."""
 

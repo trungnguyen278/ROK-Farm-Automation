@@ -463,6 +463,59 @@ class PhasesMixin:
                         time.time() - started)
         return seen
 
+    def _maintenance_hold(self) -> bool:
+        """Stop dead if the server is in maintenance. Returns True if it held.
+
+        2026-09-22: the game went into maintenance at about 13:13 and the farm
+        did not notice. It kept panning and scanning a notice board for gem
+        deposits for over an hour -- three mines in a row logged as
+        NO_CANDIDATES, and every saved frame from 14:20 onward shows the
+        notice with its countdown ticking down behind the farm's own drag
+        marks. The operator's warning is the point of this: swiping around
+        while that screen is up is a good way to collect a warning letter.
+
+        The notice carries its own answer -- "May chu dang bao tri. Thoi gian
+        con lai: 00:38:27" -- and the clock reads exactly: 2307 seconds off
+        the kept frame. So the farm closes the client and waits that long plus
+        a random few minutes, because the operator says the game extends the
+        countdown, and coming back on the second would mean walking straight
+        back in.
+
+        Over 61 curated frames -- city, world map, mail, training, the alert
+        border, wrong-place failures -- this never once fired.
+        """
+        from rok_farm import maintenance as mt
+        from rok_farm.queue_ocr import ocr_texts
+        from rok_farm.screenshots import save_screenshot
+
+        frame = self._grab()
+        lines = mt.read_lines(frame, ocr_texts)
+        if not mt.is_maintenance(lines):
+            return False
+
+        left = mt.seconds_left(lines)
+        if left is None:
+            wait = mt.BLIND_WAIT_S
+            how = "no readable clock"
+        else:
+            wait = left + random.uniform(*mt.GRACE_S)
+            how = f"{left / 60:.0f}min on its clock"
+        print("")
+        print(f"  [{WARN}] The server is in maintenance ({how}) -- closing the "
+              f"client and waiting {wait / 60:.0f}min")
+        logger.warning("maintenance: %s, holding for %.0fs", how, wait)
+        if frame is not None:
+            save_screenshot(frame, "MAINTENANCE")
+
+        try:
+            self._restart_game("server maintenance", extra_wait=wait)
+        except Exception:
+            logger.warning("maintenance: could not close the client",
+                           exc_info=True)
+            self._sleep_until_woken(wait, "server maintenance")
+        self._view_is_world = False
+        return True
+
     def _harvest_city_before_quit(self):
         """Tap the resource bubbles in the city, on the way out of the client.
 
