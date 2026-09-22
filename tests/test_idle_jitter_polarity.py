@@ -80,7 +80,57 @@ def test_tabbing_out_of_the_game_goes_quiet():
     assert idle_args(phases.PhasesMixin._tab_out) == ["1"]
 
 
-def test_tabbing_back_in_lets_it_nudge_again():
-    """Deliberate: while the farm is playing, a pointer that never moves at
-    all is its own tell."""
-    assert idle_args(phases.PhasesMixin._tab_back) == ["0"]
+def test_tabbing_back_in_stays_quiet_too():
+    """This used to send 0 and let the board nudge for the whole time the
+    client was in front, on the idea that a still pointer looks fake.
+
+    Measured across 13 days of logs: about 137,000 micro moves against 9,559
+    real clicks, fourteen phantom moves per real click, and the pointer never
+    resting longer than three seconds while the client was up. Together with a
+    click rhythm that never dipped under a second, that is two walls with
+    nothing outside them, which is the shape being avoided.
+    """
+    assert idle_args(phases.PhasesMixin._tab_back) == ["1"]
+
+
+def test_nothing_anywhere_releases_the_jitter():
+    """No call site may send IDLE 0. The board's own boot default already
+    starts it nudging; nothing in the farm should ask for more."""
+    import rok_farm.runner
+    seen = {}
+    for mod in (phases, session_control, rok_farm.runner):
+        src = Path(inspect.getfile(mod)).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Attribute) or node.func.attr != "send":
+                continue
+            args = [a.value for a in node.args if isinstance(a, ast.Constant)]
+            if len(args) >= 2 and args[0] == "IDLE":
+                seen.setdefault(args[1], []).append(mod.__name__)
+    assert "0" not in seen, "IDLE 0 released the jitter in %s" % seen.get("0")
+    assert "1" in seen
+
+
+def test_the_farm_quiets_the_board_as_soon_as_it_opens_the_port():
+    """The firmware defaults to nudging, so a replug must not be able to leave
+    it running. Suppressing at bring-up covers that without a reflash."""
+    import rok_farm.runner
+    src = Path(inspect.getfile(rok_farm.runner)).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    order = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "start":
+                order.append(("start", node.lineno))
+            args = [a.value for a in node.args if isinstance(a, ast.Constant)]
+            if node.func.attr == "send" and args and args[0] == "IDLE":
+                order.append(("idle", node.lineno))
+    idles = [ln for kind, ln in order if kind == "idle"]
+    starts = [ln for kind, ln in order if kind == "start"]
+    assert idles, "runner never tells the board to be quiet"
+    assert starts, "runner no longer starts a command buffer"
+    assert min(idles) - min(starts) < 10, (
+        "the quiet command is no longer right after the port opens: "
+        "starts=%s idles=%s" % (starts, idles))

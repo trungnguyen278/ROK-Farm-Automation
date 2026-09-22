@@ -54,7 +54,23 @@ class PhasesMixin:
     def _tab_back(self):
         hold = random.randint(50, 120)
         self.cmd.send("COMBO", "ALT", "TAB", hold)
-        self.cmd.send("IDLE", "0")
+        # Stay quiet. This used to send IDLE 0, which let the board resume
+        # nudging the pointer for the whole time the client was in front.
+        #
+        # It was put there on the idea that a pointer which never moves looks
+        # fake -- a guess, arriving in a bulk commit on 2026-05-19 with no
+        # measurement behind it. Measured now, it is the guess that looks
+        # fake: across 13 days of logs the board sent about 137,000 micro
+        # moves against 9,559 real clicks, fourteen phantom moves per click,
+        # and while the client was in front the pointer never rested longer
+        # than three seconds. Paired with a click rhythm that never dipped
+        # below one second, that is two walls with nothing outside them.
+        #
+        # A human's mouse does rest. The farm's own alt-tab waits already
+        # prove the game does not mind: the board is suppressed there and the
+        # client sits without a single input for up to ten minutes, which has
+        # always worked.
+        self.cmd.send("IDLE", "1")
         time.sleep(random.uniform(1.5, 3.0))
         # ALT+TAB is a guess about window order, not a guarantee. Verify it
         # actually landed on the game: WGC capture would keep showing a healthy

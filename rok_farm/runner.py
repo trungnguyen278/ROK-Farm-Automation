@@ -245,6 +245,12 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
             return False
         self.cmd = CommandBuffer(self.conn)
         self.cmd.start()
+        # Silence the board's idle jitter before anything else happens. The
+        # firmware defaults idle_suppressed to false at boot and clears it on
+        # RESET, so a freshly plugged board arrives nudging the pointer every
+        # 500-3000ms whether anyone asked or not. Saying so here means a
+        # replug cannot leave it running, without reflashing the board.
+        self.cmd.send("IDLE", "1")
         self._wait(DELAY_AFTER_CLICK)
 
         # Game window. If it isn't there, start the client (unless the user
