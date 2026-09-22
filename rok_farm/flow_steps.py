@@ -1145,8 +1145,16 @@ class GemFlowMixin:
                     self._retreat_from_edge(back)
                     self._step_return_city(tag)
                     return None
+                seen = getattr(self, "_icon_candidates_last", 0)
                 print(f"  [ -- ] Scan {scan_count:2d}/{max_scans}: no icons "
                       f"(spd={scan_speed:.1f}x, empty={empty_streak})")
+                # Logged, because the print never reaches the file and this is
+                # the number that decides whether 18 is the right limit. A
+                # scan that saw icon-shaped things and rejected them is a poor
+                # map; a scan that saw NOTHING is a broken view.
+                logger.debug("scan %d: no gems, %d icon-shaped candidate(s) "
+                             "on screen, empty streak %d",
+                             scan_count, seen, empty_streak)
 
                 # Nothing AT ALL after a few scans is not a barren patch, it is
                 # a map that is not showing what we are looking for -- wrong
@@ -1176,6 +1184,24 @@ class GemFlowMixin:
                         self._zoom_fixed_this_mine = True
                         self._scroll_at_center(-1, self._zoom_scrolls())
                         self._wait_zoom_settled()
+                        # Did it take? Nothing used to ask, and the answer is
+                        # often no. 2026-09-22 15:05: the gauge said close,
+                        # this scrolled out, and the gauge still said close --
+                        # then the reset below bought ten more scans of an
+                        # unchanged screen, which is how one mine spent twenty
+                        # scans seeing nothing. If the scroll did not move the
+                        # gauge, the trip through the city is the only thing
+                        # left, so take it now rather than after ten more.
+                        again = self.read_zoom_gauge()
+                        if again == "close":
+                            print(f"  [{FAIL}] scrolled out and the HUD still "
+                                  f"shows the resource bar -- the zoom is "
+                                  f"stuck; back through the city")
+                            logger.warning("zoom correction did not move the "
+                                           "gauge (still close) -- straight "
+                                           "back to city")
+                            self._step_return_city(tag)
+                            return None
                         no_candidate_floor = scan_count
                         empty_streak = 0
                         continue

@@ -166,6 +166,19 @@ class DetectMixin:
         gem_thr = self._gem_icon_threshold()
         result = []
         edge_gems = []
+        # How many icon-SHAPED things were on screen, before anything
+        # gem-specific threw them out. The operator's distinction, 2026-09-22:
+        # "do co ngheo thi van co icon sau 2-3 lan luot roi, chi la khong phai
+        # mo gem minh can thoi" -- a poor map still shows resource icons, so a
+        # screen with none at all is a screen being looked at wrongly (zoomed
+        # in, filter off, fog), not a barren patch.
+        #
+        # The template is loose enough to catch other resources: it matched 4
+        # things this session that the classifier then called not_gem. Counted
+        # here rather than acted on, because 18 empty scans is the number that
+        # needs replacing and it should be replaced with a measurement.
+        self._icon_candidates_last = sum(
+            1 for m in matches if m.confidence >= gem_thr)
         for m in matches:
             if m.confidence < gem_thr:
                 continue

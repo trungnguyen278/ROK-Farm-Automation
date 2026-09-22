@@ -125,10 +125,29 @@ def test_a_stuck_zoom_leaves_a_frame_behind():
 # --- the give-up: fix it here, not by walking back to the city ------------
 
 def scan_giveup():
+    """The whole give-up branch, found by structure rather than by length.
+
+    This used to take a fixed 2200 characters from the start of the
+    condition. On 2026-09-22 a verification step was added inside that branch
+    -- re-reading the gauge after the corrective scroll -- and it pushed the
+    lines these tests check past the end of the window, so two of them failed
+    over code that was still there and still correct. A char window is a
+    measurement of how long the source happens to be.
+
+    So: walk the AST, find the `if` whose test mentions NO_CANDIDATE_GIVEUP,
+    and hand back exactly that statement.
+    """
+    import ast
+    import textwrap
+
     start = FLOW.index("def _step_scan_and_verify_gem")
-    body = FLOW[start:]
-    at = body.index("no_candidate_floor >= NO_CANDIDATE_GIVEUP")
-    return body[at:at + 2200]
+    nxt = FLOW.find(chr(10) + "    def ", start + 10)
+    src = textwrap.dedent(FLOW[start:nxt if nxt != -1 else len(FLOW)])
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and "NO_CANDIDATE_GIVEUP" in ast.dump(node.test):
+            return ast.unparse(node)
+    raise AssertionError("the no-candidate give-up branch is gone")
 
 
 def test_the_giveup_measures_the_zoom_before_blaming_the_map():
