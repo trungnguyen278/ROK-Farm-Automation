@@ -206,6 +206,12 @@ FEED = re.compile(
     r"|attempting recovery|Client vanished"
     r"|Phase: "
     r"|farm start|FARM EXITED"
+    # The watchdog had no way to reach anyone. It wrote its own log file and
+    # nothing read it, so on 2026-09-22 the farm failed mine after mine
+    # through an hour of server maintenance and the first anyone knew was the
+    # operator looking at the screen. A supervisor that cannot say anything is
+    # a supervisor no one is supervised by.
+    r"|WATCHDOG:"
 )
 
 

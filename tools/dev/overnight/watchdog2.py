@@ -30,7 +30,13 @@ LOGDIR = PROJECT_ROOT / "logs" / "overnight"
 FARM_LOG = LOGDIR / "farm_run.log"
 WD_LOG = LOGDIR / "watchdog.log"
 
-CONSEC_FAIL_LIMIT = 14
+# Eight, not fourteen. Measured over the whole farm log: of 294 consecutive
+# failure runs, only 5 ever reached 14 -- the limit sat around the 98th
+# percentile and so almost never fired, which is why an hour of failing
+# through server maintenance on 2026-09-22 passed without it acting. Ten runs
+# reached 8, so this fires about twice as often as it did: still rare, but
+# it exists.
+CONSEC_FAIL_LIMIT = 8
 RESTART_LIMIT = 5
 # The march wait is a DESIGNED 15-minute silence ('alt-tab away, waiting
 # for troops to return (cap 15min)'). A 900s limit equalled it exactly and
@@ -110,6 +116,22 @@ def kill_farm(reason):
                            capture_output=True, timeout=30)
         except Exception as e:
             log(f"   taskkill {pid} failed: {e}")
+
+
+def alert(msg):
+    """Say it where someone will see it.
+
+    The watchdog wrote only to its own file, which nothing tails, so every
+    judgement it ever made was invisible. The Discord bot relays the farm's
+    stdout, skipping anything that looks like a logger line -- so an alert has
+    to be written plainly, with a prefix the bot's feed filter allows through.
+    """
+    log(msg)
+    try:
+        with FARM_LOG.open("a", encoding="utf-8") as fh:
+            fh.write("  [WARN] WATCHDOG: " + str(msg) + chr(10))
+    except Exception:
+        pass
 
 
 def restart_farm(reason):
@@ -343,6 +365,7 @@ while True:
             else:
                 break
         if consec >= CONSEC_FAIL_LIMIT:
+            alert(f"{consec} consecutive mine failures -- restarting the farm")
             restarted = restart_farm(f"{consec} consecutive mine failures")
             if restarted:
                 continue
@@ -409,6 +432,7 @@ while True:
         # producing them entirely, which is precisely the case worth catching.
         idle_min = (time.time() - last_progress_at) / 60.0
         if idle_min > STUCK_MINUTES:
+            alert(f"no mine started or finished for {idle_min:.0f} min")
             restarted = restart_farm(f"no mine started or finished for {idle_min:.0f} min "
                       f"-- farm is not progressing")
             if restarted:
