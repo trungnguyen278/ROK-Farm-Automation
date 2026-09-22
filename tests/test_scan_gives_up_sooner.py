@@ -100,11 +100,13 @@ def test_a_blank_screen_gives_up_far_sooner_than_a_poor_map():
     assert flow_steps.BLIND_GIVEUP < 18
 
 
-def test_it_is_not_so_eager_that_water_trips_it():
-    """Double what the operator says a poor map needs, so panning across
-    mountains or ocean cannot fire it."""
+def test_the_blind_limit_is_the_number_the_operator_set():
+    """Three. I argued for six on the grounds that ocean and mountains could
+    trip a lower bar; the operator overruled it and set three. A false trip
+    costs one trip through the city, which is where a blind mine ends up
+    anyway, so the asymmetry is in their favour."""
     from rok_farm import flow_steps
-    assert flow_steps.BLIND_GIVEUP >= 5, flow_steps.BLIND_GIVEUP
+    assert flow_steps.BLIND_GIVEUP == 3, flow_steps.BLIND_GIVEUP
 
 
 def test_the_streak_counts_icons_not_gems():

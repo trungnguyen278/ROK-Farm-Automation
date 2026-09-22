@@ -55,11 +55,16 @@ NO_CANDIDATE_GIVEUP = 10
 # scans of empty ground is a patient search; eighteen scans of a blank screen
 # is a wrong view nobody noticed -- zoomed in, filter off, fog.
 #
-# Six, not three: double what the operator says a poor map needs, so panning
-# across water or mountains cannot trip it, while still cutting the worst case
-# from twenty scans to six. The streak lengths are logged from today, so this
-# gets replaced by a measurement the way 18 was.
-BLIND_GIVEUP = 6
+# Three. I argued for six -- double what a poor map needs, so panning across
+# ocean or mountains could not trip it -- and the operator overruled it:
+# "khong thay mo nao nguong thap thoi tam 3 gi do". Their map, their call, and
+# the downside is cheap either way: a false trip costs one trip through the
+# city, which is where a blind mine was going to end up regardless.
+#
+# The streak lengths are logged from today, so if three turns out to fire on
+# open water this gets corrected by a measurement rather than another
+# argument, the way 18 was.
+BLIND_GIVEUP = 3
 
 # Corrective zoom-out rounds allowed when the HUD says the map is zoomed in.
 # Two, not "until it looks right": the loop re-reads the gauge between rounds
