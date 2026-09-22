@@ -18,7 +18,7 @@ from rok_farm.config import (MAIL_SURPRISE, MAX_MARCH_MINUTES,
                              RELAUNCH_OVERHEAD_S, WAIT_EARLY_MARGIN,
                              WAIT_QUIT_FACTOR, WAIT_QUIT_FLOOR_S)
 from rok_farm import wake
-from rok_farm.logging_setup import INFO, WARN, logger
+from rok_farm.logging_setup import INFO, PASS, WARN, logger
 
 # What one alt-tab out-and-back costs before any waiting happens: _tab_back()
 # sleeps uniform(1.5, 3.0) plus a warmup capped at 8s. Staying out for less
@@ -464,25 +464,31 @@ class PhasesMixin:
         return seen
 
     def _maintenance_hold(self) -> bool:
-        """Stop dead if the server is in maintenance. Returns True if it held.
+        """Sit out a server maintenance. Returns True if it held.
 
         2026-09-22: the game went into maintenance at about 13:13 and the farm
-        did not notice. It kept panning and scanning a notice board for gem
-        deposits for over an hour -- three mines in a row logged as
-        NO_CANDIDATES, and every saved frame from 14:20 onward shows the
-        notice with its countdown ticking down behind the farm's own drag
-        marks. The operator's warning is the point of this: swiping around
-        while that screen is up is a good way to collect a warning letter.
+        did not notice. It panned and scanned a notice board for gem deposits
+        for over an hour -- three mines logged NO_CANDIDATES -- and every
+        saved frame from 14:20 on shows the notice with its countdown ticking
+        down behind the farm's own drag marks. The operator's warning is the
+        point of this: swiping around while that screen is up is a good way to
+        collect a warning letter.
 
-        The notice carries its own answer -- "May chu dang bao tri. Thoi gian
-        con lai: 00:38:27" -- and the clock reads exactly: 2307 seconds off
-        the kept frame. So the farm closes the client and waits that long plus
-        a random few minutes, because the operator says the game extends the
-        countdown, and coming back on the second would mean walking straight
-        back in.
+        The notice answers the question itself -- "May chu dang bao tri. Thoi
+        gian con lai: 00:38:27" -- and the clock reads exactly: 2307 seconds
+        off the kept frame.
 
-        Over 61 curated frames -- city, world map, mail, training, the alert
-        border, wrong-place failures -- this never once fired.
+        What to DO about it is the operator's rule, and it is simply how a
+        person behaves. You do not poke a server that has just told you how
+        long it needs. You wait for the clock to run out, press LAM MOI once,
+        and then one of two things happens: you are in, or the notice returns
+        with more time on it because the publisher hit a problem. So this
+        waits without touching anything, presses refresh once when the clock
+        is nearly out, and looks again.
+
+        The earlier version closed the client and relaunched after the
+        countdown, which reaches the same place but spends two minutes of
+        client startup to press a button that is already on screen.
         """
         from rok_farm import maintenance as mt
         from rok_farm.queue_ocr import ocr_texts
@@ -493,26 +499,55 @@ class PhasesMixin:
         if not mt.is_maintenance(lines):
             return False
 
-        left = mt.seconds_left(lines)
-        if left is None:
-            wait = mt.BLIND_WAIT_S
-            how = "no readable clock"
-        else:
-            wait = left + random.uniform(*mt.GRACE_S)
-            how = f"{left / 60:.0f}min on its clock"
         print("")
-        print(f"  [{WARN}] The server is in maintenance ({how}) -- closing the "
-              f"client and waiting {wait / 60:.0f}min")
-        logger.warning("maintenance: %s, holding for %.0fs", how, wait)
+        print(f"  [{WARN}] The server is in maintenance -- waiting it out, "
+              f"and pressing LAM MOI only when its clock runs out")
         if frame is not None:
             save_screenshot(frame, "MAINTENANCE")
 
-        try:
-            self._restart_game("server maintenance", extra_wait=wait)
-        except Exception:
-            logger.warning("maintenance: could not close the client",
-                           exc_info=True)
-            self._sleep_until_woken(wait, "server maintenance")
+        started = time.time()
+        presses = 0
+        while time.time() - started < mt.MAX_HOLD_S:
+            left = mt.seconds_left(lines)
+            if left is None:
+                logger.warning("maintenance: notice up, no readable clock -- "
+                               "looking again in %.0fmin",
+                               mt.BLIND_WAIT_S / 60)
+                self._sleep_until_woken(mt.BLIND_WAIT_S, "server maintenance")
+            elif left > mt.PRESS_WITHIN_S:
+                nap = min(left - mt.PRESS_WITHIN_S,
+                          random.uniform(*mt.POLL_S))
+                logger.info("maintenance: %.0fmin left on its clock, "
+                            "waiting %.0fs", left / 60, nap)
+                self._sleep_until_woken(nap, "server maintenance")
+            else:
+                # The clock is out. One press, then look.
+                presses += 1
+                logger.info("maintenance: the clock is out -- pressing LAM MOI "
+                            "(press %d)", presses)
+                print(f"  [{INFO}] Maintenance clock is out -- pressing LAM MOI")
+                self._click_pct(*mt.REFRESH_AT, jitter_px=6)
+                self._wait(random.uniform(4.0, 8.0))
+
+            if not self.game.is_game_running():
+                logger.info("maintenance: the client closed itself while we "
+                            "waited -- letting the loop bring it back")
+                self._view_is_world = False
+                return True
+
+            frame = self._grab()
+            lines = mt.read_lines(frame, ocr_texts)
+            if not mt.is_maintenance(lines):
+                held = (time.time() - started) / 60.0
+                print(f"  [{PASS}] Maintenance over after {held:.0f}min "
+                      f"({presses} refresh press(es)) -- back to work")
+                logger.info("maintenance: over after %.0fmin, %d press(es)",
+                            held, presses)
+                self._view_is_world = False
+                return True
+
+        logger.warning("maintenance: still up after %.0fmin -- giving the loop "
+                       "back its turn", mt.MAX_HOLD_S / 60)
         self._view_is_world = False
         return True
 

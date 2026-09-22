@@ -35,12 +35,28 @@ BAND = (0.50, 0.70, 0.22, 0.80)      # y1, y2, x1, x2 as fractions
 MARKS = ("may chu dang bao tri", "thoi gian con lai")
 CLOCK = re.compile(r"(\d{1,2}):([0-5]\d):([0-5]\d)")
 
-# How much longer than the countdown to stay away. The countdown gets
-# extended, so coming back exactly on the second would mean walking straight
-# back into it.
-GRACE_S = (240.0, 600.0)
-# And what to do when the screen is there but the clock is not readable.
+# The notice's own refresh button, "LAM MOI". Measured across four kept
+# frames its text centres on pct(0.4125, 0.663) with almost no spread --
+# 0.412, 0.413, 0.413, 0.413 -- and the four clicks the farm landed on it by
+# accident fell at rx 0.399 to 0.414, which is how we know the point is right
+# even though the OCR only ever reads "AM MO" out of it. FACEBOOK sits at
+# 0.591 on the same row; nothing here should go near it.
+REFRESH_AT = (0.4125, 0.663)
+
+# When to press it. The operator's rule, and it is how a person behaves: you
+# do not poke a server that has just told you how long it needs. You wait for
+# the clock to run out, press refresh once, and then either you are in or the
+# notice comes back with more time on it -- "thoi gian tang len do nha phat
+# hanh gap su co".
+PRESS_WITHIN_S = 25.0
+# How often to look while waiting. Randomised, because this can run the best
+# part of an hour and a fixed beat is its own tell.
+POLL_S = (60.0, 150.0)
+# What to do when the screen is there but the clock is not readable.
 BLIND_WAIT_S = 900.0
+# An outer bound, so a notice that never resolves cannot hold the farm for
+# ever without anyone hearing about it.
+MAX_HOLD_S = 7200.0
 
 
 def _flatten(text: str) -> str:

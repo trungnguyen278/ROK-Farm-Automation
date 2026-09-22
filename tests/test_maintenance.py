@@ -13,7 +13,6 @@ itself, so the fix is to read it.
 
 import ast
 import inspect
-import re
 
 import cv2
 import pytest
@@ -106,12 +105,10 @@ def test_the_farm_checks_before_it_touches_anything():
     assert hold < queue, "maintenance is checked after the queue is read"
 
 
-def test_the_wait_is_never_exactly_the_countdown():
-    """The operator's warning: the game extends it. Coming back on the second
-    means walking straight back in."""
-    lo, hi = mt.GRACE_S
-    assert lo >= 120.0, mt.GRACE_S
-    assert hi > lo, mt.GRACE_S
+def test_an_unreadable_clock_is_waited_out_generously():
+    """The notice is there but the countdown did not read. Looking again in a
+    few seconds would be poking; a quarter of an hour is a person going away
+    and coming back."""
     assert mt.BLIND_WAIT_S >= 300.0
 
 
@@ -139,3 +136,59 @@ def test_the_reconnect_handler_refuses_the_maintenance_notice():
         "press refresh on the notice again")
     assert match is not None
     assert guard < match, (guard, match)
+
+
+# --- Waiting, then refreshing ---------------------------------------------
+#
+# The operator's rule: you do not poke a server that has just told you how
+# long it needs. Wait for the clock to run out, press LAM MOI once, and then
+# either you are in or the notice comes back with more time on it.
+
+def test_the_refresh_button_is_where_it_was_measured():
+    """Four kept frames put its text centre at 0.412-0.413, and the four
+    accidental clicks that hit it landed at rx 0.399-0.414."""
+    x, y = mt.REFRESH_AT
+    assert 0.399 <= x <= 0.414, mt.REFRESH_AT
+    assert 0.65 <= y <= 0.68, mt.REFRESH_AT
+
+
+def test_it_does_not_reach_for_the_facebook_button():
+    """FACEBOOK sits at 0.591 on the same row."""
+    assert abs(mt.REFRESH_AT[0] - 0.591) > 0.10, mt.REFRESH_AT
+
+
+def test_nothing_is_pressed_while_the_clock_still_runs():
+    """The whole complaint: four presses in three minutes with time left."""
+    src = inspect.getsource(
+        __import__("rok_farm.phases", fromlist=["PhasesMixin"]).PhasesMixin
+        ._maintenance_hold)
+    tree = ast.parse(src.lstrip())
+    clicks = [n for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+              and n.func.attr == "_click_pct"]
+    assert len(clicks) == 1, (
+        "the hold clicks in more than one place; it may press while the "
+        "countdown is still running")
+    # and that click has to live under a branch guarded by the clock
+    guarded = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        body = ast.dump(ast.Module(body=node.orelse, type_ignores=[]))
+        if "_click_pct" in body and "PRESS_WITHIN_S" in ast.dump(node.test):
+            guarded = True
+    assert guarded, "the refresh press is not gated on the countdown"
+
+
+def test_the_press_window_is_small():
+    """"When it runs out" has to mean that, not "when it is nearly out"."""
+    assert 0 < mt.PRESS_WITHIN_S <= 60.0, mt.PRESS_WITHIN_S
+
+
+def test_the_wait_has_no_fixed_beat():
+    lo, hi = mt.POLL_S
+    assert hi > lo >= 30.0, mt.POLL_S
+
+
+def test_the_hold_cannot_run_for_ever():
+    assert 0 < mt.MAX_HOLD_S <= 4 * 3600, mt.MAX_HOLD_S
