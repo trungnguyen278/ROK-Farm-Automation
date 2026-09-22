@@ -176,3 +176,25 @@ def test_the_feature_checks_the_position_before_it_clicks():
     assert gate is not None, "the position gate is gone"
     assert click is not None
     assert gate < click, f"gate at {gate} comes after the click at {click}"
+
+
+def test_already_on_the_system_tab_still_keeps_a_picture():
+    """The refusal added this morning was right but left a hole.
+
+    Live 2026-09-22 17:37: HE THONG was already the active tab after a
+    read-all on it, so its inactive artwork was not on screen, the template
+    settled on LIEN MINH at 0.374, and the glance correctly declined to click
+    -- and returned with no picture of the one tab the anti-cheat letters
+    arrive on. Being already there is the good case.
+    """
+    import ast
+    import inspect
+    import anti_detection.player_actions as pa
+
+    tree = ast.parse(inspect.getsource(pa._open_system_tab).lstrip())
+    names = {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant)
+             and isinstance(n.value, str)}
+    assert "ui/mail_tab_system_active" in names, (
+        "nothing checks whether the system tab is already open, so the glance "
+        "gives up exactly when the picture was free to take")
+    assert "MAIL_SYSTEM_TAB" in names, "it no longer saves the frame"

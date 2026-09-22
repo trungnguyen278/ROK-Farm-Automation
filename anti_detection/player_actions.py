@@ -1898,6 +1898,26 @@ def _open_system_tab(ctx, frame):
         tx = (tab.x + tab.w / 2) / fw
         ty = (tab.y + tab.h / 2) / fh
         if abs(tx - MAIL_SYSTEM_TAB_AT) > MAIL_SYSTEM_TAB_TOL:
+            # Usually because HE THONG is ALREADY the active tab, so its
+            # inactive artwork is not on screen and the template went looking
+            # elsewhere. That is the good case, not a failure: the picture is
+            # the whole point of this glance, and it can be taken without
+            # touching anything.
+            #
+            # Live 2026-09-22 17:37 this branch fired right after a read-all
+            # ON the system tab, and the run ended with no picture of the one
+            # tab the anti-cheat letters arrive on.
+            active = ctx.matcher.match_single(frame, "ui/mail_tab_system_active")
+            if active and active.confidence >= 0.70:
+                ax = (active.x + active.w / 2) / fw
+                if abs(ax - MAIL_SYSTEM_TAB_AT) <= MAIL_SYSTEM_TAB_TOL:
+                    _note_system_tab_opened()
+                    from rok_farm.screenshots import save_screenshot
+                    save_screenshot(frame, "MAIL_SYSTEM_TAB")
+                    logger.info("mail: already on the system tab (conf %.2f) "
+                                "-- kept the picture without clicking",
+                                active.confidence)
+                    return
             logger.info("mail: the system tab matched at x %.3f, not %.3f -- "
                         "that is another tab wearing its artwork, leaving it",
                         tx, MAIL_SYSTEM_TAB_AT)
