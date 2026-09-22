@@ -166,19 +166,6 @@ class DetectMixin:
         gem_thr = self._gem_icon_threshold()
         result = []
         edge_gems = []
-        # How many icon-SHAPED things were on screen, before anything
-        # gem-specific threw them out. The operator's distinction, 2026-09-22:
-        # "do co ngheo thi van co icon sau 2-3 lan luot roi, chi la khong phai
-        # mo gem minh can thoi" -- a poor map still shows resource icons, so a
-        # screen with none at all is a screen being looked at wrongly (zoomed
-        # in, filter off, fog), not a barren patch.
-        #
-        # The template is loose enough to catch other resources: it matched 4
-        # things this session that the classifier then called not_gem. Counted
-        # here rather than acted on, because 18 empty scans is the number that
-        # needs replacing and it should be replaced with a measurement.
-        self._icon_candidates_last = sum(
-            1 for m in matches if m.confidence >= gem_thr)
         for m in matches:
             if m.confidence < gem_thr:
                 continue
@@ -305,6 +292,10 @@ class DetectMixin:
         gem_thr = self._gem_icon_threshold()
         result = []
         edge_gems = []
+        # Per-SCAN count, cleared here. _candidates_this_mine below is the
+        # running total for the mine; this one answers "was there anything on
+        # screen just now", which is what tells a poor map from a broken view.
+        self._icon_candidates_last = 0
         for m in matches:
             if m.confidence < gem_thr:
                 continue
@@ -317,6 +308,13 @@ class DetectMixin:
             # the count stayed at zero and the early give-up fired on every
             # mine -- including one that had already classified a gem.
             self._candidates_this_mine = getattr(self, "_candidates_this_mine", 0) + 1
+            # The same count, but for THIS scan rather than the whole mine, so
+            # a view that breaks halfway through can be seen too. It belongs
+            # here for the reason written above: the scan loop calls this
+            # function and not _find_all_gems, and a counter put in the other
+            # one reads zero for ever. That mistake has now been made twice.
+            self._icon_candidates_last = getattr(
+                self, "_icon_candidates_last", 0) + 1
             patch = self._extract_icon_patch(frame, m)
             should_click, label, clf_conf = self.classifier.should_click(patch)
             if not should_click:

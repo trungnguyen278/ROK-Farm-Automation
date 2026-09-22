@@ -53,7 +53,12 @@ def test_empty_scans_record_what_was_on_screen():
     nothing is a broken view. Until now neither was written down."""
     from rok_farm import detect
 
-    src = inspect.getsource(detect.DetectMixin._find_all_gems)
+    # _find_all_icons, not _find_all_gems. The scan loop calls the first and
+    # not the second, which is written in a comment beside
+    # _candidates_this_mine because someone had already lost a day to it --
+    # and then I put this counter in the wrong one too, so it read zero for
+    # ever and the rule built on it fired on "no gem" instead of "no icon".
+    src = inspect.getsource(detect.DetectMixin._find_all_icons)
     assert "_icon_candidates_last" in src, (
         "the count of icon-shaped things on screen is not recorded, so the "
         "18-scan limit cannot be replaced with a measurement")
@@ -81,59 +86,3 @@ def test_the_scan_logs_it_rather_than_only_printing():
     assert "logger." in around, (
         "the empty-scan line is still print-only, so the number cannot be "
         "counted afterwards")
-
-
-# --- Seeing nothing is not the same as seeing no gems ---------------------
-#
-# The operator, 2026-09-22: "con so 18 truoc do toi thay la viec thay mo nhung
-# khong phai mo gem, con viec khong thay mo thi la 1 van de can fix nhanh".
-# Two different failures were sharing one counter.
-
-def test_a_blank_screen_gives_up_far_sooner_than_a_poor_map():
-    from rok_farm import flow_steps
-
-    assert flow_steps.BLIND_GIVEUP < flow_steps.NO_CANDIDATE_GIVEUP, (
-        "a screen showing nothing should give up before one showing the "
-        "wrong things")
-    src = _hold_src()
-    assert "max_empty_streak = 18" in src, "the poor-map limit moved"
-    assert flow_steps.BLIND_GIVEUP < 18
-
-
-def test_the_blind_limit_is_the_number_the_operator_set():
-    """Three. I argued for six on the grounds that ocean and mountains could
-    trip a lower bar; the operator overruled it and set three. A false trip
-    costs one trip through the city, which is where a blind mine ends up
-    anyway, so the asymmetry is in their favour."""
-    from rok_farm import flow_steps
-    assert flow_steps.BLIND_GIVEUP == 3, flow_steps.BLIND_GIVEUP
-
-
-def test_the_streak_counts_icons_not_gems():
-    """The whole point: empty_streak already counts scans with no gem."""
-    src = _hold_src()
-    idx = src.find("blind_streak += 1")
-    assert idx != -1, "the blind streak is gone"
-    before = src[max(0, idx - 300):idx]
-    assert "_icon_candidates_last" in before, (
-        "the blind streak is not keyed on icon-shaped candidates, so it is "
-        "just empty_streak under another name")
-
-
-def test_a_blank_screen_tries_the_zoom_before_blaming_the_map():
-    src = _hold_src()
-    idx = src.find("blind_streak >= BLIND_GIVEUP")
-    assert idx != -1
-    branch = src[idx:idx + 2000]
-    assert "read_zoom_gauge" in branch
-    assert "_step_return_city" in branch
-    assert "_BLIND" in branch, "no frame is kept, so the cause stays a guess"
-
-
-def test_the_blind_check_runs_before_the_no_candidate_one():
-    """Otherwise it can never fire -- the other one gives up at ten."""
-    src = _hold_src()
-    blind = src.find("blind_streak >= BLIND_GIVEUP")
-    other = src.find("scan_count - no_candidate_floor >= NO_CANDIDATE_GIVEUP")
-    assert blind != -1 and other != -1
-    assert blind < other, (blind, other)

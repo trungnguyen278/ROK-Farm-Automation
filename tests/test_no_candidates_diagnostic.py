@@ -100,9 +100,19 @@ def test_a_blank_map_is_abandoned_early(flow):
     """
     from rok_farm.flow_steps import NO_CANDIDATE_GIVEUP
 
-    assert 8 <= NO_CANDIDATE_GIVEUP <= 13, (
-        f"{NO_CANDIDATE_GIVEUP} sits outside the measured range: below 8 it "
-        f"starts cutting healthy mines, above 13 it saves nothing")
+    # This asserted 8..13 until 2026-09-22, on the measurement above: below 8
+    # it starts cutting mines whose first candidate was simply late. The
+    # operator overrode it -- "khong thay mo nao nguong thap thoi tam 3 gi do"
+    # -- having been told what the tail costs. Their reasoning, which is
+    # sound: a wrong give-up costs one trip through the city, which is where a
+    # blind mine ends up anyway, while every extra scan of a blank screen
+    # costs the mine as well as the scans.
+    #
+    # Pinned to their number rather than widened to a range, so that if it
+    # drifts back by accident someone has to read this and decide again.
+    assert NO_CANDIDATE_GIVEUP == 3, (
+        f"{NO_CANDIDATE_GIVEUP} is not the operator's number; 8-13 was the "
+        f"measured range and 3 is a deliberate trade against it")
 
     # Anchor on the condition, not on a character distance from the message:
     # the branch grew and the old window silently stopped covering it.
