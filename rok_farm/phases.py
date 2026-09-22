@@ -43,13 +43,69 @@ class PhasesMixin:
         hold = random.randint(50, 120)
         self.cmd.send("COMBO", "ALT", "TAB", hold)
 
+    # While the client sits in the background, how often the pointer is
+    # touched at all, and what that looks like.
+    #
+    # The operator's point, 2026-09-22: the cursor freezing absolutely, for
+    # exactly as long as the client is backgrounded, every single time, is a
+    # clean correlation for anything sampling the global cursor. Nobody has
+    # shown that ROK does sample it -- this is precaution against an
+    # unconfirmed channel, not a fix for a measured one, which is worth
+    # saying out loud because everything else changed today was the latter.
+    #
+    # It is cheap because the window is small: measured over every saved log,
+    # alt-tab absences run 5 to 97 seconds, median 32. Long waits close the
+    # client instead, and nothing observes anything then. So this is a handful
+    # of moves in half a minute, not the 137,000 nudges that were taken out
+    # this morning -- those ran every 1.75s for hours WITH THE GAME IN FRONT.
+    TAB_IDLE_CHANCE = 0.55      # the rest of the time, a person who walked off
+    TAB_IDLE_GAP_S = (6.0, 22.0)
+
+    def _tab_idle_move(self):
+        """One aimless pointer move, the way a hand using another window does.
+
+        Moves only. No clicks, ever: another application owns the screen now,
+        and a stray click there lands in someone's editor or browser. Moving
+        is harmless, clicking is not.
+        """
+        win = getattr(self, "win", None)
+        if not win:
+            return
+        x = win["left"] + int(win["width"] * random.uniform(0.12, 0.88))
+        y = win["top"] + int(win["height"] * random.uniform(0.12, 0.88))
+        try:
+            self._moveto(x, y)
+        except Exception:
+            logger.debug("tab idle move failed", exc_info=True)
+
     def _tab_away(self):
         raw = random.lognormvariate(3.8, 0.7)
         away = max(5.0, min(600.0, raw))
         logger.info("tab away %.0fs", away)
         print(f"  [{INFO}] Alt-tab away {away:.0f}s")
         self._tab_out()
-        time.sleep(away)
+
+        # Sometimes nothing at all. A rule with no exception is a fingerprint
+        # of its own, and a player who steps away really does leave the mouse
+        # where it lies.
+        if random.random() >= self.TAB_IDLE_CHANCE:
+            logger.debug("tab idle: leaving the pointer where it is")
+            time.sleep(away)
+            return
+
+        end = time.time() + away
+        moves = 0
+        while True:
+            nap = random.uniform(*self.TAB_IDLE_GAP_S)
+            left = end - time.time()
+            if left <= nap:
+                if left > 0:
+                    time.sleep(left)
+                break
+            time.sleep(nap)
+            self._tab_idle_move()
+            moves += 1
+        logger.debug("tab idle: %d move(s) across %.0fs", moves, away)
 
     def _tab_back(self):
         hold = random.randint(50, 120)
