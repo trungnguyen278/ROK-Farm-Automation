@@ -45,6 +45,21 @@ SITE_MATCH_TILES = 0
 # that never produced a candidate at all -- those are wrong-zoom mines, and no
 # amount of further wandering fixes a zoom.
 NO_CANDIDATE_GIVEUP = 10
+# And a much shorter fuse for scans that see NOTHING -- no gem, and no
+# icon-shaped thing of any kind on the whole screen.
+#
+# The operator drew the line, 2026-09-22: "con so 18 truoc do toi thay la viec
+# thay mo nhung khong phai mo gem, con viec khong thay mo thi la 1 van de can
+# fix nhanh". Those are two different failures wearing the same counter. A
+# poor map still shows resource icons within two or three pans, so eighteen
+# scans of empty ground is a patient search; eighteen scans of a blank screen
+# is a wrong view nobody noticed -- zoomed in, filter off, fog.
+#
+# Six, not three: double what the operator says a poor map needs, so panning
+# across water or mountains cannot trip it, while still cutting the worst case
+# from twenty scans to six. The streak lengths are logged from today, so this
+# gets replaced by a measurement the way 18 was.
+BLIND_GIVEUP = 6
 
 # Corrective zoom-out rounds allowed when the HUD says the map is zoomed in.
 # Two, not "until it looks right": the loop re-reads the gauge between rounds
@@ -935,6 +950,9 @@ class GemFlowMixin:
         max_scans = 60
         max_attempts = 10
         empty_streak = 0
+        # Scans in a row with not one icon-shaped thing on screen. Counted
+        # apart from empty_streak, which only means "no gem".
+        blind_streak = 0
         # 12 sat exactly on the observed ceiling, which is the tell that it was
         # censoring the data rather than describing it. Over 374 finds in the
         # log the streak-before-a-find decayed 24, 18, 14, 19, 9, 8 across
@@ -1087,6 +1105,10 @@ class GemFlowMixin:
 
             if not icons:
                 empty_streak += 1
+                if getattr(self, "_icon_candidates_last", 0):
+                    blind_streak = 0
+                else:
+                    blind_streak += 1
                 # Panned out of the kingdom into fog? Bail early -- the camera is
                 # off the map edge, no resources will ever appear here. Return to
                 # city so the next mine re-centers on the player's city.
@@ -1167,6 +1189,43 @@ class GemFlowMixin:
                 # worst ever seen. Leaving at 10 gives up on 2 of those 649
                 # (0.3%) and saves eight wasted scans on each of the 70 that
                 # never saw a candidate at all.
+                # Nothing on the screen at all, several scans running. Not
+                # a barren map -- a map that is not being shown. The zoom is
+                # the usual cause and there is a fix for it right here; if
+                # that is not it, the city trip is the only reset left, and
+                # waiting for scan eighteen to say so costs the mine anyway.
+                if blind_streak >= BLIND_GIVEUP:
+                    gauge = self.read_zoom_gauge()
+                    if gauge == "close" and not self._zoom_fixed_this_mine:
+                        print(f"  [{WARN}] {blind_streak} scans with nothing on "
+                              f"screen and the HUD shows the resource bar -- "
+                              f"zoomed in; scrolling out")
+                        logger.warning("blind for %d scans, zoom gauge close "
+                                       "-- correcting in place", blind_streak)
+                        self._zoom_fixed_this_mine = True
+                        self._scroll_at_center(-1, self._zoom_scrolls())
+                        self._wait_zoom_settled()
+                        if self.read_zoom_gauge() == "close":
+                            logger.warning("blind: the scroll did not move the "
+                                           "gauge -- back to city")
+                            self._step_return_city(tag)
+                            return None
+                        blind_streak = 0
+                        empty_streak = 0
+                        no_candidate_floor = scan_count
+                        continue
+                    print(f"  [{FAIL}] {blind_streak} scans and NOT ONE icon of "
+                          f"any kind on screen (zoom gauge: {gauge}) -- this "
+                          f"is not a poor map, it is the wrong view; back "
+                          f"through the city")
+                    logger.warning("blind for %d scans (zoom gauge %s) -- "
+                                   "returning to city", blind_streak, gauge)
+                    blank = self._grab()
+                    if blank is not None:
+                        save_screenshot(blank, f"{tag}_BLIND")
+                    self._step_return_city(tag)
+                    return None
+
                 if (scan_count - no_candidate_floor >= NO_CANDIDATE_GIVEUP
                         and not getattr(self, "_candidates_this_mine", 0)):
                     # Stop guessing at the cause. The HUD says whether this is

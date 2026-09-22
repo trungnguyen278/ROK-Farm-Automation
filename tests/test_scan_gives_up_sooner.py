@@ -81,3 +81,57 @@ def test_the_scan_logs_it_rather_than_only_printing():
     assert "logger." in around, (
         "the empty-scan line is still print-only, so the number cannot be "
         "counted afterwards")
+
+
+# --- Seeing nothing is not the same as seeing no gems ---------------------
+#
+# The operator, 2026-09-22: "con so 18 truoc do toi thay la viec thay mo nhung
+# khong phai mo gem, con viec khong thay mo thi la 1 van de can fix nhanh".
+# Two different failures were sharing one counter.
+
+def test_a_blank_screen_gives_up_far_sooner_than_a_poor_map():
+    from rok_farm import flow_steps
+
+    assert flow_steps.BLIND_GIVEUP < flow_steps.NO_CANDIDATE_GIVEUP, (
+        "a screen showing nothing should give up before one showing the "
+        "wrong things")
+    src = _hold_src()
+    assert "max_empty_streak = 18" in src, "the poor-map limit moved"
+    assert flow_steps.BLIND_GIVEUP < 18
+
+
+def test_it_is_not_so_eager_that_water_trips_it():
+    """Double what the operator says a poor map needs, so panning across
+    mountains or ocean cannot fire it."""
+    from rok_farm import flow_steps
+    assert flow_steps.BLIND_GIVEUP >= 5, flow_steps.BLIND_GIVEUP
+
+
+def test_the_streak_counts_icons_not_gems():
+    """The whole point: empty_streak already counts scans with no gem."""
+    src = _hold_src()
+    idx = src.find("blind_streak += 1")
+    assert idx != -1, "the blind streak is gone"
+    before = src[max(0, idx - 300):idx]
+    assert "_icon_candidates_last" in before, (
+        "the blind streak is not keyed on icon-shaped candidates, so it is "
+        "just empty_streak under another name")
+
+
+def test_a_blank_screen_tries_the_zoom_before_blaming_the_map():
+    src = _hold_src()
+    idx = src.find("blind_streak >= BLIND_GIVEUP")
+    assert idx != -1
+    branch = src[idx:idx + 2000]
+    assert "read_zoom_gauge" in branch
+    assert "_step_return_city" in branch
+    assert "_BLIND" in branch, "no frame is kept, so the cause stays a guess"
+
+
+def test_the_blind_check_runs_before_the_no_candidate_one():
+    """Otherwise it can never fire -- the other one gives up at ten."""
+    src = _hold_src()
+    blind = src.find("blind_streak >= BLIND_GIVEUP")
+    other = src.find("scan_count - no_candidate_floor >= NO_CANDIDATE_GIVEUP")
+    assert blind != -1 and other != -1
+    assert blind < other, (blind, other)
