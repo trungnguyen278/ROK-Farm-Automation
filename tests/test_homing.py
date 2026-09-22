@@ -35,8 +35,13 @@ class Fake(GemFlowMixin):
             self._last_map_xy = here
 
 
-def test_the_radius_sits_where_the_march_time_doubles():
-    assert 60 <= HOME_RADIUS_TILES <= 160, HOME_RADIUS_TILES
+def test_the_radius_is_a_last_resort_not_a_cap():
+    """It started at 100 -- where the march time doubles -- and the operator
+    rejected that as a fence: scarcity near the city has to be allowed to push
+    the search outward. It is 250 now, where a march takes 18 minutes against
+    five near home and the trip back costs less than carrying on. The sweep in
+    map_memory is what actually keeps the search near the city."""
+    assert HOME_RADIUS_TILES >= 200, HOME_RADIUS_TILES
 
 
 def test_distance_is_unknown_until_both_ends_are():

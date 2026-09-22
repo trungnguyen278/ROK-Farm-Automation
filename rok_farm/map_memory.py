@@ -179,7 +179,23 @@ class MapMemory:
             return -10.0
         c = self.reach.get(_key(x, y))
         if not c:
-            return 0.0            # unexplored is neutral, not bad -- go look
+            # Unexplored used to be NEUTRAL, which is not the same as
+            # attractive. Explored-and-empty scores negative, so the wander
+            # drifted away from anywhere it had been -- outward, for ever,
+            # with no preference between the unseen cell next door and the
+            # unseen cell two hundred tiles away. That is how it ended up
+            # marching 18 minutes each way while unscanned ground sat beside
+            # the city.
+            #
+            # The operator's correction, 2026-09-22: do not fence it in, give
+            # it a route -- "dung gioi han ban kinh qua chi can tao duong di
+            # tranh scan thieu thoi tai no co the khan hiem that va phai chiu
+            # xa". So unexplored ground is worth going to, and the nearer to
+            # the city the more so. That fills the neighbourhood first and
+            # expands outward on its own, and when the near ground really is
+            # exhausted the far cells are still positive, so distance is a
+            # decision rather than a drift.
+            return self._unexplored_worth(x, y)
         age_h = (time.time() - c.get("t", 0)) / 3600.0
         weight = 0.5 ** (age_h / REACH_HALFLIFE_H)
         return (c.get("gem", 0) * 2.0 - c.get("empty", 0) * 0.5) * weight
@@ -237,6 +253,28 @@ class MapMemory:
             if cx < 0 or cy < 0 or self.is_wall(cx, cy):
                 return True
         return False
+
+    # What an unseen cell beside the city is worth, and how fast that fades
+    # with distance. The bonus has to stay under a known gem (2.0) so a
+    # remembered deposit still wins, and above an empty cell (-0.5) so
+    # unscanned ground beats ground already picked over.
+    UNEXPLORED_NEAR = 1.0
+    UNEXPLORED_HALF_TILES = 120.0
+    # Below this it is still worth going, just less so -- never zero, or the
+    # far map becomes invisible again the moment the near map is scanned.
+    UNEXPLORED_FAR_FLOOR = 0.25
+
+    def set_city(self, x: int, y: int) -> None:
+        """Where the sweep expands from. Learned, not configured."""
+        self.city = (int(x), int(y))
+
+    def _unexplored_worth(self, x: int, y: int) -> float:
+        city = getattr(self, "city", None)
+        if not city:
+            return self.UNEXPLORED_NEAR
+        dist = max(abs(x - city[0]), abs(y - city[1]))
+        fade = 0.5 ** (dist / self.UNEXPLORED_HALF_TILES)
+        return max(self.UNEXPLORED_FAR_FLOOR, self.UNEXPLORED_NEAR * fade)
 
     def heading_score(self, x: int, y: int, heading: float,
                       reach_cells: int = 6) -> float:

@@ -84,7 +84,17 @@ NO_CANDIDATE_GIVEUP = 3
 # trip through the city, which resets the camera -- measured the same
 # evening: "map step: 267 tiles (844,465 -> 577,582)" straight after a city
 # return. Half a minute to save eight minutes a mine.
-HOME_RADIUS_TILES = 100
+# NOT a fence. The operator asked for a route rather than a cap: gems can be
+# genuinely scarce near the city, and then going far is the right answer, not
+# a fault. The sweep itself is what keeps the search near home -- unexplored
+# ground scores higher the closer it is (MapMemory._unexplored_worth) -- and
+# this only catches the case where that has failed badly enough to be costing
+# whole mines.
+#
+# 250, from the march-time table: a march past 240 tiles takes 18 minutes
+# against five near home, so at that point the trip back costs less than the
+# next march does.
+HOME_RADIUS_TILES = 250
 
 # Corrective zoom-out rounds allowed when the HUD says the map is zoomed in.
 # Two, not "until it looks right": the loop re-reads the gauge between rounds
@@ -222,7 +232,9 @@ class GemFlowMixin:
             self._expect_home_read = False
             if not self._off_home_map:
                 self._city_xy = (x, y)
-                logger.info("Home is %d:%d", x, y)
+                logger.info("City is %d:%d", x, y)
+                if self.mapmem is not None:
+                    self.mapmem.set_city(x, y)
         return self._last_map_xy
 
     def _tiles_from_home(self) -> int | None:

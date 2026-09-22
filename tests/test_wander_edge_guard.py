@@ -34,9 +34,19 @@ def test_a_negative_coordinate_is_not_neutral(book):
     assert book.score(-8, -8) < 0
 
 
-def test_unexplored_ground_is_still_neutral(book):
-    """The fix must not make the bot afraid of everywhere it has not been."""
-    assert book.score(500, 500) == 0.0
+def test_unexplored_ground_is_never_something_to_avoid(book):
+    """The fix must not make the bot afraid of everywhere it has not been.
+
+    This asserted == 0.0 until 2026-09-22, when unexplored ground became
+    positively attractive so the wander would sweep rather than drift. The
+    requirement was never "exactly zero" -- it was "not negative", which is
+    what kept the edge-guard fix from turning every unseen cell into a wall.
+    That still holds, and now holds more strongly.
+    """
+    assert book.score(500, 500) >= 0.0
+    # and it must not outrank the things that are genuinely dangerous
+    book.terrain[f"{500 // CELL},{500 // CELL}"] = {"wall": 1}
+    assert book.score(500, 500) < 0.0
 
 
 def test_heading_off_the_edge_scores_worse_than_heading_inland(book):
