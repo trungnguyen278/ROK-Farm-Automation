@@ -276,7 +276,19 @@ def shutdown_board(close_game):
                 out.append(_quit_game_gracefully(cmd))
             except Exception as e:
                 out.append(f"Game close failed: {type(e).__name__}: {e}")
-        cmd.send("IDLE", "0")
+        # IDLE 1, not 0. The firmware reads the argument as "suppressed":
+        # handle_idle sets idle_suppressed = (param == 1), and idle_noise()
+        # returns early only while that flag is true. So IDLE 0 CLEARS the
+        # suppression and starts the board nudging the pointer every 0.5-3
+        # seconds, which is the opposite of what this line has been printing.
+        #
+        # The operator found it from the outside on 2026-09-22: with the board
+        # plugged in the screen never sleeps after locking, and unplugged it
+        # does. Windows' idle clock never rose above 0.7s across two minutes
+        # of an untouched machine, so the display timeout could never run
+        # down. The docstring at the top of this file has always said stopping
+        # must turn the jitter off; only the argument disagreed.
+        cmd.send("IDLE", "1")
         cmd.stop()
         conn.disconnect()
         out.append("HID: idle jitter OFF, port released")
