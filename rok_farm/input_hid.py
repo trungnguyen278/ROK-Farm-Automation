@@ -268,7 +268,14 @@ class HidInputMixin:
             # not metronomic.
             time.sleep(random.uniform(0.04, 0.13))
         else:
-            perceive = random.lognormvariate(-0.5, 0.4)
+            # The day's pace multiplies it. This distribution is the one that
+            # shaped the click rhythm, and with fixed parameters it is the
+            # most estimable thing the farm does -- nine thousand samples of a
+            # lognormal pin mu and sigma precisely. The bounds stay fixed:
+            # mood moves the centre, never the safety rails.
+            from rok_farm import mood
+            k = mood.pace(getattr(self, "_account_id", ""))
+            perceive = random.lognormvariate(-0.5, 0.4) * k
             time.sleep(max(0.15, min(2.0, perceive)))
         if random.random() < 0.015:
             miss_dx = random.randint(-40, 40)

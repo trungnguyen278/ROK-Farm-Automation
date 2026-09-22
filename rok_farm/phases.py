@@ -1114,7 +1114,14 @@ class PhasesMixin:
             return True
         target = getattr(self, "_quit_gap_target", None)
         if target is None:
-            target = self._quit_gap_target = random.uniform(*QUIT_GAP_TARGET_S)
+            # Scaled by the day's restlessness. The spread here was already
+            # randomised per session, but its CENTRE never moved, and a
+            # centre that never moves is what an estimator locks onto. See
+            # rok_farm/mood.py.
+            from rok_farm import mood
+            lo, hi = QUIT_GAP_TARGET_S
+            k = mood.restless(getattr(self, "_account_id", ""))
+            target = self._quit_gap_target = random.uniform(lo * k, hi * k)
             logger.info("this session will aim for about %.0f min between "
                         "client restarts", target / 60)
         gap = time.time() - seen[-1]
