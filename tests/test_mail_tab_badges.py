@@ -110,3 +110,69 @@ def test_an_alert_border_is_not_an_empty_mailbox():
         c = cv2.imread(str(f))
         if c is not None:
             assert not under_alert(c), (f.name, alert_border(c))
+
+
+# --- The system tab -------------------------------------------------------
+#
+# The rare glance at HE THONG exists because the anti-cheat letters arrive
+# there. It was opening LIEN MINH instead, and saying it had not.
+
+SYSTEM_TAB_FRAMES = PROJECT_ROOT / "screenshots" / "keep" / "mail"
+
+
+def mail_frame(name):
+    path = SYSTEM_TAB_FRAMES / name
+    if not path.is_file():
+        pytest.skip(f"{name} is not kept any more")
+    im = cv2.imread(str(path))
+    if im is None:
+        pytest.skip(f"{name} did not decode")
+    return im
+
+
+def system_tab_match(frame):
+    """Where the inactive HE THONG artwork matches, as the feature sees it."""
+    tpl = cv2.imread(str(PROJECT_ROOT / "templates" / "ui" / "mail_tab_system.png"))
+    if tpl is None:
+        pytest.skip("the system tab template is missing")
+    res = cv2.matchTemplate(frame, tpl, cv2.TM_CCOEFF_NORMED)
+    _, conf, _, loc = cv2.minMaxLoc(res)
+    return (loc[0] + tpl.shape[1] / 2) / frame.shape[1], conf
+
+
+def test_the_alliance_tab_wearing_system_artwork_is_refused():
+    """With HE THONG already active its own artwork is not on screen, so the
+    template settles on LIEN MINH at x 0.374 with confidence 0.92 -- over the
+    0.70 the code accepts. 15 of 40 accepted matches across the saved frames
+    were this."""
+    import anti_detection.player_actions as pa
+    x, conf = system_tab_match(mail_frame("SYSTEM_TAB_ACTIVE_110504.png"))
+    assert conf >= 0.70, conf
+    assert abs(x - pa.MAIL_SYSTEM_TAB_AT) > pa.MAIL_SYSTEM_TAB_TOL, (
+        f"the decoy at x {x:.3f} still passes the position gate")
+
+
+def test_the_real_system_tab_passes():
+    """21 matches at x 0.461 across the saved frames, to three decimals."""
+    import anti_detection.player_actions as pa
+    x, conf = system_tab_match(mail_frame("OPENED_THE_WRONG_TAB_110444.png"))
+    assert conf >= 0.70, conf
+    assert abs(x - pa.MAIL_SYSTEM_TAB_AT) <= pa.MAIL_SYSTEM_TAB_TOL, x
+
+
+def test_the_feature_checks_the_position_before_it_clicks():
+    import ast
+    import inspect
+    import anti_detection.player_actions as pa
+
+    tree = ast.parse(inspect.getsource(pa._open_system_tab).lstrip())
+    gate = click = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "MAIL_SYSTEM_TAB_AT" and gate is None:
+            gate = node.lineno
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "_click_in_mail_panel" and click is None):
+            click = node.lineno
+    assert gate is not None, "the position gate is gone"
+    assert click is not None
+    assert gate < click, f"gate at {gate} comes after the click at {click}"

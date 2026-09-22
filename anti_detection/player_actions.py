@@ -1867,8 +1867,27 @@ def _note_system_tab_opened():
                        exc_info=True)
 
 
+# Where HE THONG is. The tabs do not move: across every saved mail frame the
+# system tab matched at x 0.461 twenty-one times, to three decimal places.
+MAIL_SYSTEM_TAB_AT = 0.461
+MAIL_SYSTEM_TAB_TOL = 0.02
+
+
 def _open_system_tab(ctx, frame):
-    """Open HE THONG by its own template and keep the picture."""
+    """Open HE THONG by its own template and keep the picture.
+
+    The template alone was not enough, and the failure was silent. When the
+    system tab is ALREADY the active one its inactive artwork is not on
+    screen, so the template goes looking elsewhere and settles on LIEN MINH at
+    x 0.374 with confidence 0.92 -- over the 0.70 this accepted. Counted over
+    every saved mail frame: 21 matches on the real tab at 0.461 and 15 on the
+    alliance tab at 0.374, so better than a third of the time this opened the
+    wrong tab and logged "system tab opened and kept" anyway.
+
+    Live at 11:05:14 on 2026-09-22 it did exactly that, and the picture it
+    kept -- the whole point of the feature, since the anti-cheat letters
+    arrive on HE THONG -- is a page of alliance resource mail.
+    """
     try:
         tab = ctx.matcher.match_single(frame, "ui/mail_tab_system")
         if not (tab and tab.confidence >= 0.70):
@@ -1878,6 +1897,11 @@ def _open_system_tab(ctx, frame):
         fh, fw = frame.shape[:2]
         tx = (tab.x + tab.w / 2) / fw
         ty = (tab.y + tab.h / 2) / fh
+        if abs(tx - MAIL_SYSTEM_TAB_AT) > MAIL_SYSTEM_TAB_TOL:
+            logger.info("mail: the system tab matched at x %.3f, not %.3f -- "
+                        "that is another tab wearing its artwork, leaving it",
+                        tx, MAIL_SYSTEM_TAB_AT)
+            return
         print(f"    -> system tab at pct({tx:.3f},{ty:.3f})")
         if not _click_in_mail_panel(ctx, frame, tx, ty):
             return
