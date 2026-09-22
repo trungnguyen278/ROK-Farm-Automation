@@ -60,6 +60,32 @@ SITE_MATCH_TILES = 0
 # every extra scan of a blank screen costs the mine as well as the scans.
 NO_CANDIDATE_GIVEUP = 3
 
+# How far the wander may get from the city before it is walked back.
+#
+# The wander heading persists across mines and nothing ever pulled the camera
+# home, so it random-walks outward all session. The operator noticed the
+# symptom -- "sao tim gem xa the nhi" -- and asked whether the map was simply
+# barren. It is not. Measured on kingdom 4096 from 2026-09-20, pairing every
+# deposit with the march time that followed it:
+#
+#     0-30 tiles from the city   19 marches   median  5.3 min
+#     30-60                      15           median  5.0 min
+#     60-100                     24           median  8.4 min
+#     100-160                    20           median 13.0 min
+#     160-240                    21           median 13.3 min
+#     240+                        7           median 18.1 min
+#
+# and 68% of all marches were beyond 60 tiles, 45% beyond 100. Distance is
+# the whole story: within 60 tiles a march is five minutes, past 100 it is
+# thirteen, and the round trip that used to take half an hour was taking
+# over an hour by evening.
+#
+# A hundred, because that is where the march time doubles. The fix costs one
+# trip through the city, which resets the camera -- measured the same
+# evening: "map step: 267 tiles (844,465 -> 577,582)" straight after a city
+# return. Half a minute to save eight minutes a mine.
+HOME_RADIUS_TILES = 100
+
 # Corrective zoom-out rounds allowed when the HUD says the map is zoomed in.
 # Two, not "until it looks right": the loop re-reads the gauge between rounds
 # and stops the moment the resource bar disappears, so it cannot ratchet the
@@ -189,7 +215,23 @@ class GemFlowMixin:
             logger.debug("map step: %d tiles (%d,%d -> %d,%d)",
                          step, prev_xy[0], prev_xy[1], x, y)
         self._last_map_xy = (x, y)
+        # Coming back from the city puts the camera on the city, so the first
+        # reading after one is where home is. No configuration, no template --
+        # the same trick _home_map_id uses two functions up.
+        if getattr(self, "_expect_home_read", False):
+            self._expect_home_read = False
+            if not self._off_home_map:
+                self._city_xy = (x, y)
+                logger.info("Home is %d:%d", x, y)
         return self._last_map_xy
+
+    def _tiles_from_home(self) -> int | None:
+        """How far the camera has wandered, or None if either end is unknown."""
+        home = getattr(self, "_city_xy", None)
+        here = getattr(self, "_last_map_xy", None)
+        if not home or not here:
+            return None
+        return int(max(abs(here[0] - home[0]), abs(here[1] - home[1])))
 
     # Inside this many tiles of x=0 or y=0 the position is read every scan
     # instead of every MAP_READ_EVERY. It is the zone where a stale reading is
@@ -941,6 +983,24 @@ class GemFlowMixin:
         wh = self.win["height"]
         margin = 80
         cx, cy = self._center_screen()
+
+        # Too far out? Go home before searching, not after failing.
+        #
+        # Nothing else pulls the camera back: the heading persists across
+        # mines and only reverses at the map edge or fog, so the search drifts
+        # outward all session and every march gets longer. A city trip resets
+        # the camera, which is a fact the log has been stating all along --
+        # "map step: 267 tiles (844,465 -> 577,582)" right after one.
+        drift = self._tiles_from_home()
+        if drift is not None and drift > HOME_RADIUS_TILES:
+            print(f"  [{INFO}] {drift} tiles from the city -- walking back "
+                  f"before searching (marches past {HOME_RADIUS_TILES} tiles "
+                  f"run two to three times longer)")
+            logger.info("drifted %d tiles from home -- returning to city "
+                        "before the scan", drift)
+            self._expect_home_read = True
+            self._step_return_city(tag)
+            return None
 
         wander_heading = getattr(self, '_wander_heading', random.uniform(0, 2 * math.pi))
         scan_count = 0
@@ -1841,6 +1901,12 @@ class GemFlowMixin:
 
     def _step_return_city(self, tag: str):
         print(f"\n--- [{tag}] Return to city ---\n")
+
+        # Whatever reason brought us here, the camera is about to land on the
+        # city, so the next coordinate read is where home is. Setting it here
+        # rather than only in the homing path breaks the circle: the drift
+        # check needs a home, and a home is only ever seen on a city trip.
+        self._expect_home_read = True
 
         # Called from the world map (after a burst / scan-fail / fog), so click
         # the FIXED bottom-right corner to toggle to the city. We do NOT gate on
