@@ -100,6 +100,19 @@ def not_yet_tried(banners, tried, near=TRAIN_SAME_BANNER_PX):
     return None
 
 
+# The right-hand HUD column is not a building.
+#
+# On 2026-09-22 the training step ran on a WORLD MAP frame and found two
+# "banners" at x 0.967 and 0.969 -- the vertical strip of buttons down the
+# right edge, white glyphs on purple, which is the same signature a troops
+# ready banner has. It then clicked one of them, and a patch of terrain after
+# it. Real banners sit over buildings in the middle of the city: measured at
+# x 0.480, 0.540, 0.541, 0.541 and 0.601 on the kept city frames.
+#
+# Same threshold the gem badge code uses for the same reason.
+BANNER_HUD_X_MAX = 0.93
+
+
 def find_banners(frame) -> list[tuple[int, int, int, int]]:
     """Every "troops ready" banner, as (cx, cy, w, h), top-left first."""
     if frame is None:
@@ -128,6 +141,8 @@ def find_banners(frame) -> list[tuple[int, int, int, int]]:
                   (box[:, 0] <= BANNER_PURPLE_HUE[1]) &
                   (box[:, 1] > 110) & (box[:, 2] > 70)).mean()
         if purple < BANNER_PURPLE_MIN:
+            continue
+        if cx > frame.shape[1] * BANNER_HUD_X_MAX:
             continue
         out.append((cx, cy, bw, bh))
     return sorted(out, key=lambda b: (b[1], b[0]))

@@ -172,6 +172,17 @@ class PhasesMixin:
         from rok_farm.state_probe import dim_ratio
 
         frame = self._grab()
+        # The city, and only the city. _phase_city_idle returns there first,
+        # but a return that quietly failed used to leave this step reading the
+        # world map -- and on 2026-09-22 it did: two "banners" at x 0.967 and
+        # 0.969, which are the HUD buttons down the right edge, followed by a
+        # click on one of them and another on open ground. Four clicks nobody
+        # asked for, twice, and "training: the panel did not open" to show for
+        # it. Checking the view costs one template match.
+        if self._on_world_map(frame):
+            logger.debug("training: still on the world map -- not looking for "
+                         "banners")
+            return 0
         banners = training.find_banners(frame)
         if not banners:
             return 0

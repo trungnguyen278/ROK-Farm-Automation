@@ -171,3 +171,52 @@ def test_a_neighbour_is_not_mistaken_for_the_one_already_tried():
 
 def test_nothing_left_to_try_stops_rather_than_looping():
     assert training.not_yet_tried([(100, 100, 50, 40)], [(100, 100)]) is None
+
+
+# --- Not the city ----------------------------------------------------------
+#
+# 2026-09-22 10:11: the training step ran on a WORLD MAP frame. find_banners
+# returned two hits at x 0.967 and 0.969 -- the vertical strip of HUD buttons
+# down the right edge, white glyphs on purple, the same signature a "troops
+# ready" banner has. The farm clicked one of them, then a patch of open
+# ground, then logged "the panel did not open" and did it again for the second
+# false banner. Four clicks nobody asked for.
+
+def test_the_right_hand_hud_column_is_not_a_banner():
+    frame = load("NOT_A_BANNER_worldmap_101157.png")
+    assert training.find_banners(frame) == [], (
+        "the world map's HUD buttons are being read as troop banners")
+
+
+def test_real_banners_are_not_thrown_away_by_that_guard():
+    """Measured on the kept city frames: x 0.480 to 0.601, nowhere near the
+    HUD column at 0.93."""
+    frame = load("PROBE_city_122348.png")
+    banners = training.find_banners(frame)
+    assert len(banners) == 4, len(banners)
+    w = frame.shape[1]
+    for b in banners:
+        assert b[0] / w < training.BANNER_HUD_X_MAX, b[0] / w
+
+
+def test_the_training_step_refuses_to_run_off_the_world_map():
+    """The guard that matters, since a banner-shaped thing can be anywhere.
+    Read off the source: the view check has to come before find_banners."""
+    import ast
+    import inspect
+    from rok_farm.phases import PhasesMixin
+
+    src = inspect.getsource(PhasesMixin._maybe_train_troops).lstrip()
+    tree = ast.parse(src)
+    world = banners = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "_on_world_map" and world is None:
+                world = node.lineno
+            if node.func.attr == "find_banners" and banners is None:
+                banners = node.lineno
+    assert world is not None, "training no longer checks which view it is on"
+    assert banners is not None
+    assert world < banners, (
+        "the view is checked after the banners are read: world=%s banners=%s"
+        % (world, banners))
