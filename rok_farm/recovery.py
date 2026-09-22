@@ -59,6 +59,24 @@ class RecoveryMixin:
         frame = self.sc.grab_full()
         if frame is None:
             return False
+
+        # Not while the server is down. The maintenance notice carries two
+        # buttons, and one of them matches the reconnect template well enough
+        # to pass 0.75: live on 2026-09-22 this fired four times in under
+        # three minutes and pressed "LAM MOI" -- refresh -- on a screen that
+        # was telling it the server was off. Clicks at ry 0.666 to 0.681,
+        # against the buttons OCR puts at y 0.651-0.675.
+        #
+        # This is the one place that clicks before the main loop's maintenance
+        # hold gets a look in, which is why the check is repeated here rather
+        # than trusted to run earlier.
+        from rok_farm import maintenance as mt
+        from rok_farm.queue_ocr import ocr_texts
+        if mt.is_maintenance(mt.read_lines(frame, ocr_texts)):
+            logger.info("Reconnect: that is the maintenance notice, not a "
+                        "reconnect dialog -- not touching it")
+            return False
+
         m = self.matcher.match_single(frame, "ui/btn_confirm_reconnect")
         if m and m.confidence >= 0.75:
             seen_at = time.time()

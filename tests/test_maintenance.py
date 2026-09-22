@@ -113,3 +113,29 @@ def test_the_wait_is_never_exactly_the_countdown():
     assert lo >= 120.0, mt.GRACE_S
     assert hi > lo, mt.GRACE_S
     assert mt.BLIND_WAIT_S >= 300.0
+
+
+def test_the_reconnect_handler_refuses_the_maintenance_notice():
+    """Live 2026-09-22: the notice's own buttons matched the reconnect
+    template over 0.75 and the farm pressed "LAM MOI" -- refresh -- four times
+    in under three minutes, on a screen telling it the server was off.
+
+    That handler runs during startup, before the main loop's hold gets a look
+    in, so the check has to be repeated there rather than assumed.
+    """
+    from rok_farm import recovery
+
+    src = inspect.getsource(recovery.RecoveryMixin._check_reconnect_popup)
+    tree = ast.parse(src.lstrip())
+    guard = match = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "is_maintenance" and guard is None:
+                guard = node.lineno
+            if node.func.attr == "match_single" and match is None:
+                match = node.lineno
+    assert guard is not None, (
+        "the reconnect handler no longer checks for maintenance; it will "
+        "press refresh on the notice again")
+    assert match is not None
+    assert guard < match, (guard, match)
