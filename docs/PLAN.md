@@ -67,6 +67,14 @@ Note: `tools/dev/` holds occasional-use debug scripts only. `locate_ui.py` was d
 
 | Date | Decision | Reason |
 |---|---|---|
+| 2026-09-23 | Pan geometry measured by `tools/dev/pan_survey.py`, never inside the farm flow | In-flow drag/tile pairs fitted to a 21-tile median error: node clicks, recentres and city trips move the camera without a drag. The survey (icon zoom, pointer kept inside the window, width/height as two half drags) found: tile axes = screen axes, screen down = -Y, perspective 1.82/1.54/1.36 tiles/100px at rows 0.25/0.50/0.75, one frame ~31/24/17 x 19 tiles, no carry-on after a moving release. `tools/dev/zoom_check.py` confirms it on 173 past farm clicks: median 0.5 tiles, scale 1.01 |
+| 2026-09-23 | Steering converts screen headings to map headings (`pan_model.tile_heading`) | The book was read at +sin(heading): every vertical heading scored and vetoed the ground behind the camera |
+| 2026-09-23 | Drags steer from the real cursor each step, but the ending is left to vary | Open-loop relative drags came out 0.76-1.77x the aim and 3/40 left the window. Operator: keep the error as a variable so the game cannot see it -- no settle-onto-target nudge |
+| 2026-09-23 | Position read every scan with recognition-only OCR (15ms vs 520ms, 59/59 agree); the book records every cell of each view, at icon zoom only | One cell per four scans left most seen ground "unexplored" |
+| 2026-09-23 | City learned on the first frame after the city->world toggle | The map recentres on the city (577,615) every time; the old "first read after a trip" came up to four scans late and learned 3 different cities in a day |
+| 2026-09-23 | Sweep: lean each scan toward a random, weighted gap near the city; redraw every 6 scans | Operator: keep the trajectory so near ground is not skipped after going far, but never a fixed route |
+| 2026-09-23 | Let Windows lock; the farm dismisses the lock screen with ENTER (no password), never types a character | Operator: "de may khoa cung duoc ma cho no that"; whoever does not want it changes Windows settings. Play is never clicked at the stored position unless the launcher is confirmed in front |
+| 2026-09-23 | Template scales matched on a thread pool; the dead gather recheck removed; zoom-in wait is a 3.6s window | Icon scan 669->160ms, zoom poll 1063->364ms; the recheck found the popup 0 times in 1,148 |
 | 2026-08-14 | Split `run_farm.py` into `rok_farm/` mixins, not composition objects | One runtime object keeps every `self._x` call site and the `PlayerActions` ctx protocol working; the move stays mechanical and reviewable |
 | 2026-08-14 | Keep alt-tab (not game restart) for the ~15min march wait | The "troops returned" toast only fires while the game runs in the background; quitting would force a blind timer and add a login event every 15min |
 | 2026-08-14 | Restart the game only on recovery or a long break (>=30min) | Matches how a real player behaves and recovers a broken client without a suspicious login cadence |
@@ -105,6 +113,10 @@ Note: `tools/dev/` holds occasional-use debug scripts only. `locate_ui.py` was d
 | Restructure repo layout | Done | 2026-08-14: root entry point, `tools/dev/` split, 15MB of logs/screenshots removed |
 | Split the runner into modules | Done | 2026-08-14: `rok_farm/` mixin package, verbatim method move, pytest + pyflakes clean |
 | Game lifecycle (launch/restart) | Code done | 2026-08-14: Play button captured; still needs a live cold start + a mid-run restart |
+| Pan survey + map geometry | Done | 2026-09-23: `tools/dev/pan_survey.py` (`--analyse-only` re-fits `data/pan_survey.json`), model in `rok_farm/pan_model.py`, checked by `tools/dev/zoom_check.py` |
+| Scan speed (parallel matching, no recheck, fast OCR) | Done, live | 2026-09-23 14:50: mine appears 1.75-2.4s after the icon click (was ~4.5s) |
+| Sweep toward near gaps | Deployed 2026-09-23 | Watch the "sweep: target" debug lines and march distances over the next days |
+| Lock screen handling | Done, live | 2026-09-23 14:49: farm found LockApp in front, ENTER, unlocked, launched the game |
 
 ## Blockers
 
