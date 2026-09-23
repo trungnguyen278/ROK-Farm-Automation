@@ -402,19 +402,16 @@ class HidInputMixin:
                 elif step_ms > 0:
                     time.sleep(step_ms / 1000.0)   # a dwell, e.g. hold_ms
                 prev_x, prev_y = float(cx), float(cy)
-            # The last step still carries its own ballistic error -- half a
-            # step at worst. A small slow move has almost none, so settle
-            # onto the aim before letting go, the way a hand eases in.
-            fx, fy = self._clamp_to_window(ex, ey)
-            for _ in range(2):
-                try:
-                    ax, ay = get_cursor_pos()
-                except Exception:
-                    break
-                if abs(fx - ax) <= 3 and abs(fy - ay) <= 3:
-                    break
-                self.cmd.send("MOVE", int((fx - ax) / sc), int((fy - ay) / sc),
-                              random.randint(24, 48))
+            # No settling onto the aim before letting go. The last step keeps
+            # its own ballistic error -- a few pixels, up to half a step --
+            # and that is left alone on purpose. The operator, 2026-09-23:
+            # leave the error as a variable so the game cannot see it. A
+            # drag that lands on its exact target every time, with the same
+            # little slow correction at the end, is a signature; the
+            # closed-loop steps above exist to keep the pointer on the path
+            # and inside the window, not to make the ending perfect. The map
+            # position is read on every scan anyway, so nothing downstream
+            # relies on where a drag ended.
             time.sleep(random.uniform(0.01, 0.03))
             self.cmd.send("MUP", button)
 

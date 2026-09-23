@@ -56,3 +56,26 @@ def test_a_launcher_in_front_still_uses_the_stored_position(monkeypatch):
     g, ctx = _game(monkeypatch, in_front=True), Ctx()
     assert g.press_play(ctx) is True
     assert ctx.clicks == [(100 + int(800 * 0.866), 100 + int(500 * 0.830))]
+
+
+def test_forcing_the_foreground_always_lets_go_of_the_other_thread(monkeypatch):
+    """The 13:46 start could not raise the launcher while the IDE held the
+    foreground. The fallback borrows the foreground thread's input state for
+    one call -- and must hand it back even when the call fails."""
+    import sys
+    import types
+    calls = []
+    fake_proc = types.SimpleNamespace(
+        GetWindowThreadProcessId=lambda hwnd: (77, 1),
+        AttachThreadInput=lambda a, b, on: calls.append(("attach", a, b, on)))
+    fake_api = types.SimpleNamespace(GetCurrentThreadId=lambda: 11)
+    monkeypatch.setitem(sys.modules, "win32process", fake_proc)
+    monkeypatch.setitem(sys.modules, "win32api", fake_api)
+    monkeypatch.setattr(gp.win32gui, "GetForegroundWindow", lambda: 5)
+    monkeypatch.setattr(gp.win32gui, "BringWindowToTop", lambda h: None)
+
+    def refuse(h):
+        raise OSError("Access is denied")
+    monkeypatch.setattr(gp.win32gui, "SetForegroundWindow", refuse)
+    gp._force_foreground(9)
+    assert calls == [("attach", 11, 77, True), ("attach", 11, 77, False)]

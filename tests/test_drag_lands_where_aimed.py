@@ -1,4 +1,4 @@
-"""A drag ends where it was aimed and never carries the pointer out of the game.
+"""A drag ends NEAR where it was aimed and never carries the pointer out of the game.
 
 The farm drives the pointer with relative moves (MOVETO misbehaves with the
 game on a second monitor), and relative moves go through Windows' pointer
@@ -90,12 +90,26 @@ def _inside(x, y):
             and WIN["top"] <= y <= WIN["top"] + WIN["height"])
 
 
-def test_an_accelerated_drag_still_ends_on_its_aim(rig):
+def test_an_accelerated_drag_ends_near_its_aim(rig):
+    """Near, not on: within half a path step, the last step's own error."""
     sx, sy = WIN["left"] + 1150, WIN["top"] + 430
     ex, ey = WIN["left"] + 384, WIN["top"] + 430
     rig._human_drag(sx, sy, ex, ey, speed_factor=5.0)
     p = rig.cmd.ptr
-    assert abs(p.x - ex) <= 4 and abs(p.y - ey) <= 4, (p.x, p.y)
+    assert abs(p.x - ex) <= 20 and abs(p.y - ey) <= 20, (p.x, p.y)
+
+
+def test_the_ending_is_left_to_vary(rig):
+    """The operator, 2026-09-23: leave the error as a variable so the game
+    cannot see it. No slow corrective nudge at the end of every drag."""
+    sx, sy = WIN["left"] + 1150, WIN["top"] + 430
+    ex, ey = WIN["left"] + 384, WIN["top"] + 430
+    rig.cmd.sent.clear()
+    rig._human_drag(sx, sy, ex, ey, speed_factor=5.0)
+    moves = [i for i, c in enumerate(rig.cmd.sent) if c == "MOVE"]
+    assert rig.cmd.sent[-1] == "MUP"
+    # the path has 24 points: one move each, nothing tacked on after them
+    assert len(moves) <= 24, len(moves)
 
 
 def test_the_pointer_never_leaves_the_window(rig):
@@ -116,7 +130,7 @@ def test_a_hold_keeps_the_button_down_and_the_pointer_still(rig):
     rig._human_drag(sx, sy, ex, ey, hold_ms=400)
     assert rig.cmd.sent[0] == "MDOWN" and rig.cmd.sent[-1] == "MUP"
     p = rig.cmd.ptr
-    assert abs(p.x - ex) <= 4 and abs(p.y - ey) <= 4
+    assert abs(p.x - ex) <= 20 and abs(p.y - ey) <= 20
 
 
 def test_without_the_feedback_it_would_have_overshot(rig, monkeypatch):

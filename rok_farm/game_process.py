@@ -110,11 +110,44 @@ def focus_window(hwnd, retries: int = 2) -> bool:
             win32gui.SetForegroundWindow(hwnd)
         except Exception as e:
             logger.debug("SetForegroundWindow failed: %s", e)
+            _force_foreground(hwnd)
         time.sleep(0.4 + 0.3 * attempt)
         if win32gui.GetForegroundWindow() == hwnd:
             return True
     logger.warning("Window %s did not come to the foreground", hwnd)
     return False
+
+
+def _force_foreground(hwnd) -> None:
+    """Take the foreground while another process holds it, without a keystroke.
+
+    Windows only lets a process switch the foreground if it received the
+    last input, or was started by the process in front. The farm is started
+    detached, so while anything else holds the foreground -- the full-screen
+    IDE, 2026-09-23 13:46 -- every SetForegroundWindow is refused ("Access
+    is denied") and the launcher's Play button stayed buried.
+
+    Sharing the foreground thread's input state for the moment of the call
+    lifts that lock. No input is synthesised, so nothing reaches any game.
+    """
+    try:
+        import win32api
+        import win32process
+        fg = win32gui.GetForegroundWindow()
+        fg_tid = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
+        me = win32api.GetCurrentThreadId()
+        attached = False
+        if fg_tid and fg_tid != me:
+            win32process.AttachThreadInput(me, fg_tid, True)
+            attached = True
+        try:
+            win32gui.BringWindowToTop(hwnd)
+            win32gui.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                win32process.AttachThreadInput(me, fg_tid, False)
+    except Exception as e:
+        logger.debug("forced foreground failed: %s", e)
 
 
 def grab_rect(rect: dict):
