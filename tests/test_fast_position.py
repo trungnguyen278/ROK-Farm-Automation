@@ -126,8 +126,8 @@ def test_the_book_takes_the_whole_view(tmp_path, monkeypatch):
     gem = (500, 600)                      # a gem in the middle of the view
     assert _key(*gem) in keys
     book.record_view(cells, [gem])
-    assert book.reach[_key(*gem)] == {"gem": 1, "empty": 0,
-                                      "t": book.reach[_key(*gem)]["t"]}
+    cell = book.reach[_key(*gem)]
+    assert (cell["gem"], cell["empty"]) == (1, 0)
     empties = [k for k in book.reach if book.reach[k]["empty"]]
     assert len(empties) == len(keys) - 1
 

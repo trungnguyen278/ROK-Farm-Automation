@@ -158,6 +158,16 @@ class MapMemory:
             self._dirty = 0
             self.save()
 
+    # How long a cell counts as "just looked at" (see score()). Half an hour
+    # covers a whole mine and the one after it; a starting value, not a
+    # measurement.
+    RECENT_S = 30 * 60
+    # The most a cell's counts can say. Two gems and four empties are
+    # already a clear verdict; beyond that the number only measured how
+    # often the camera happened to overlap it.
+    GEM_CAP = 2
+    EMPTY_CAP = 4
+
     # A position read every scan is ~600 a day at the current pace; a few
     # days of trajectory is plenty to see where the wander goes, and the file
     # stays small.
@@ -218,7 +228,15 @@ class MapMemory:
         keys = {_key(x, y) for x, y in cells} | gems
         for k in keys:
             c = self.reach.setdefault(k, {"gem": 0, "empty": 0, "t": 0.0})
-            c["gem" if k in gems else "empty"] += 1
+            if k in gems:
+                # One sighting per visit, not one per frame: consecutive
+                # scans overlap, and the same deposit seen twelve times is
+                # still one deposit (see score(), cell 72,79).
+                if now - c.get("tg", 0.0) >= self.RECENT_S:
+                    c["gem"] += 1
+                    c["tg"] = now
+            else:
+                c["empty"] += 1
             c["t"] = now
         self._dirty = getattr(self, "_dirty", 0) + 1
         if self._dirty >= 10:
@@ -269,9 +287,25 @@ class MapMemory:
             # exhausted the far cells are still positive, so distance is a
             # decision rather than a drift.
             return self._unexplored_worth(x, y)
-        age_h = (time.time() - c.get("t", 0)) / 3600.0
-        weight = 0.5 ** (age_h / REACH_HALFLIFE_H)
-        return (c.get("gem", 0) * 2.0 - c.get("empty", 0) * 0.5) * weight
+        age_s = time.time() - c.get("t", 0)
+        # Just looked at: whatever stands there, the scan has already dealt
+        # with it -- clicked it, skipped it as taken, rejected it. Going back
+        # gains nothing, whatever the counts say.
+        #
+        # 2026-09-23 15:07-15:19, the first run recording whole views: a gem
+        # the scan had already tried sat in cell 72,79 and was counted again
+        # on every scan that showed it -- gem=24 in twelve minutes. Its score
+        # dragged the steering back to it every scan ("steer: 229 -> 103 deg
+        # (score 27.5 > -2.7)"), and the camera swung back and forth over the
+        # same twenty tiles for thirty-nine scans. Before the Y fix the pull
+        # pointed at the mirror image of the cell and the loop never closed.
+        if age_s < self.RECENT_S:
+            return -1.0
+        weight = 0.5 ** (age_s / 3600.0 / REACH_HALFLIFE_H)
+        # Capped, so evidence can tip a heading but never run away with it.
+        gem = min(c.get("gem", 0), self.GEM_CAP)
+        empty = min(c.get("empty", 0), self.EMPTY_CAP)
+        return (gem * 2.0 - empty * 0.5) * weight
 
     # How far ahead the veto looks, in cells. Sized to how far the camera
     # actually travels between position reads, because a guard that sees less

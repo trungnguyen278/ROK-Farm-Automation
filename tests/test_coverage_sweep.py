@@ -48,8 +48,10 @@ def test_nearer_unexplored_is_preferred(book):
 
 
 def test_a_remembered_gem_still_wins(book):
+    """Remembered = seen a while ago. A gem seen minutes ago is one the scan
+    has already dealt with and pulls nothing (test_no_pingpong)."""
     key = f"{(500 + 200) // CELL},{500 // CELL}"
-    book.reach[key] = {"gem": 2, "empty": 0, "t": time.time()}
+    book.reach[key] = {"gem": 2, "empty": 0, "t": time.time() - 2 * 3600}
     assert book.score(500 + 200, 500) > book.score(505, 500)
 
 
