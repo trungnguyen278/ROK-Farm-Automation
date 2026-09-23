@@ -102,6 +102,17 @@ HOME_RADIUS_TILES = 250
 # what makes that a guarantee rather than an argument.
 ZOOM_FIX_ROUNDS = 2
 
+# Scans in a row the fast position read must call "close" before the scan
+# asks the gauge. The read notes every scan whether the resource bar stands
+# in front of the coordinates, which it only does zoomed in; it errs toward
+# close right after an icon click (2 of 65 icon-zoom frames, both with the
+# bar still showing -- queue_ocr._read_position_fast), so one is not enough,
+# and two scans a pan apart are past it. From 2026-09-24 01:52 to 04:00:
+# 304 scans, not one called close on its own, and one run of 18 -- the dud
+# click at 03:04:28 whose zoom-out did not land, found by the empty-streak
+# limit 66 seconds later.
+CLOSE_HINT_SCANS = 2
+
 
 class GemFlowMixin:
     """Per-mine flow steps. Mixed into GemFarmRunner."""
@@ -1474,6 +1485,7 @@ class GemFlowMixin:
             return None
 
         wander_heading = getattr(self, '_wander_heading', random.uniform(0, 2 * math.pi))
+        close_hints = close_fixes = 0
         scan_count = 0
         scan_speed = random.uniform(3.6, 5.0)
         _speed_target = random.uniform(3.6, 7.0)
@@ -1639,6 +1651,31 @@ class GemFlowMixin:
                 self._retreat_from_edge(back)
                 self._step_return_city(tag)
                 return None
+
+            # Zoomed in mid-scan? The position read above has already said:
+            # see CLOSE_HINT_SCANS. The empty-streak limit asks the gauge too,
+            # but only after eighteen blind scans, and the no-candidate check
+            # only in a mine that has seen nothing at all -- a mine that found
+            # candidates and then drifted in after a dud click fell between
+            # them. The gauge has the last word, so a wrong hint costs one
+            # read and nothing else.
+            if getattr(self, "_pos_zoom_hint", None) == "close":
+                close_hints += 1
+            else:
+                close_hints = 0
+            if close_hints >= CLOSE_HINT_SCANS and close_fixes < ZOOM_FIX_ROUNDS:
+                close_hints = 0
+                if self.read_zoom_gauge() == "close":
+                    close_fixes += 1
+                    print(f"  [{WARN}] Scan {scan_count:2d}: zoomed in mid-scan "
+                          f"(the resource bar is showing) -- scrolling back out")
+                    logger.warning("zoom hint close on %d scans in a row and the "
+                                   "gauge agrees -- scrolling out at scan %d",
+                                   CLOSE_HINT_SCANS, scan_count)
+                    self._scroll_at_center(-1, self._zoom_scrolls())
+                    self._wait_zoom_settled()
+                    empty_streak = 0
+                    continue
 
             if not icons and self._edge_gems:
                 print(f"  [{INFO}] Scan {scan_count:2d}: {len(self._edge_gems)} edge gem(s), recentering...")
