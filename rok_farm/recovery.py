@@ -28,7 +28,7 @@ class RecoveryMixin:
         frame = self._grab()
         if frame is None:
             return False
-        if self._find_city_btn(frame, threshold=0.70):
+        if self._find_city_btn(frame):
             return True
         if self._find_on_frame(frame, "buttons/world_map_city_btn",
                                threshold=WORLD_MAP_BTN_THRESHOLD):

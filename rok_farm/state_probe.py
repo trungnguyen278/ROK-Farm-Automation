@@ -63,9 +63,22 @@ class StateProbeMixin:
     """Local screen-state reasoning. Mixed into GemFarmRunner."""
 
     def _probe_state(self, frame=None) -> ScreenState:
-        """Read the current screen without touching the network."""
+        """Read the current screen without touching the network.
+
+        A frame handed in is the frame judged, buttons included. The buttons
+        used to be matched on self._raw_frame whatever was passed -- the raw
+        twin of the last _grab(), which is right for a frame _grab() just
+        made and wrong for any other. The post-launch wait passes a fresh
+        capture of a client still loading, and _raw_frame was then the last
+        frame of the session before the quit: 2026-09-24 01:41:40 it read
+        the old world map, "Game world is up" was printed over a loading
+        screen at 12%, and the mine scanned it (m5_scan_00_014146).
+        """
         if frame is None:
             frame = self._grab()
+            raw = self._raw_frame if self._raw_frame is not None else frame
+        else:
+            raw = frame
         if frame is None:
             return ScreenState("unknown", "unknown", confidence=0.0,
                                note="no frame")
@@ -78,7 +91,6 @@ class StateProbeMixin:
                                note=f"dim {ratio:.2f}")
 
         # --- city or world map? ---
-        raw = self._raw_frame if self._raw_frame is not None else frame
         wmcb = self._find_on_frame(raw, "buttons/world_map_city_btn", threshold=0.0)
         city_btn = self._find_on_frame(raw, "buttons/city_btn", threshold=0.0)
         wmcb_conf = wmcb.confidence if wmcb else 0.0

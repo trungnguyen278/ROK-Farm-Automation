@@ -440,6 +440,24 @@ RUN_WINDOW_END_H = 23
 CITY_WMCB_MIN = 0.85        # world_map_city_btn >= this -> we are in the city
 WORLD_CITY_BTN_MIN = 0.70   # city_btn >= this while wmcb is low -> world map
 
+# The castle glyph on the bottom-right Space button = the world map
+# (detect._find_city_btn). It was gated at 0.70. Measured by
+# tools/dev/castle_scores.py over every WORLD verdict in the farm log to
+# 2026-09-24 01:47 -- 1322 of them, and the scores fall in two heaps:
+#
+#   0.95-1.00   1162   the world map
+#   0.70-0.80    160   all 0.719-0.783 with space_map 0.000: the loading
+#                      screen's corner (2026-09-24 01:41:45, frame
+#                      m5_scan_00_014146), the maintenance notice
+#                      (2026-09-22 13:53-14:21, 30 minutes of it), and the
+#                      city HUD -- the position strip then reads the power
+#                      total ('28.568.211'), not coordinates
+#   0.80-0.95      0
+#
+# 0.85 sits in the empty band, 0.07 over the highest false score and 0.10
+# under the lowest real one (tests/test_world_check.py).
+SPACE_CASTLE_MIN = 0.85
+
 # --- Layer 2: vision-model oracle ---
 # Called only when the local layers cannot tell what is on screen. The budget is
 # ours, not the provider's: free tiers change without notice, so the bot caps

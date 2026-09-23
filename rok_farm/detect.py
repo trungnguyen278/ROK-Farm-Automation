@@ -23,7 +23,7 @@ from rok_farm.config import (BADGE_AREA, BADGE_DX, BADGE_DY, BADGE_FILL_MIN,
                              FOG_HUE_LAP_MAX, FOG_HUE_STD_MAX, FOG_LAP_VAR_MAX,
                              FOG_SAT_LAP_MAX, FOG_SAT_MAX, MARCH_TEMPLATES,
                              OCCUPIED_TEMPLATES, OCCUPIED_THRESHOLD,
-                             SAFE_ZONE_MARGIN, VERIFY_ROI)
+                             SAFE_ZONE_MARGIN, SPACE_CASTLE_MIN, VERIFY_ROI)
 from rok_farm.logging_setup import INFO, logger
 
 
@@ -73,7 +73,8 @@ class DetectMixin:
     # best result, fooling the "are we on the world map" check -> nav fails.
     _CITY_BTN_REGION = (0.82, 0.78, 1.0, 1.0)  # x1, y1, x2, y2 in frame pct
 
-    def _find_city_btn(self, frame=None, threshold: float = 0.70) -> Match | None:
+    def _find_city_btn(self, frame=None,
+                       threshold: float = SPACE_CASTLE_MIN) -> Match | None:
         """Return the world-map 'back to city' button (only present ON the WORLD
         MAP), matched in the bottom-right corner. The CITY view shows a 'world
         map' globe button in the SAME corner, so require city_btn to OUT-score
@@ -124,7 +125,7 @@ class DetectMixin:
     def _on_world_map(self, frame=None) -> bool:
         """True if currently on the world map (the bottom-right Space button
         shows the castle glyph, not the map glyph)."""
-        return self._find_city_btn(frame, threshold=0.70) is not None
+        return self._find_city_btn(frame) is not None
 
     def _wait_until_world_map(self, timeout: float = 4.0) -> bool:
         """Poll for the world-map state until timeout -- lets a city<->world or

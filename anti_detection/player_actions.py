@@ -1469,7 +1469,7 @@ class PlayerActions:
         # Prefer the bottom-right-restricted finder when the host provides it, so
         # a top-right event icon that resembles city_btn doesn't fake "on world".
         if hasattr(self._ctx, "_find_city_btn"):
-            on_world = self._ctx._find_city_btn(threshold=0.70) is not None
+            on_world = self._ctx._find_city_btn() is not None
         else:
             on_world = self._ctx._find("buttons/city_btn", threshold=0.70) is not None
 
