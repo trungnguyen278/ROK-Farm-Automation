@@ -323,7 +323,8 @@ class GameProcess:
             print(f"  [{FAIL}] Launcher window not found")
             return False
 
-        if not focus_window(win["hwnd"]):
+        in_front = focus_window(win["hwnd"])
+        if not in_front:
             print(f"  [{WARN}] Launcher did not come to the front; another "
                   f"window may swallow the click")
         time.sleep(random.uniform(0.6, 1.2))
@@ -340,6 +341,21 @@ class GameProcess:
                 elif m:
                     logger.info("Play button match too weak: %.3f", m.confidence)
 
+        if target is None and self.play_btn_pct and not in_front:
+            # The screen grab of the launcher's rect did not show the Play
+            # button AND the launcher could not be brought forward: something
+            # is covering it, and the stored position would click whatever
+            # that is. 2026-09-23 13:46: the launcher (elevated) sat behind
+            # the full-screen IDE, SetForegroundWindow was refused, and the
+            # click went into the IDE. The game never started. Refuse; a
+            # launcher that is really in front and just looks different still
+            # gets the stored position below.
+            print(f"  [{FAIL}] The launcher is covered by another window and "
+                  f"its Play button is not on screen -- not clicking blind. "
+                  f"Bring the launcher to the front and start again.")
+            logger.warning("press_play: launcher not in front and Play not "
+                           "visible -- refusing the stored-position click")
+            return False
         if target is None and self.play_btn_pct:
             px, py = self.play_btn_pct
             target = (win["left"] + int(win["width"] * px),
