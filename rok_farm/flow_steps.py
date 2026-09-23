@@ -183,6 +183,22 @@ class GemFlowMixin:
         """
         if not self._marched_sites or frame is None:
             return None
+        tile = self._icon_tile(icon, frame)
+        if tile is None:
+            return None
+        tx, ty = tile
+        for mid, x, y, _when in self._marched_sites:
+            if max(abs(x - tx), abs(y - ty)) <= self.MARCHED_ICON_TILES:
+                return (mid, x, y)
+        return None
+
+    def _icon_tile(self, icon, frame):
+        """Where on the map an icon in `frame` stands, or None.
+
+        One position read per frame (15ms), shared by every icon on it.
+        """
+        if frame is None:
+            return None
         key = (id(frame), frame.shape)
         if getattr(self, "_icon_cam_key", None) != key:
             self._icon_cam_key = key
@@ -192,10 +208,44 @@ class GemFlowMixin:
                               and (home is None or pos[0] == home) else None)
         if self._icon_cam is None:
             return None
-        tx, ty = self._icon_tiles(self._icon_cam, frame, [icon])[0]
-        for mid, x, y, _when in self._marched_sites:
-            if max(abs(x - tx), abs(y - ty)) <= self.MARCHED_ICON_TILES:
-                return (mid, x, y)
+        return self._icon_tiles(self._icon_cam, frame, [icon])[0]
+
+    # How long a deposit tried and found unusable -- taken by someone, or not
+    # the gem the classifier thought -- is left alone, by where it stands on
+    # the map. The frame-pixel list (clicked_positions) goes wrong the moment
+    # the camera moves: that pixel is other ground by then, so it skipped
+    # strangers and let the same deposit through again (66 skips in the log).
+    # The operator's point, 2026-09-23: we know where it is on the map, skip
+    # it there. Half an hour lets a taken deposit come free; a starting value.
+    TRIED_TTL_S = 30 * 60
+
+    def _remember_tried(self, tile, why: str) -> None:
+        if tile is None:
+            return
+        tried = getattr(self, "_tried_tiles", [])
+        now = time.time()
+        tried = [t for t in tried if now - t[2] < self.TRIED_TTL_S][-200:]
+        tried.append((int(tile[0]), int(tile[1]), now, why))
+        self._tried_tiles = tried
+
+    def _known_at_icon(self, icon, frame):
+        """(why, x, y) if this icon stands on a deposit already dealt with:
+        marched to, or tried and found unusable in the last half hour."""
+        dup = self._marched_at_icon(icon, frame)
+        if dup:
+            return ("already marched to", dup[1], dup[2])
+        tried = getattr(self, "_tried_tiles", None)
+        if not tried:
+            return None
+        tile = self._icon_tile(icon, frame)
+        if tile is None:
+            return None
+        now = time.time()
+        for x, y, when, why in tried:
+            if (now - when < self.TRIED_TTL_S
+                    and max(abs(x - tile[0]), abs(y - tile[1]))
+                    <= self.MARCHED_ICON_TILES):
+                return (why, x, y)
         return None
 
     def _map_sync(self, frame, found: bool, force: bool = False,
@@ -1322,21 +1372,25 @@ class GemFlowMixin:
                 if any(abs(icon.center[0]-px) < r and abs(icon.center[1]-py) < r
                        for px, py, r in clicked_positions):
                     continue
-                dup = self._marched_at_icon(icon, frame)
-                if dup:
+                known = self._known_at_icon(icon, frame)
+                if known:
                     print(f"  [ -- ] Icon at {icon.center} stands on "
-                          f"{dup[1]}:{dup[2]}, already marched to -- skip")
-                    logger.info("icon at %s is the marched deposit %d:%d -- "
+                          f"{known[1]}:{known[2]}, {known[0]} -- skip")
+                    logger.info("icon at %s is the deposit %d:%d (%s) -- "
                                 "skipped before clicking", icon.center,
-                                dup[1], dup[2])
+                                known[1], known[2], known[0])
                     clicked_positions.append((*icon.center, SKIP_RADIUS))
                     continue
+                # Where it stands, from THIS frame: the recentre below may
+                # drag the map and hand back the icon in a new frame.
+                icon_tile = self._icon_tile(icon, frame)
                 raw = self._raw_frame if self._raw_frame is not None else frame
                 occupied, occ_info = self._check_icon_occupied(raw, icon,
                                                                shot=frame)
                 if occupied:
                     print(f"  [{WARN}] Icon at {icon.center} occupied ({occ_info}) -- skip")
                     clicked_positions.append((*icon.center, SKIP_RADIUS))
+                    self._remember_tried(icon_tile, "taken by someone")
                     continue
                 icon = self._recenter_to_safe_zone(icon)
                 if icon is None:
@@ -1347,6 +1401,7 @@ class GemFlowMixin:
                 if self._click_icon_and_verify(icon, tag, attempt, icon_frame=frame):
                     self._record(f"{tag}_find", True, f"Gem found at attempt {attempt} (no drag)")
                     return icon
+                self._remember_tried(icon_tile, "tried, not usable")
                 self._return_to_icon_zoom()
 
         # Random wander scan (human-like, not spiral)
@@ -1674,21 +1729,25 @@ class GemFlowMixin:
                        for px, py, r in clicked_positions):
                     print(f"  [ -- ] Skip already-clicked icon at {icon.center}")
                     continue
-                dup = self._marched_at_icon(icon, frame)
-                if dup:
+                known = self._known_at_icon(icon, frame)
+                if known:
                     print(f"  [ -- ] Icon at {icon.center} stands on "
-                          f"{dup[1]}:{dup[2]}, already marched to -- skip")
-                    logger.info("icon at %s is the marched deposit %d:%d -- "
+                          f"{known[1]}:{known[2]}, {known[0]} -- skip")
+                    logger.info("icon at %s is the deposit %d:%d (%s) -- "
                                 "skipped before clicking", icon.center,
-                                dup[1], dup[2])
+                                known[1], known[2], known[0])
                     clicked_positions.append((*icon.center, SKIP_RADIUS))
                     continue
+                # Where it stands, from THIS frame: the recentre below may
+                # drag the map and hand back the icon in a new frame.
+                icon_tile = self._icon_tile(icon, frame)
                 raw = self._raw_frame if self._raw_frame is not None else frame
                 occupied, occ_info = self._check_icon_occupied(raw, icon,
                                                                shot=frame)
                 if occupied:
                     print(f"  [{WARN}] Icon at {icon.center} occupied ({occ_info}) -- skip")
                     clicked_positions.append((*icon.center, SKIP_RADIUS))
+                    self._remember_tried(icon_tile, "taken by someone")
                     continue
                 icon = self._recenter_to_safe_zone(icon)
                 if icon is None:
@@ -1700,6 +1759,7 @@ class GemFlowMixin:
                     self._wander_heading = wander_heading
                     self._record(f"{tag}_find", True, f"Gem at attempt {attempt}, scan {scan_count}")
                     return icon
+                self._remember_tried(icon_tile, "tried, not usable")
                 self._return_to_icon_zoom(wander_heading)
 
         self._wander_heading = wander_heading

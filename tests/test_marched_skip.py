@@ -75,7 +75,7 @@ def test_a_read_from_another_map_decides_nothing():
 def test_the_scan_asks_before_it_clicks():
     src = inspect.getsource(GemFlowMixin._step_scan_and_verify_gem)
     for chunk in src.split("_click_icon_and_verify(")[:-1]:
-        assert "_marched_at_icon(" in chunk.split("for icon in icons:")[-1], (
+        assert "_known_at_icon(" in chunk.split("for icon in icons:")[-1], (
             "an icon can be clicked without asking whether it was marched to")
 
 
@@ -84,3 +84,34 @@ def test_a_duplicate_is_left_behind():
     dup = src[src.index("Duplicate deposit %s"):]
     dup = dup[:dup.index("return False")]
     assert "_press_escape()" in dup and "_return_to_icon_zoom(" in dup
+
+
+def test_a_deposit_tried_and_found_unusable_is_left_alone_by_its_tile():
+    """The frame-pixel skip list is wrong once the camera moves; the tile is
+    not. The operator, 2026-09-23: we know where it is, skip it there."""
+    cam = (620, 615)
+    s = Scan(cam, [])
+    icon = _icon_at_tile(cam, (612, 610))
+    assert s._known_at_icon(icon, FRAME) is None
+    s._remember_tried(s._icon_tile(icon, FRAME), "tried, not usable")
+    # the camera moves on; the same deposit shows up somewhere else on screen
+    cam2 = (628, 612)
+    s2 = Scan(cam2, [])
+    s2._tried_tiles = s._tried_tiles
+    again = _icon_at_tile(cam2, (612, 610))
+    assert again.center != icon.center
+    why, x, y = s2._known_at_icon(again, FRAME)
+    assert why == "tried, not usable" and max(abs(x - 612), abs(y - 610)) <= 1
+
+
+def test_the_memory_of_a_tried_deposit_runs_out(monkeypatch):
+    import rok_farm.flow_steps as fs
+    cam = (620, 615)
+    s = Scan(cam, [])
+    icon = _icon_at_tile(cam, (612, 610))
+    clock = [1000.0]
+    monkeypatch.setattr(fs.time, "time", lambda: clock[0])
+    s._remember_tried((612, 610), "taken by someone")
+    assert s._known_at_icon(icon, FRAME)[0] == "taken by someone"
+    clock[0] += Scan.TRIED_TTL_S + 1
+    assert s._known_at_icon(icon, FRAME) is None
