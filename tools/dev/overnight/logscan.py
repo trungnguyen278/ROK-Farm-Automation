@@ -45,7 +45,10 @@ PATTERNS = {
     # nothing, and the operator has waits of their own near 45 minutes --
     # measured, mine-to-mine p99 is 43.1 minutes over 1,154 gaps.
     "planned_wait": (r"Staying out for|Still out, \d+ min to go"
-                     r"|AP dwell \d+s in|AP burn running"),
+                     r"|AP dwell \d+s in|AP burn running"
+                     # locked with a prompt a key would not clear: waiting
+                     # on a human is planned, not a hang
+                     r"|Windows (?:is )?still locked"),
     # The farm quit its client for a planned wait and then could not get it
     # back: the launcher would not come to the front, the Play button matched
     # at 0.634, and after 180s there was no game window. Terminal -- on

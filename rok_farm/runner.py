@@ -252,6 +252,9 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         # replug cannot leave it running, without reflashing the board.
         self.cmd.send("IDLE", "1")
         self._wait(DELAY_AFTER_CLICK)
+        # The machine may have locked itself while nothing ran; nothing below
+        # may touch the mouse or keyboard until the lock screen is gone.
+        self._ensure_unlocked("at startup")
 
         # Game window. If it isn't there, start the client (unless the user
         # opted out) and wait until the city view answers.
@@ -455,6 +458,9 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                 # detector the farm owns, so it scans it, finds nothing, and
                 # fails the mine -- while dragging the map about on top of a
                 # screen that is plainly telling it to go away.
+                # A locked machine first: nothing below may touch the mouse or
+                # keyboard while the lock screen is in front.
+                self._ensure_unlocked("before a mine")
                 if self._maintenance_hold():
                     continue
 

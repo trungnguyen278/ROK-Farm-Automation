@@ -150,6 +150,41 @@ def _force_foreground(hwnd) -> None:
         logger.debug("forced foreground failed: %s", e)
 
 
+# Who holds the foreground while Windows is locked. Measured 2026-09-23 14:45
+# on the locked machine: the foreground window belonged to LockApp.exe
+# ("Windows Default Lock Screen"), while OpenInputDesktop still answered
+# "Default" -- so the desktop test alone does not see a lock, the owner of
+# the foreground window does. LogonUI.exe is the password prompt that takes
+# over once someone starts to sign in.
+LOCK_SCREEN_EXES = {"lockapp.exe", "logonui.exe"}
+
+
+def session_locked() -> bool:
+    """Is Windows locked? Nothing may be clicked or typed while it is: a
+    keystroke meant for the game would land in the password box."""
+    try:
+        fg = win32gui.GetForegroundWindow()
+        if fg:
+            import psutil
+            import win32process
+            pid = win32process.GetWindowThreadProcessId(fg)[1]
+            return psutil.Process(pid).name().lower() in LOCK_SCREEN_EXES
+        # No foreground window at all: the secure desktop may have the input
+        # (the sign-in prompt). Ask which desktop that is.
+        import win32service
+        try:
+            desk = win32service.OpenInputDesktop(0, False, 0x0100)
+        except Exception:
+            return True
+        try:
+            name = win32service.GetUserObjectInformation(desk, 2)
+        finally:
+            desk.CloseDesktop()
+        return str(name).lower() != "default"
+    except Exception:
+        return False
+
+
 def grab_rect(rect: dict):
     """Screenshot an arbitrary screen rect (used for the launcher window, which
     the game-bound ScreenCapture backend does not cover)."""
@@ -471,9 +506,60 @@ class GameProcess:
 class GameLifecycleMixin:
     """Launch / restart the client from inside the farm loop."""
 
+    # The machine has no password (the operator, 2026-09-23), so the lock
+    # screen is a curtain and a key takes it down. It is left to lock on its
+    # own when idle -- "farm chay de may khoa cung duoc ma cho no that": a real
+    # player's machine locks, and they press a key when they come back.
+    #
+    # ENTER and nothing else: should a password prompt ever appear, ENTER on
+    # its empty box is one failed attempt, where a typed character would be a
+    # wrong password in it. Three tries -- a dark screen can swallow the first
+    # key just waking up, then the curtain, then "Sign in" -- then hands off.
+    UNLOCK_TRIES = 3
+    LOCK_POLL_S = (20.0, 40.0)
+    LOCK_NOTE_EVERY_S = 300.0
+
+    def _ensure_unlocked(self, reason: str) -> bool:
+        """Get past the Windows lock screen, or wait touching nothing."""
+        if not session_locked():
+            return True
+        print(f"  [{WARN}] Windows is locked ({reason}) -- no password on this "
+              f"machine, dismissing the lock screen")
+        logger.warning("Windows is locked (%s) -- dismissing the lock screen",
+                       reason)
+        for attempt in range(self.UNLOCK_TRIES):
+            time.sleep(random.uniform(0.8, 1.6))
+            self.cmd.send("KEY", "ENTER", random.randint(50, 110))
+            deadline = time.time() + 6.0
+            while time.time() < deadline:
+                time.sleep(0.5)
+                if not session_locked():
+                    print(f"  [{PASS}] Unlocked")
+                    logger.info("lock screen dismissed with %d key(s)",
+                                attempt + 1)
+                    time.sleep(random.uniform(1.0, 2.0))
+                    return True
+        # Still locked after the keys: whatever is up wants more than a key.
+        # Not ours to type into -- wait, and say so where someone will see it.
+        start = last = time.time()
+        print(f"  [{FAIL}] Windows is still locked after {self.UNLOCK_TRIES} "
+              f"key(s) -- touching nothing until someone unlocks it")
+        logger.warning("Windows is still locked after %d key(s) -- waiting, "
+                       "no input", self.UNLOCK_TRIES)
+        while session_locked():
+            time.sleep(random.uniform(*self.LOCK_POLL_S))
+            if time.time() - last >= self.LOCK_NOTE_EVERY_S:
+                print(f"  [{INFO}] Windows still locked, "
+                      f"{(time.time() - start) / 60:.0f} min")
+                last = time.time()
+        print(f"  [{PASS}] Unlocked after {(time.time() - start) / 60:.1f} min "
+              f"-- carrying on")
+        return True
+
     def _ensure_game_running(self) -> bool:
         """Make the game window exist and the city view be usable. Returns False
         if the client could not be brought up (caller aborts the run)."""
+        self._ensure_unlocked("before the game check")
         if self.game.is_game_running():
             return True
         if not self._auto_launch:
@@ -722,6 +808,9 @@ class GameLifecycleMixin:
         HID first (that is the input path everything else uses); only if two
         ALT+TABs fail to bring it forward do we fall back to SetForegroundWindow.
         """
+        # Locked, the only thing in front is the lock screen, and an ALT+TAB
+        # or a click meant for the game would go to it.
+        self._ensure_unlocked(reason)
         win = self.game.game_window()
         if not win:
             return False

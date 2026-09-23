@@ -212,6 +212,9 @@ FEED = re.compile(
     # operator looking at the screen. A supervisor that cannot say anything is
     # a supervisor no one is supervised by.
     r"|WATCHDOG:"
+    # The machine locks itself when idle (no password; the farm dismisses the
+    # lock screen). Worth seeing when it happens, and loudly when it cannot.
+    r"|Windows is locked|Windows (?:is )?still locked|Unlocked after"
 )
 
 
