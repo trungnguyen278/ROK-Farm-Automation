@@ -470,6 +470,51 @@ class GemFlowMixin:
     # held until reached is exactly the fixed route the operator ruled out.
     SWEEP_REDRAW_SCANS = 6
 
+    # --- the jump home: near ground before far, by the fast road ------------
+    #
+    # The lean alone does not bring the camera home. It turns a scan's
+    # heading, ~10 tiles of camera per scan, and a gem found on the way back
+    # ends the mine right there -- so after a march far out, the next mine
+    # starts far out again. Measured 2026-09-23 15:48-16:01: camera median
+    # 146 tiles from the city (max 208) while 30 of the 121 cells within 40
+    # tiles of it had not been seen in six hours.
+    #
+    # The city button is the fast road: the map reopens centred on the city
+    # (577,615, every time) in about ten seconds, where walking back is a
+    # minute of scans. Taken only while near ground is still unseen, so once
+    # it is covered the camera goes as far as it likes -- a route, not a
+    # fence (the operator, 2026-09-22). Not every time, and not twice within
+    # a few minutes, so it is not a rule anyone could time.
+    #
+    # All starting values: near = 40 tiles (inside it a march is ~5 min, the
+    # table above), far = 80 (where marches start to lengthen), four cells of
+    # near gap before it is worth a trip.
+    JUMP_NEAR_TILES = 40
+    JUMP_FAR_TILES = 80
+    JUMP_MIN_GAPS = 4
+    JUMP_CHANCE = 0.7
+    JUMP_COOLDOWN_S = 8 * 60
+
+    def _jump_home_worth_it(self):
+        """(gap cells near the city, camera distance) if the city trip is the
+        better road to unseen near ground right now, else None."""
+        book = self.mapmem
+        city = getattr(self, "_city_xy", None)
+        cam = getattr(self, "_last_map_xy", None)
+        if book is None or not city or not cam:
+            return None
+        far = max(abs(cam[0] - city[0]), abs(cam[1] - city[1]))
+        if far <= self.JUMP_FAR_TILES:
+            return None
+        if time.time() - getattr(self, "_last_jump_home", 0.0) < self.JUMP_COOLDOWN_S:
+            return None
+        gaps = book.gaps_near(city, self.JUMP_NEAR_TILES, self.SWEEP_STALE_H)
+        if len(gaps) < self.JUMP_MIN_GAPS:
+            return None
+        if random.random() >= self.JUMP_CHANCE:
+            return None
+        return len(gaps), far
+
     def _sweep_target(self):
         """A gap near the city to lean toward, or None."""
         book = self.mapmem
@@ -1327,6 +1372,21 @@ class GemFlowMixin:
                         "before the scan", drift)
             self._step_return_city(tag)
             return None
+
+        jump = self._jump_home_worth_it()
+        if jump:
+            gaps, far = jump
+            print(f"  [{INFO}] {far} tiles out with {gaps} unseen cell(s) near "
+                  f"the city -- back through the city to scan near ground first")
+            logger.info("jump home: camera %d tiles out, %d near gap cell(s) "
+                        "within %d -- city trip, then scan from the city",
+                        far, gaps, self.JUMP_NEAR_TILES)
+            self._last_jump_home = time.time()
+            self._step_return_city(tag)
+            # Same mine, carried on from the city: a road taken on purpose is
+            # not a failed mine, and must not count toward the fail limits.
+            if not self._step_to_world_map(tag):
+                return None
 
         wander_heading = getattr(self, '_wander_heading', random.uniform(0, 2 * math.pi))
         scan_count = 0
