@@ -714,6 +714,16 @@ class GemFlowMixin:
                   f"({len(self._marched_sites)} deposit(s) this session)")
             logger.info("Marched to deposit %s %d:%d", mid, sx, sy)
             self._pending_site = None
+            # Onto the march's own record, which is saved and reloaded: the
+            # session list died with every restart, and a restart while an
+            # army is still on the road left the farm free to click -- and
+            # march to -- the same deposit again. 2026-09-23 had eight
+            # restarts in two hours.
+            om = getattr(self, "_open_marches", None)
+            if (om and "site" not in om[-1]
+                    and time.time() - om[-1].get("t_sent", 0) < 180):
+                om[-1]["site"] = [mid, sx, sy]
+                self._save_open_marches()
         # Right after a march the view is at close zoom, which is exactly when
         # the resource bar is on screen -- a free reading rather than a
         # navigation of its own. Once per mine is cadence enough.

@@ -859,6 +859,16 @@ class GatherModelMixin:
                 if isinstance(m, dict)
                 and now < (m.get("est_home") or 0) <= now + MAX_GATHER_SECONDS]
         self._open_marches = live
+        # The deposits those armies are on (or heading to): taken until they
+        # come home, whether or not this run sent them.
+        restored = [(str(m["site"][0]), int(m["site"][1]), int(m["site"][2]),
+                     float(m.get("t_sent", now)))
+                    for m in live
+                    if isinstance(m.get("site"), list) and len(m["site"]) == 3]
+        if restored:
+            self._marched_sites = list(getattr(self, "_marched_sites", [])) + restored
+            logger.info("Restored %d marched deposit(s): %s", len(restored),
+                        ", ".join(f"{x}:{y}" for _m, x, y, _t in restored))
         if data:
             logger.info("Restored %d outstanding march(es) from disk "
                         "(%d already due home, dropped)",
