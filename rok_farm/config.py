@@ -196,6 +196,19 @@ MAX_MARCH_MINUTES = 15
 # Target game client width; the window is resized to this at startup (same as
 # `python -m anti_detection.player_actions`) so template scales stay consistent.
 TARGET_CONTENT_W = 1533
+# How far off that width still counts as correct.
+#
+# The check was exact equality, and the client does not land exactly. Asked
+# for 1533 it comes back 1534 -- measured twice in one morning on 2026-09-23,
+# "Resizing game 1534x863 -> w=1533" followed by "Window now: 1534x863" --
+# so the farm resized on every startup, never succeeded, and put a resize
+# dialog in front of the operator each time. They saw it twice and said so.
+#
+# Two pixels. One is what the rounding actually costs; 2/1533 is 0.13% of the
+# width, far under anything template matching can feel, and the earlier real
+# resizes (2352 and 1860 wide) landed exactly on 1533 so genuine mismatches
+# are nowhere near this.
+TARGET_WIDTH_SLACK = 2
 # Seconds counted down at startup so the user can get ready before the bot acts.
 COUNTDOWN_SECONDS = 5
 

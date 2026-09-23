@@ -22,6 +22,7 @@ from rok_farm.config import (CLIENT_READY_TIMEOUT, DELAY_AFTER_SCROLL,
                              FOCUS_RETRIES,
                              GEM_ICON_THRESHOLD,
                              GEM_ICON_THRESHOLD_NIGHT, TARGET_CONTENT_W,
+                             TARGET_WIDTH_SLACK,
                              TITLE_BAR_H, ZOOM_OUT_POLL, ZOOM_OUT_QUIET_DIFF,
                              ZOOM_OUT_QUIET_POLLS, ZOOM_OUT_SETTLE_CAP)
 from rok_farm.logging_setup import FAIL, INFO, WARN, logger
@@ -248,7 +249,7 @@ class CaptureMixin:
         """
         if not self.win:
             return False
-        if self.win["width"] == TARGET_CONTENT_W:
+        if abs(self.win["width"] - TARGET_CONTENT_W) <= TARGET_WIDTH_SLACK:
             return True
         print(f"  [{INFO}] Resizing game {self.win['width']}x{self.win['height']} "
               f"-> w={TARGET_CONTENT_W}")
@@ -263,7 +264,17 @@ class CaptureMixin:
         if w:
             self.win = w
         print(f"  [{INFO}] Window now: {self.win['width']}x{self.win['height']}")
-        return self.win["width"] == TARGET_CONTENT_W
+        landed = abs(self.win["width"] - TARGET_CONTENT_W) <= TARGET_WIDTH_SLACK
+        if not landed:
+            # Worth saying loudly: an exact-equality check against a client
+            # that rounds means this runs again on every single startup, and
+            # every run puts a resize dialog in front of whoever is at the
+            # machine. That is how this was found -- the operator saw the
+            # popup twice in a morning.
+            logger.warning("resize did not land: asked for w=%d, got %dx%d",
+                           TARGET_CONTENT_W, self.win["width"],
+                           self.win["height"])
+        return landed
 
     def _screen_xy(self, frame_x: int, frame_y: int) -> tuple[int, int]:
         raw = self._raw_frame
