@@ -97,8 +97,9 @@ def test_a_scan_leans_toward_the_target_by_a_random_amount(book):
     w = Wander(book, cam=city)
     random.seed(1)
     leans = [w._lean_to_sweep(0.0) for _ in range(50)]
+    lo, hi = Wander.SWEEP_PULL
     for h in leans:
-        assert -math.pi / 2 * 0.61 <= h <= -math.pi / 2 * 0.24, math.degrees(h)
+        assert -math.pi / 2 * (hi + 0.01) <= h <= -math.pi / 2 * (lo - 0.01),             math.degrees(h)
     assert len({round(h, 4) for h in leans}) > 10, "the same lean every time"
 
 

@@ -487,31 +487,27 @@ class GemFlowMixin:
     # in three.
     SWEEP_CITY_HALF = 25.0
     SWEEP_CAM_HALF = 80.0
-    # How hard a scan leans toward the target, drawn fresh every scan.
-    SWEEP_PULL = (0.25, 0.6)
+    # How hard a scan leans toward the target, drawn fresh every scan: that
+    # fraction of the angle between the heading and the target is turned.
+    #
+    # Simulated with the scan loop's own noise (gauss 0.4 rad a scan, 15% a
+    # +-90 deg turn, 5% +-180 deg), ~12 tiles a pan, arriving facing anywhere
+    # -- scans to come within 10 tiles of a target, median (p90), and path
+    # efficiency (straight distance / distance walked):
+    #
+    #   pull          30 tiles      60 tiles      100 tiles     straight
+    #   0.25-0.60     4 (11) 0.69   6 (11) 0.77   10 (15) 0.80  2 / 5 / 8
+    #   0.35-0.70     3 (5)  0.87   6 (7)  0.88    9 (11) 0.91
+    #   0.45-0.80     3 (4)  1.00   5 (6)  0.95    9 (9)  0.97
+    #
+    # 0.35-0.70 cuts the long tail of 0.25-0.60 (a p90 of 11 scans for 30
+    # tiles) and still wanders -- no two roads alike (test_steer_follows_
+    # sweep.py); 0.45 and up walks a straight line, the rail ruled out.
+    SWEEP_PULL = (0.35, 0.7)
     # Re-draw the target every few scans even if it is still a gap: a target
     # held until reached is exactly the fixed route the operator ruled out.
     SWEEP_REDRAW_SCANS = 6
 
-    # --- the jump home: near ground before far, by the fast road ------------
-    #
-    # The lean alone does not bring the camera home. It turns a scan's
-    # heading, ~10 tiles of camera per scan, and a gem found on the way back
-    # ends the mine right there -- so after a march far out, the next mine
-    # starts far out again. Measured 2026-09-23 15:48-16:01: camera median
-    # 146 tiles from the city (max 208) while 30 of the 121 cells within 40
-    # tiles of it had not been seen in six hours.
-    #
-    # The city button is the fast road: the map reopens centred on the city
-    # (577,615, every time) in about ten seconds, where walking back is a
-    # minute of scans. Taken only while near ground is still unseen, so once
-    # it is covered the camera goes as far as it likes -- a route, not a
-    # fence (the operator, 2026-09-22). Not every time, and not twice within
-    # a few minutes, so it is not a rule anyone could time.
-    #
-    # All starting values: near = 40 tiles (inside it a march is ~5 min, the
-    # table above), far = 80 (where marches start to lengthen), four cells of
-    # near gap before it is worth a trip.
     # --- ring by ring: the band the scan works in -----------------------------
     #
     # Measured 2026-09-23 16:20-18:00 on a clean book: rings out to 39 tiles
@@ -525,19 +521,21 @@ class GemFlowMixin:
     #
     # The operator: near first -- "no dang di huong ra chu khong uu tien o gan
     # truoc". So the scan works a band: out to the first ring less than 80%
-    # seen (the frontier), plus a margin. Targets are drawn inside it,
-    # unseen ground beyond it pulls nothing, and a camera past it by more
-    # than JUMP_SLACK takes the city road back -- asked every few scans, not
-    # once a mine. As the rings inside fill, the band grows by itself, so
-    # real scarcity still takes the scan far -- ring by ring, never down an
-    # arm. After SWEEP_STALE_H the inner rings count as unseen again and the
-    # band shrinks back to the city.
+    # seen (the frontier), plus a margin. Targets are drawn inside it and
+    # unseen ground beyond it pulls nothing. As the rings inside fill, the
+    # band grows by itself, so real scarcity still takes the scan far -- ring
+    # by ring, never down an arm. After SWEEP_STALE_H the inner rings count as
+    # unseen again and the band shrinks back to the city.
+    #
+    # A camera out past the band pans back: the pull toward a target inside
+    # it, with the book held to SWEEP_CORRIDOR. It used to take the city road
+    # instead (2026-09-23 23:40 to 2026-09-24 01:30), and the operator put a
+    # stop to it: the trip through the city is the quick fix for a wrong
+    # zoom, not a way to steer -- the scan path itself is what should find
+    # near ground first. It was only ever needed because the book was
+    # turning the scan outward (see _steer_heading).
     SWEEP_FULL = 0.8
     SWEEP_BAND_MARGIN = 24
-    JUMP_SLACK = 16
-    JUMP_CHECK_SCANS = 4
-    JUMP_CHANCE = 0.7
-    JUMP_COOLDOWN_S = 8 * 60
 
     def _sweep_band(self) -> int | None:
         """How far out from the city the scan should be working, in tiles."""
@@ -549,45 +547,6 @@ class GemFlowMixin:
             + self.SWEEP_BAND_MARGIN
         book.band = band
         return band
-
-    def _jump_home_worth_it(self):
-        """(band, camera distance) if the camera is out past the band the scan
-        should be working and the city road is the way back, else None."""
-        city = getattr(self, "_city_xy", None)
-        cam = getattr(self, "_last_map_xy", None)
-        if not city or not cam:
-            return None
-        band = self._sweep_band()
-        if band is None:
-            return None
-        far = max(abs(cam[0] - city[0]), abs(cam[1] - city[1]))
-        if far <= band + self.JUMP_SLACK:
-            return None
-        if time.time() - getattr(self, "_last_jump_home", 0.0) < self.JUMP_COOLDOWN_S:
-            return None
-        if random.random() >= self.JUMP_CHANCE:
-            return None
-        return band, far
-
-    def _jump_home_if_out_of_band(self, tag: str):
-        """Take the city road back if the camera is out past the band.
-
-        None: no trip needed. True: back on the world map at the city.
-        False: the trip did not get back onto the world map.
-        """
-        jump = self._jump_home_worth_it()
-        if not jump:
-            return None
-        band, far = jump
-        print(f"  [{INFO}] {far} tiles out, the scan is working the ground out "
-              f"to {band} -- back through the city")
-        logger.info("jump home: camera %d tiles out, band %d -- city trip, "
-                    "then scan from the city", far, band)
-        self._last_jump_home = time.time()
-        self._step_return_city(tag)
-        # Same mine, carried on from the city: a road taken on purpose is not
-        # a failed mine, and must not count toward the fail limits.
-        return bool(self._step_to_world_map(tag))
 
     def _sweep_target(self):
         """A gap near the city to lean toward, or None."""
@@ -641,13 +600,21 @@ class GemFlowMixin:
         """Lean a screen heading toward the sweep target, by a random amount."""
         tgt = self._sweep_target()
         cam = getattr(self, "_last_map_xy", None)
+        # Read by _steer_heading: while there is a target, it alone steers --
+        # only a wall or the map edge may turn the scan off it.
+        self._on_sweep = tgt is not None and cam is not None
         if tgt is None or cam is None:
             return heading
         dx, dy = tgt[0] - cam[0], tgt[1] - cam[1]
-        if max(abs(dx), abs(dy)) <= 6:
-            return heading            # already over it; the view will cover it
-        want = pan_model.screen_heading(dx, dy, self.win["width"],
-                                        self.win["height"])
+        w, h = self.win["width"], self.win["height"]
+        # On screen already, where the book counts it: nothing to lean for.
+        # "Within 6 tiles" used to stand in for this, but the frame shows
+        # only ~5 tiles below its centre inside VIEW_MARGIN (12 above), so a
+        # target 6 tiles down was "reached" and never seen -- the camera
+        # circled beside it (tests/test_steer_follows_sweep.py).
+        if pan_model.in_view(cam, tgt, w, h, margin=self.VIEW_MARGIN):
+            return heading
+        want = pan_model.screen_heading(dx, dy, w, h)
         turn = math.atan2(math.sin(want - heading), math.cos(want - heading))
         return heading + random.uniform(*self.SWEEP_PULL) * turn
 
@@ -692,7 +659,8 @@ class GemFlowMixin:
         # nine scans out of nine and refused headings whose only sin was one
         # empty scan -- the pinning the margin below exists to prevent.
         #
-        # blocked() asks the map the question directly instead.
+        # blocked() asks the map the question directly instead. The veto
+        # comes first, sweep or no sweep: a map edge outranks everything.
         if self.mapmem.blocked(x, y, on_map(heading)):
             unblocked = [(s, h) for s, h in scored
                          if not self.mapmem.blocked(x, y, on_map(h))]
@@ -709,6 +677,22 @@ class GemFlowMixin:
                            "(%d,%d) -- taking %.0f deg", x, y,
                            math.degrees(best) % 360)
             return best
+
+        # While a target is being worked, the sweep alone decides the course.
+        # Over 381 pans (2026-09-23 14:52 to 2026-09-24 01:10,
+        # tools/dev/steer_check.py) the book's choice below overrode 283 scans
+        # and turned 223 of them AWAY from the target, 53 toward: around the
+        # city every heading crosses ground just seen (-1 a cell) and unseen
+        # ground past the band scores 0, so the best score was always the way
+        # out. Pans went toward the target 42% of the time -- worse than no
+        # steering -- and the city road was bolted on to fetch the camera
+        # back. Held to +-40 deg of the course it still won: it took the
+        # outer side every scan and the camera circled the seen ground 40-50
+        # tiles out, never reaching the gap (tests/test_steer_follows_sweep.py).
+        # The target is already the book's answer to "where is unseen ground
+        # worth going"; asking the book again, locally, only argues with it.
+        if getattr(self, "_on_sweep", False):
+            return heading
 
         if best_score > scored[0][0] + 1.0:
             logger.debug("steer: %.0f -> %.0f deg (score %.1f > %.1f)",
@@ -1482,9 +1466,6 @@ class GemFlowMixin:
             self._step_return_city(tag)
             return None
 
-        if self._jump_home_if_out_of_band(tag) is False:
-            return None
-
         wander_heading = getattr(self, '_wander_heading', random.uniform(0, 2 * math.pi))
         scan_count = 0
         scan_speed = random.uniform(3.6, 5.0)
@@ -1564,19 +1545,6 @@ class GemFlowMixin:
         # Random wander scan (human-like, not spiral)
         while scan_count < max_scans and attempt < max_attempts:
             scan_count += 1
-
-            # Out past the band? Asked every few scans, not only when the
-            # mine began: one mine of 31 scans ran 150 tiles out on its own.
-            if scan_count % self.JUMP_CHECK_SCANS == 0:
-                back = self._jump_home_if_out_of_band(tag)
-                if back is False:
-                    return None
-                if back:
-                    # The map reopened on the city: every frame position
-                    # remembered so far is somewhere else now.
-                    clicked_positions = []
-                    empty_streak = 0
-                    no_candidate_floor = scan_count
 
             turn = random.gauss(0, 0.4)
             if random.random() < 0.15:
