@@ -166,6 +166,38 @@ class GemFlowMixin:
             out.append((int(round(cam[0] + dx)), int(round(cam[1] + dy))))
         return out
 
+    # How close an icon's computed tile must come to a deposit already marched
+    # to for it to be skipped BEFORE clicking. The survey model puts an icon on
+    # its deposit within 1 tile 84% of the time and within 2 tiles 90%
+    # (tools/dev/zoom_check.py, 173 clicks); 3 leaves room for that error, and
+    # the check after the click still catches whatever slips past.
+    MARCHED_ICON_TILES = 3
+
+    def _marched_at_icon(self, icon, frame):
+        """The marched deposit this icon stands on, or None.
+
+        The deposit a march just went to stays on screen when the post-march
+        pan falls short, and nothing marks it taken while the army is still
+        on the road -- so the scan clicked it, opened it, read its position
+        and backed out. On 2026-09-23 that happened five mines in a row.
+        """
+        if not self._marched_sites or frame is None:
+            return None
+        key = (id(frame), frame.shape)
+        if getattr(self, "_icon_cam_key", None) != key:
+            self._icon_cam_key = key
+            pos = self._read_map_position(frame)
+            home = getattr(self, "_home_map_id", None)
+            self._icon_cam = ((pos[1], pos[2]) if pos
+                              and (home is None or pos[0] == home) else None)
+        if self._icon_cam is None:
+            return None
+        tx, ty = self._icon_tiles(self._icon_cam, frame, [icon])[0]
+        for mid, x, y, _when in self._marched_sites:
+            if max(abs(x - tx), abs(y - ty)) <= self.MARCHED_ICON_TILES:
+                return (mid, x, y)
+        return None
+
     def _map_sync(self, frame, found: bool, force: bool = False,
                   scan_count: int = 0, icons=None):
         """Read the HUD position, open the right book, file what we just saw."""
@@ -1253,6 +1285,15 @@ class GemFlowMixin:
                 if any(abs(icon.center[0]-px) < r and abs(icon.center[1]-py) < r
                        for px, py, r in clicked_positions):
                     continue
+                dup = self._marched_at_icon(icon, frame)
+                if dup:
+                    print(f"  [ -- ] Icon at {icon.center} stands on "
+                          f"{dup[1]}:{dup[2]}, already marched to -- skip")
+                    logger.info("icon at %s is the marched deposit %d:%d -- "
+                                "skipped before clicking", icon.center,
+                                dup[1], dup[2])
+                    clicked_positions.append((*icon.center, SKIP_RADIUS))
+                    continue
                 raw = self._raw_frame if self._raw_frame is not None else frame
                 occupied, occ_info = self._check_icon_occupied(raw, icon,
                                                                shot=frame)
@@ -1596,6 +1637,15 @@ class GemFlowMixin:
                        for px, py, r in clicked_positions):
                     print(f"  [ -- ] Skip already-clicked icon at {icon.center}")
                     continue
+                dup = self._marched_at_icon(icon, frame)
+                if dup:
+                    print(f"  [ -- ] Icon at {icon.center} stands on "
+                          f"{dup[1]}:{dup[2]}, already marched to -- skip")
+                    logger.info("icon at %s is the marched deposit %d:%d -- "
+                                "skipped before clicking", icon.center,
+                                dup[1], dup[2])
+                    clicked_positions.append((*icon.center, SKIP_RADIUS))
+                    continue
                 raw = self._raw_frame if self._raw_frame is not None else frame
                 occupied, occ_info = self._check_icon_occupied(raw, icon,
                                                                shot=frame)
@@ -1763,6 +1813,15 @@ class GemFlowMixin:
                               f"marched this session -- backing out")
                         logger.info("Duplicate deposit %s -- not marching again",
                                     site)
+                        # Back out for real: close the popup and move off the
+                        # deposit, the way a dud icon is left. Returning with
+                        # the camera still centred on it meant the next mine
+                        # found the same icon first and clicked it again --
+                        # 2026-09-23 15:25-15:26, mines 2 to 6 all failed on
+                        # 632:622, one click on the same deposit after another.
+                        self._press_escape()
+                        self._wait(DELAY_AFTER_ESCAPE)
+                        self._return_to_icon_zoom()
                         self._record(f"{tag}_gather", False, "duplicate deposit")
                         return False
                     self._pending_site = site
