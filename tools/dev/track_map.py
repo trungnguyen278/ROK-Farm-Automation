@@ -35,6 +35,9 @@ CELL = 8
 PX = 3                       # pixels per tile
 STALE_H = 6.0
 SWEEP_RADIUS = 150
+# Longer than any scan step (7-20 tiles) or node-click recentre: a trip
+# through the city. Drawn dotted, not as a pan.
+JUMP_TILES = 40
 MARCH = re.compile(r"^(\S+ \S+),\d+ .*Marched to deposit (\S+) (\d+):(\d+)")
 
 # BGR
@@ -54,6 +57,9 @@ def main() -> int:
     ap.add_argument("--since", default=datetime.now().strftime("%Y-%m-%d 00:00"))
     ap.add_argument("--book", default=str(BOOK))
     ap.add_argument("--out", default=str(ROOT / "screenshots" / "track_map.png"))
+    ap.add_argument("--at", default=None,
+                    help="judge 'seen lately' at this time (default: the last "
+                         "track point)")
     ap.add_argument("--radius", type=int, default=200,
                     help="tiles shown around the city")
     args = ap.parse_args()
@@ -63,7 +69,11 @@ def main() -> int:
     city = tuple(book.get("city") or (577, 615))
     track = [p for p in book.get("track", []) if p[0] >= since]
     reach = book.get("reach", {})
-    now = time.time()
+    # "Seen lately" is judged at the end of the data, not at the moment the
+    # picture is drawn -- drawn at 22:22, the 16:21 cells had aged past the
+    # window and the same run looked 38 cells worse than at 18:25.
+    now = (datetime.strptime(args.at, "%Y-%m-%d %H:%M").timestamp()
+           if args.at else (track[-1][0] if track else time.time()))
     size = 2 * args.radius * PX
     x0, y0 = city[0] - args.radius, city[1] - args.radius
 
@@ -101,8 +111,23 @@ def main() -> int:
                       to_px(city[0] + SWEEP_RADIUS, city[1] - SWEEP_RADIUS),
                       (90, 90, 90), 1)
         for a, b in zip(track, track[1:]):
-            if b[0] - a[0] <= 120:       # a longer gap is a break, not a pan
-                cv2.line(img, to_px(a[1], a[2]), to_px(b[1], b[2]), (60, 60, 60), 1)
+            if b[0] - a[0] > 120:        # a longer gap is a break, not a pan
+                continue
+            step = max(abs(b[1] - a[1]), abs(b[2] - a[2]))
+            if step > JUMP_TILES:
+                # Not a swipe: a scan step covers 7-20 tiles. Anything this
+                # long is the map reopening on the city after a trip there
+                # (or a node click centring far off), and drawing it as a
+                # line made it look like one enormous pan. Dotted, faint.
+                p, q = to_px(a[1], a[2]), to_px(b[1], b[2])
+                n = max(2, int(np.hypot(q[0] - p[0], q[1] - p[1]) // 8))
+                for k in range(0, n, 2):
+                    u = k / n
+                    cv2.circle(img, (int(p[0] + (q[0] - p[0]) * u),
+                                     int(p[1] + (q[1] - p[1]) * u)), 1,
+                               (170, 170, 170), -1)
+                continue
+            cv2.line(img, to_px(a[1], a[2]), to_px(b[1], b[2]), (60, 60, 60), 1)
         for x, y in marches:
             cx, cy = to_px(x, y)
             cv2.line(img, (cx - 5, cy - 5), (cx + 5, cy + 5), (20, 20, 200), 2)
