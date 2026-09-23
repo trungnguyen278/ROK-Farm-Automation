@@ -234,11 +234,15 @@ class GemFlowMixin:
         dup = self._marched_at_icon(icon, frame)
         if dup:
             return ("already marched to", dup[1], dup[2])
-        tried = getattr(self, "_tried_tiles", None)
-        if not tried:
-            return None
         tile = self._icon_tile(icon, frame)
         if tile is None:
+            return None
+        book = getattr(self, "mapmem", None)
+        if book is not None and book.unreachable_at(
+                tile[0], tile[1], getattr(self, "_city_xy", None)):
+            return ("in ground we cannot march to", tile[0], tile[1])
+        tried = getattr(self, "_tried_tiles", None)
+        if not tried:
             return None
         now = time.time()
         for x, y, when, why in tried:
@@ -307,17 +311,11 @@ class GemFlowMixin:
             # would collect scans of ground that can never be farmed, and the
             # retreat is about to take us out of it anyway.
             #
-            # Mark the last cell we stood on at HOME as a wall instead, so the
-            # wander steering learns where the border runs. Without this the
-            # bot detects the crossing, retreats, and wanders straight back --
-            # twice within one run before this was added. The fog bail has
-            # recorded its edge this way from the start; this branch simply did
-            # not.
-            home_xy = getattr(self, "_last_home_xy", None)
-            if (home_xy and self.mapmem is not None
-                    and self.mapmem.map_id == self._home_map_id):
-                self.mapmem.record_wall(*home_xy)
-                self.mapmem.save()
+            # No wall is written for the crossing any more. The kingdom is
+            # 1200 tiles a side and its edges come from the coordinates
+            # (MapMemory.score / blocked); the operator, 2026-09-23: "bo di vi
+            # chung ta co toa do roi". The retreat that follows still turns
+            # the camera round.
             return getattr(self, "_last_map_xy", None)
 
         self._last_home_xy = (x, y)
@@ -980,6 +978,27 @@ class GemFlowMixin:
     # the middle of that gap.
     FILTER_PANEL_THRESHOLD = 0.60
 
+    # How close to the map's edge a featureless screen has to be before it is
+    # taken for the void outside the kingdom. The frame reaches ~15 tiles from
+    # the camera sideways and ~12 up; with 30, the void is on screen.
+    FOG_EDGE_TILES = 30
+
+    def _fog_at_the_edge(self, frame) -> bool:
+        """Is the camera where the void can be? With the position known, a
+        featureless screen anywhere else is open water or plain ground, and
+        bailing on it threw a mine away. Unknown position: trust the screen,
+        as before."""
+        pos = self._read_map_position(frame)
+        if pos is None:
+            return True
+        x, y = pos[1], pos[2]
+        edge = min(x, y, 1199 - x, 1199 - y)
+        if edge > self.FOG_EDGE_TILES:
+            logger.info("featureless screen at %d,%d, %d tiles inside the map "
+                        "-- not the void, carrying on", x, y, edge)
+            return False
+        return True
+
     def _filter_panel_open(self, frame) -> bool:
         """Is the world-map filter panel covering the top-left corner?"""
         if frame is None or getattr(frame, "shape", None) is None:
@@ -1574,7 +1593,7 @@ class GemFlowMixin:
                 # Panned out of the kingdom into fog? Bail early -- the camera is
                 # off the map edge, no resources will ever appear here. Return to
                 # city so the next mine re-centers on the player's city.
-                if self._fog_confirmed(frame):
+                if self._fog_confirmed(frame) and self._fog_at_the_edge(frame):
                     print(f"  [{WARN}] Scan {scan_count:2d}: FOG (out of kingdom) -- "
                           f"turn back inland, then return to city")
                     # Keep the frame. Fog is the second largest cause of failed
@@ -1604,13 +1623,10 @@ class GemFlowMixin:
                     # is left is a small residue, and these frames are for
                     # understanding that residue, not a crisis.
                     save_screenshot(frame, f"{tag}_FOG_{scan_count:02d}")
-                    # Strongest terrain evidence available: mark it permanently.
-                    # Mountains and the map void do not move, so unlike the
-                    # reach book this is never expired.
-                    xy = self._map_sync(frame, False, force=True)
-                    if xy and self.mapmem:
-                        self.mapmem.record_wall(*xy)
-                        self.mapmem.save()
+                    # No wall written: the edge is known from the coordinates.
+                    # The two walls the book held on 2026-09-23 both sat beside
+                    # the city on ordinary ground -- a featureless screen is
+                    # not evidence of anything a position cannot say better.
                     # Turning the camera around matters more than the city trip.
                     # The world map REMEMBERS its camera across a city
                     # round-trip, so "return to city, restart" recentres
@@ -2037,6 +2053,48 @@ class GemFlowMixin:
                 return True, d
         return False, nearest
 
+    # How far the camera must have been carried from the deposit, after the
+    # Gather click, to read it as the game showing the pass in the way (the
+    # operator, 2026-09-23). The ordinary panel failures leave the camera on
+    # the deposit: all eight saved troop_panel_TIMEOUT frames (2026-09-14 to
+    # 09-22) are centred on it. No pass case has been seen yet; 12 tiles is
+    # clear of the model's error and the zoom's drift, and every failure
+    # logs how far the camera went, so the number can be set on data.
+    PASS_PAN_MIN_TILES = 12
+
+    def _note_if_unreachable(self, tag: str) -> bool:
+        """After a Gather click that opened no panel: did the game carry the
+        camera off to a pass? If so, the deposit is out of reach from here."""
+        site = getattr(self, "_pending_site", None)
+        if not site:
+            return False
+        frame = self._grab()
+        pos = self._read_map_position(frame) if frame is not None else None
+        if pos is None or pos[0] != site[0]:
+            logger.info("no deploy panel: camera position unreadable")
+            return False
+        moved = max(abs(pos[1] - site[1]), abs(pos[2] - site[2]))
+        logger.info("no deploy panel: camera %d tile(s) from the deposit "
+                    "%d:%d, now at %d:%d", moved, site[1], site[2],
+                    pos[1], pos[2])
+        if moved < self.PASS_PAN_MIN_TILES:
+            return False
+        city = getattr(self, "_city_xy", None)
+        if self.mapmem is None or not city:
+            return False
+        self.mapmem.record_unreachable((site[1], site[2]), city,
+                                       (pos[1], pos[2]))
+        # The first real case is the evidence this was built without.
+        save_screenshot(frame, f"{tag}_UNREACHABLE")
+        print(f"  [{WARN}] The game carried the camera to {pos[1]}:{pos[2]} "
+              f"-- deposit {site[1]}:{site[2]} is in a zone we cannot reach; "
+              f"leaving the ground around it alone")
+        logger.warning("unreachable deposit %d:%d: camera carried %d tiles to "
+                       "%d:%d (the pass in the way) -- ground around it "
+                       "disabled while the city stays at %d:%d", site[1],
+                       site[2], moved, pos[1], pos[2], city[0], city[1])
+        return True
+
     def _step_click_march(self, tag: str) -> bool:
         print(f"\n--- [{tag}] Step 6: Troop + March ---\n")
 
@@ -2072,6 +2130,7 @@ class GemFlowMixin:
         if not self._wait_for_troop_panel(tag=tag):
             print(f"  [{FAIL}] Deploy panel never opened after Gather -- "
                   f"not firing the chain into the map")
+            self._note_if_unreachable(tag)
             self._record(f"{tag}_march", False, "deploy panel did not open")
             return False
 

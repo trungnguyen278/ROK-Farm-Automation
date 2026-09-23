@@ -37,6 +37,11 @@ CELL = 8
 # Terrain never does.
 REACH_HALFLIFE_H = 18.0
 
+# The kingdom is 1200 tiles a side (X and Y 0-1199; the largest X in 3,433
+# logged reads was 999, the city sits near the middle at 577,615). Its edges
+# are known from the coordinates -- nothing about them needs learning.
+MAP_TILES = 1200
+
 # Teleport detection compares the CURRENT position against a rolling median of
 # recent ones, not against the single previous reading.
 #
@@ -85,6 +90,7 @@ class MapMemory:
             city = d.get("city")
             if city:
                 self.city = (int(city[0]), int(city[1]))
+            self.unreachable = d.get("unreachable", [])
             logger.info("MapMemory %s: %d terrain cell(s), %d reach cell(s)",
                         self.map_id, len(self.terrain), len(self.reach))
         except Exception as e:
@@ -97,7 +103,8 @@ class MapMemory:
             self.path.write_text(json.dumps(
                 {"terrain": self.terrain, "reach": self.reach,
                  "track": self.track,
-                 "city": list(getattr(self, "city", None) or []) or None},
+                 "city": list(getattr(self, "city", None) or []) or None,
+                 "unreachable": getattr(self, "unreachable", [])},
                 indent=1),
                 encoding="utf-8")
         except Exception as e:
@@ -163,6 +170,62 @@ class MapMemory:
             self._dirty = 0
             self.save()
 
+    # --- ground we cannot march to --------------------------------------
+    #
+    # The operator, 2026-09-23: clicking Gather on a deposit in a zone we
+    # cannot enter makes the game carry the camera to the uncaptured pass in
+    # the way, and no deploy panel opens. The deposit's tile is known, so
+    # remember the ground around it as out of reach -- for as long as the
+    # city stays where it was (a teleport changes which zones are open).
+    #
+    # One point is one deposit, so points are joined into ground: a disc
+    # around each, and the strip between any two close enough to be the same
+    # zone. A first version; zone outlines, if they turn out to be the same
+    # on every map, would replace this. All three numbers are starting values
+    # -- no such case has been seen yet (see PASS_PAN_MIN_TILES).
+    UNREACH_RADIUS = 30
+    UNREACH_LINK = 80
+    UNREACH_CITY_TOL = 20
+
+    def record_unreachable(self, site, city, pass_xy=None):
+        pts = getattr(self, "unreachable", [])
+        pts.append({"x": int(site[0]), "y": int(site[1]), "t": time.time(),
+                    "city": [int(city[0]), int(city[1])],
+                    "pass": [int(pass_xy[0]), int(pass_xy[1])] if pass_xy else None})
+        self.unreachable = pts
+        self.save()
+
+    def _unreach_points(self, city):
+        if not city:
+            return []
+        tol = self.UNREACH_CITY_TOL
+        return [(p["x"], p["y"]) for p in getattr(self, "unreachable", [])
+                if max(abs(p["city"][0] - city[0]),
+                       abs(p["city"][1] - city[1])) <= tol]
+
+    def unreachable_at(self, x: int, y: int, city=None) -> bool:
+        """Is this tile in ground we could not march to (from this city)?"""
+        pts = self._unreach_points(city if city is not None
+                                   else getattr(self, "city", None))
+        if not pts:
+            return False
+        r = self.UNREACH_RADIUS
+        for px, py in pts:
+            if max(abs(px - x), abs(py - y)) <= r:
+                return True
+        for i, a in enumerate(pts):
+            for b in pts[i + 1:]:
+                if max(abs(a[0] - b[0]), abs(a[1] - b[1])) > self.UNREACH_LINK:
+                    continue
+                # distance from the tile to the segment a-b
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                t = ((x - a[0]) * dx + (y - a[1]) * dy) / float(dx * dx + dy * dy or 1)
+                t = max(0.0, min(1.0, t))
+                qx, qy = a[0] + t * dx, a[1] + t * dy
+                if math.hypot(x - qx, y - qy) <= r:
+                    return True
+        return False
+
     # How long a cell counts as "just looked at" (see score()). Half an hour
     # covers a whole mine and the one after it; a starting value, not a
     # measurement.
@@ -209,6 +272,8 @@ class MapMemory:
                     continue
                 k = f"{i},{j}"
                 if self.terrain.get(k, {}).get("wall", 0) > 0:
+                    continue
+                if self.unreachable_at(x, y, city):
                     continue
                 seen = self.reach.get(k, {}).get("t")
                 if seen is not None and now - seen < stale:
@@ -269,10 +334,14 @@ class MapMemory:
         # learning cannot close this. Bounds can.
         #
         # Not a tuned constant: no map has a tile at a negative coordinate.
-        if x < 0 or y < 0:
+        if x < 0 or y < 0 or x >= MAP_TILES or y >= MAP_TILES:
             return -10.0
         if self.is_wall(x, y):
             return -10.0
+        # Out of reach: nothing found there can be gathered. The camera may
+        # still pass over it, so this steers away rather than vetoing.
+        if self.unreachable_at(x, y):
+            return -3.0
         c = self.reach.get(_key(x, y))
         if not c:
             # Unexplored used to be NEUTRAL, which is not the same as
@@ -362,7 +431,8 @@ class MapMemory:
             d = step * CELL
             cx = int(x + math.cos(heading) * d)
             cy = int(y + math.sin(heading) * d)
-            if cx < 0 or cy < 0 or self.is_wall(cx, cy):
+            if (cx < 0 or cy < 0 or cx >= MAP_TILES or cy >= MAP_TILES
+                    or self.is_wall(cx, cy)):
                 return True
         return False
 
@@ -382,6 +452,12 @@ class MapMemory:
         city = (int(x), int(y))
         if getattr(self, "city", None) != city:
             self.city = city
+            # Ground out of reach from where the city WAS says nothing about
+            # where it is now.
+            self.unreachable = [
+                p for p in getattr(self, "unreachable", [])
+                if max(abs(p["city"][0] - city[0]),
+                       abs(p["city"][1] - city[1])) <= self.UNREACH_CITY_TOL]
             self.save()
 
     def _unexplored_worth(self, x: int, y: int) -> float:
