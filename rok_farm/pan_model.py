@@ -146,6 +146,17 @@ def tile_heading(screen_heading: float, width_px: float, height_px: float,
                       rx * math.cos(screen_heading))
 
 
+def screen_heading(dx_tiles: float, dy_tiles: float, width_px: float,
+                   height_px: float, margin: float = 80.0) -> float:
+    """The scan heading that moves the camera toward (dx, dy) tiles away.
+
+    The inverse of tile_heading: same reach, same per-axis scales.
+    """
+    rx = (width_px / 2.0 - margin) * KX_MID
+    ry = (height_px / 2.0 - margin) * KY_MID
+    return math.atan2(-dy_tiles / ry, dx_tiles / rx)
+
+
 def plausible(x: int, y: int) -> bool:
     """Could this be a real position? Rejects the known Y misread."""
     return 0 <= x < MAP_SIZE and 0 <= y < MAP_SIZE

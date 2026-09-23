@@ -250,6 +250,7 @@ class GemFlowMixin:
             if city and map_id == getattr(self, "_home_map_id", None):
                 self.mapmem.set_city(*city)
         self.mapmem.note_position(x, y)
+        self.mapmem.note_track(x, y)
         # The whole view, but only at icon zoom: the footprint in pan_model
         # was measured there (the operator's condition for the survey), and
         # zoomed in a frame shows far less ground than it would claim.
@@ -337,6 +338,82 @@ class GemFlowMixin:
             return False
         return pos[0] < self.EDGE_WATCH_TILES or pos[1] < self.EDGE_WATCH_TILES
 
+    # --- the sweep: near ground before far ground, never on rails ------------
+    #
+    # The operator, 2026-09-23: keep the trajectory, so ground near the city
+    # is not left unscanned once the wander has gone far -- optimise the scan
+    # path for finding mines close by, but do not fix the path.
+    #
+    # So the book (which now records every cell each scan shows, and the
+    # camera's track) is asked for GAPS: cells near the city that no scan has
+    # shown lately. One is picked at random, weighted toward the city and then
+    # toward the camera, and each scan's heading leans toward it by a random
+    # amount. The random walk and the wall veto stay as they were; the lean is
+    # a pull, not a course.
+    #
+    # 150 tiles: the march table above -- past 100 a march takes about twice
+    # as long as within 60, so a gap out there is not worth turning back for.
+    SWEEP_RADIUS_TILES = 150
+    # A cell shown this recently counts as covered. Gathered deposits respawn
+    # over hours; this is a starting value, not a measurement, and every
+    # target logs how many gaps it was chosen from so it can be judged.
+    SWEEP_STALE_H = 6.0
+    # Weights: half as likely every 40 tiles further from the city, and every
+    # 80 tiles further from the camera.
+    SWEEP_CITY_HALF = 40.0
+    SWEEP_CAM_HALF = 80.0
+    # How hard a scan leans toward the target, drawn fresh every scan.
+    SWEEP_PULL = (0.25, 0.6)
+    # Re-draw the target every few scans even if it is still a gap: a target
+    # held until reached is exactly the fixed route the operator ruled out.
+    SWEEP_REDRAW_SCANS = 6
+
+    def _sweep_target(self):
+        """A gap near the city to lean toward, or None."""
+        book = self.mapmem
+        city = getattr(self, "_city_xy", None)
+        cam = getattr(self, "_last_map_xy", None)
+        if book is None or not city or not cam:
+            return None
+        tgt = getattr(self, "_sweep_tgt", None)
+        if tgt is not None:
+            age = getattr(self, "_sweep_age", 0) + 1
+            seen = book.last_seen(tgt[0], tgt[1])
+            still_gap = (seen is None
+                         or time.time() - seen >= self.SWEEP_STALE_H * 3600)
+            if still_gap and age < self.SWEEP_REDRAW_SCANS:
+                self._sweep_age = age
+                return tgt
+        gaps = book.gaps_near(city, self.SWEEP_RADIUS_TILES, self.SWEEP_STALE_H)
+        if not gaps:
+            self._sweep_tgt = None
+            return None
+        weights = [0.5 ** (d / self.SWEEP_CITY_HALF)
+                   * 0.5 ** (max(abs(x - cam[0]), abs(y - cam[1]))
+                             / self.SWEEP_CAM_HALF)
+                   for x, y, d in gaps]
+        x, y, d = random.choices(gaps, weights=weights)[0]
+        self._sweep_tgt, self._sweep_age = (x, y), 0
+        logger.debug("sweep: target %d,%d -- %d tiles from the city, %d from "
+                     "the camera, one of %d gap cell(s) within %d", x, y, d,
+                     max(abs(x - cam[0]), abs(y - cam[1])), len(gaps),
+                     self.SWEEP_RADIUS_TILES)
+        return self._sweep_tgt
+
+    def _lean_to_sweep(self, heading: float) -> float:
+        """Lean a screen heading toward the sweep target, by a random amount."""
+        tgt = self._sweep_target()
+        cam = getattr(self, "_last_map_xy", None)
+        if tgt is None or cam is None:
+            return heading
+        dx, dy = tgt[0] - cam[0], tgt[1] - cam[1]
+        if max(abs(dx), abs(dy)) <= 6:
+            return heading            # already over it; the view will cover it
+        want = pan_model.screen_heading(dx, dy, self.win["width"],
+                                        self.win["height"])
+        turn = math.atan2(math.sin(want - heading), math.cos(want - heading))
+        return heading + random.uniform(*self.SWEEP_PULL) * turn
+
     def _steer_heading(self, heading: float):
         """Nudge the wander toward ground the book likes, away from walls.
 
@@ -360,6 +437,11 @@ class GemFlowMixin:
 
         def on_map(h):
             return pan_model.tile_heading(h, ww, wh)
+
+        # Lean toward ground near the city that has not been seen lately --
+        # before the candidates are scored, so the wall veto below still has
+        # the last word on where the camera actually goes.
+        heading = self._lean_to_sweep(heading)
 
         cands = [heading + d for d in
                  (0.0, 0.7, -0.7, 1.4, -1.4, 2.2, -2.2, math.pi)]

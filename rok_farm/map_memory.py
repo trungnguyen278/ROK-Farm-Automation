@@ -64,6 +64,10 @@ class MapMemory:
         self.path = MEM_DIR / f"{self.map_id}.json"
         self.terrain: dict[str, dict] = {}
         self.reach: dict[str, dict] = {}
+        # Where the camera has been, [time, x, y] per position read -- the
+        # trajectory the operator asked to keep (2026-09-23) so ground near the
+        # city is not left unscanned once the wander has gone far.
+        self.track: list[list] = []
         self._recent: list[tuple[int, int]] = []
         self._far_streak = 0
         self.load()
@@ -77,6 +81,7 @@ class MapMemory:
             d = json.loads(self.path.read_text(encoding="utf-8"))
             self.terrain = d.get("terrain", {})
             self.reach = d.get("reach", {})
+            self.track = d.get("track", [])
             logger.info("MapMemory %s: %d terrain cell(s), %d reach cell(s)",
                         self.map_id, len(self.terrain), len(self.reach))
         except Exception as e:
@@ -87,7 +92,8 @@ class MapMemory:
         try:
             MEM_DIR.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(
-                {"terrain": self.terrain, "reach": self.reach}, indent=1),
+                {"terrain": self.terrain, "reach": self.reach,
+                 "track": self.track}, indent=1),
                 encoding="utf-8")
         except Exception as e:
             logger.warning("MapMemory save failed: %s", e)
@@ -151,6 +157,49 @@ class MapMemory:
         if self._dirty >= 10:
             self._dirty = 0
             self.save()
+
+    # A position read every scan is ~600 a day at the current pace; a few
+    # days of trajectory is plenty to see where the wander goes, and the file
+    # stays small.
+    TRACK_MAX = 3000
+
+    def note_track(self, x: int, y: int):
+        """One point of the camera's trajectory."""
+        self.track.append([int(time.time()), int(x), int(y)])
+        if len(self.track) > self.TRACK_MAX:
+            del self.track[:len(self.track) - self.TRACK_MAX]
+
+    def last_seen(self, x: int, y: int) -> float | None:
+        """When the cell holding this tile was last in view, or None."""
+        c = self.reach.get(_key(x, y))
+        return c.get("t") if c else None
+
+    def gaps_near(self, city, radius_tiles: float, stale_h: float,
+                  now: float | None = None) -> list[tuple[int, int, int]]:
+        """Cells near the city that no scan has shown for `stale_h` hours.
+
+        (x, y, tiles from the city) per cell centre. Walls and ground off the
+        map are not gaps: nothing can be gathered there, and steering at them
+        is what the wall veto exists to prevent.
+        """
+        now = time.time() if now is None else now
+        cx, cy = int(city[0]) // CELL, int(city[1]) // CELL
+        r = int(radius_tiles) // CELL
+        stale = stale_h * 3600.0
+        out = []
+        for i in range(cx - r, cx + r + 1):
+            for j in range(cy - r, cy + r + 1):
+                x, y = i * CELL + CELL // 2, j * CELL + CELL // 2
+                if x < 0 or y < 0 or x >= 1200 or y >= 1200:
+                    continue
+                k = f"{i},{j}"
+                if self.terrain.get(k, {}).get("wall", 0) > 0:
+                    continue
+                seen = self.reach.get(k, {}).get("t")
+                if seen is not None and now - seen < stale:
+                    continue
+                out.append((x, y, int(max(abs(x - city[0]), abs(y - city[1])))))
+        return out
 
     def record_view(self, cells, gem_cells=()):
         """One frame's worth of ground, every cell it showed at once.
