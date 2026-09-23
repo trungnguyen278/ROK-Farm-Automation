@@ -117,6 +117,9 @@ Note: `tools/dev/` holds occasional-use debug scripts only. `locate_ui.py` was d
 | Scan speed (parallel matching, no recheck, fast OCR) | Done, live | 2026-09-23 14:50: mine appears 1.75-2.4s after the icon click (was ~4.5s) |
 | Sweep toward near gaps | Deployed 2026-09-23 | Watch the "sweep: target" debug lines and march distances over the next days |
 | Lock screen handling | Done, live | 2026-09-23 14:49: farm found LockApp in front, ENTER, unlocked, launched the game |
+| Near-first sweep, tile memory, jump home | Done, live | 2026-09-23 16:20-18:25 on a cleaned book: coverage filled around the city first (tools/dev/track_map.py), both tile skips fired live, 0 duplicate deposits, 11 done / 2 failed in the last 1h40 |
+| Map types and zones | Pending (operator: "de luc nao ranh xu ly tiep") | Researched 2026-09-23: home kingdom 1200x1200 in 4 fixed zone layouts (kingdom number mod 4, rotations; images on zoe-rok.com); KvK maps 1440 or 2400 (per Google AI Mode, unverified). Open: (1) the 1200 bound in queue_ocr/pan_model/map_memory is wrong for KvK (S-prefixed ids) -- per-map size; (2) which layout K4096 is (mod 4 = 0) and turning its image into zone polygons in 0-1199, so an unreachable deposit disables its whole zone instead of a 30-tile disc; (3) no pass-pan case seen yet -- check the first *_UNREACHABLE frame |
+| Map filter panel opening by itself | Open | Cost one mine at 14:53 (3 blank scans -> city); trigger still unknown |
 
 ## Blockers
 
