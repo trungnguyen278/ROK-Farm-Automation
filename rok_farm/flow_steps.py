@@ -252,6 +252,10 @@ class GemFlowMixin:
                 return (why, x, y)
         return None
 
+    # Further than this from the last accepted position, a read waits for the
+    # next one to agree (see _map_sync): a scan step moves 6-29 tiles.
+    MISREAD_JUMP_TILES = 60
+
     def _map_sync(self, frame, found: bool, force: bool = False,
                   scan_count: int = 0, icons=None):
         """Read the HUD position, open the right book, file what we just saw."""
@@ -318,6 +322,26 @@ class GemFlowMixin:
             # the camera round.
             return getattr(self, "_last_map_xy", None)
 
+        # One read far from the last is a misread until the next one agrees.
+        # 2026-09-24 00:46:40: "map step: 527 tiles (547,584 -> 538,57)" --
+        # a Y of 57x lost its last digit, passed every bounds check, sent the
+        # scan home through the city for nothing and wrote a view of ground
+        # 527 tiles away into the book. A scan step moves the camera 6-29
+        # tiles (measured 2026-09-23), a city trip resets the last position
+        # itself (_learn_city), and a real relocation confirms itself on the
+        # very next read.
+        prev = getattr(self, "_last_map_xy", None)
+        if prev is not None and max(abs(x - prev[0]),
+                                    abs(y - prev[1])) > self.MISREAD_JUMP_TILES:
+            held = getattr(self, "_held_read", None)
+            if held is None or max(abs(x - held[0]), abs(y - held[1])) > 20:
+                self._held_read = (x, y)
+                logger.info("position %d,%d is %d tiles from the last (%d,%d) "
+                            "-- held until the next read agrees", x, y,
+                            max(abs(x - prev[0]), abs(y - prev[1])),
+                            prev[0], prev[1])
+                return prev
+        self._held_read = None
         self._last_home_xy = (x, y)
         if self.mapmem is None or self.mapmem.map_id != map_id:
             # Different map id = different world (home kingdom vs KvK), so a
@@ -407,6 +431,7 @@ class GemFlowMixin:
         self._city_xy = (x, y)
         # The camera is on it right now, which is also a fresh fix.
         self._last_map_xy = (x, y)
+        self._held_read = None
         if prev is None or max(abs(prev[0] - x), abs(prev[1] - y)) > 3:
             logger.info("City is %d:%d (read on arrival from the city%s)", x, y,
                         "" if prev is None else f", was {prev[0]}:{prev[1]}")
@@ -609,7 +634,7 @@ class GemFlowMixin:
         logger.debug("sweep: target %d,%d -- %d tiles from the city, %d from "
                      "the camera, one of %d gap cell(s) within %d", x, y, d,
                      max(abs(x - cam[0]), abs(y - cam[1])), len(gaps),
-                     self.SWEEP_RADIUS_TILES)
+                     band if band is not None else self.SWEEP_RADIUS_TILES)
         return self._sweep_tgt
 
     def _lean_to_sweep(self, heading: float) -> float:
