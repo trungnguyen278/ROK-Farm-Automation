@@ -500,11 +500,65 @@ class GemCounterMixin:
 class MapPositionMixin:
     """Reads where on the world map the camera is. Mixed into GemFarmRunner."""
 
-    def _read_map_position(self, frame=None) -> tuple[str, int, int] | None:
+    def _read_position_fast(self, roi) -> tuple[str, int, int] | None:
+        """Recognition only, no text detection: about 15ms against 520ms.
+
+        The strip is one line of text, so finding the text boxes first buys
+        nothing but time. Measured 2026-09-23 against the full read on saved
+        frames: all 59 icon-zoom frames gave the same position; 17 of 19
+        frames just after an icon click agreed and this read the other two
+        that the full read could not; and on one gather popup the full read
+        said Y:5981 where this said 598.
+
+        Its one miss was a KvK frame read as "11465" for "S11465". So it is
+        only believed when the map id is the one already in use; a new or
+        different id goes to the full read, which the map-id vote is built
+        on.
+
+        Also leaves a zoom hint. Zoomed in, the resource bar sits in front of
+        the coordinates and the strip reads "28.527.874#4096X:..."; at icon
+        zoom it starts at the "#". Against the badge gauge on 114 frames it
+        agreed on all 49 close ones and said close on 2 of 65 icon ones --
+        both frames just after an icon click, with the bar already showing --
+        so it errs toward "close", which is the safe side for anything that
+        must only happen at icon zoom.
+        """
+        try:
+            res, _ = _ocr_engine(roi, use_det=False, use_cls=False, use_rec=True)
+        except Exception as e:
+            logger.debug("fast position OCR error: %s", e)
+            return None
+        if not res:
+            return None
+        text = "".join(str(r[0]) for r in res)
+        at = text.find("#")
+        if at >= 0:
+            lead = re.sub(r"[^0-9A-Za-z]", "", text[:at])
+            self._pos_zoom_hint = "close" if len(lead) >= 3 else "icon"
+        m = _POS_RE.search(text)
+        if not m:
+            return None
+        map_id, x, y = m.group(1), int(m.group(2)), int(m.group(3))
+        if not (0 <= x < 1200 and 0 <= y < 1200):
+            return None
+        book = getattr(self, "mapmem", None)
+        expected = (getattr(book, "map_id", None)
+                    or getattr(self, "_home_map_id", None))
+        if expected is None or map_id != expected:
+            return None
+        self._last_pos_text = text[:80]
+        return map_id, x, y
+
+    def _read_map_position(self, frame=None,
+                           full: bool = False) -> tuple[str, int, int] | None:
         """Return (map_id, x, y) or None.
 
         map_id is what separates the home kingdom from a KvK map, so the learned
         map books never mix -- no configuration, it just reads what the HUD says.
+
+        The fast recognition-only read is tried first; `full` skips it, for
+        callers that need the text boxes (the zoom gauge reads the badge's
+        position from them).
         """
         if _OCR_BACKEND != "rapidocr" or _ocr_engine is None:
             return None
@@ -517,6 +571,11 @@ class MapPositionMixin:
         roi = frame[int(fh * y1):int(fh * y2), int(fw * x1):int(fw * x2)]
         if roi.size == 0:
             return None
+        self._pos_zoom_hint = None
+        if not full:
+            fast = self._read_position_fast(roi)
+            if fast is not None:
+                return fast
         try:
             result, _ = _ocr_engine(roi)
             if not result:
@@ -569,6 +628,7 @@ class MapPositionMixin:
         # matters.
         self._last_zoom_gauge = zoom_verdict(
             badge_left_frac(boxes, roi.shape[1]))
+        self._pos_zoom_hint = self._last_zoom_gauge
         if not m:
             logger.debug("Map position unparsed: %r", text[:40])
             return None
@@ -585,9 +645,13 @@ class MapPositionMixin:
         return m.group(1), x, y
 
     def read_zoom_gauge(self, frame=None) -> str | None:
-        """'icon', 'close' or None. Shares the map-position OCR, never adds one."""
+        """'icon', 'close' or None. Shares the map-position OCR, never adds one.
+
+        Always the full read: the verdict comes from where the badge's text
+        box starts, and the fast read has no boxes.
+        """
         self._last_zoom_gauge = None
-        self._read_map_position(frame)
+        self._read_map_position(frame, full=True)
         return getattr(self, "_last_zoom_gauge", None)
 
 

@@ -125,13 +125,49 @@ class GemFlowMixin:
 
     # --- world-map memory -------------------------------------------------
 
-    # OCR is not free, so the position is not read on every single pan. Every
-    # few scans is plenty: the camera moves less than a cell most steps, and the
-    # decisive moments (a gem, a wall) are read regardless of the cadence.
-    MAP_READ_EVERY = 4
+    # Every scan. It was every fourth while a read cost ~520ms of OCR; the
+    # recognition-only read costs ~15ms (measured 2026-09-23, same answer on
+    # all 59 icon-zoom frames), and a position on every frame is what lets
+    # the book record the whole view of every scan instead of guessing.
+    MAP_READ_EVERY = 1
+
+    # Only the middle of a frame counts as seen. An icon within
+    # SAFE_ZONE_MARGIN of the edge is an "edge gem" that gets recentred
+    # rather than trusted, so the same strip is left out of what the frame
+    # is taken to have shown.
+    VIEW_MARGIN = 0.08
+
+    def _view_cells(self, cam) -> list[tuple[int, int]]:
+        """Centres of the book cells a frame at `cam` shows (icon zoom)."""
+        from rok_farm.map_memory import CELL
+        w, h = self.win["width"], self.win["height"]
+        corners = pan_model.view_corners(cam, w, h)
+        xs = [c[0] for c in corners]
+        ys = [c[1] for c in corners]
+        out = []
+        for i in range(int(min(xs)) // CELL, int(max(xs)) // CELL + 1):
+            for j in range(int(min(ys)) // CELL, int(max(ys)) // CELL + 1):
+                centre = (i * CELL + CELL // 2, j * CELL + CELL // 2)
+                if pan_model.in_view(cam, centre, w, h, margin=self.VIEW_MARGIN):
+                    out.append(centre)
+        return out
+
+    def _icon_tiles(self, cam, frame, icons) -> list[tuple[int, int]]:
+        """Where on the map each icon in `frame` stands."""
+        if frame is None or not icons:
+            return []
+        fh, fw = frame.shape[:2]
+        w, h = self.win["width"], self.win["height"]
+        out = []
+        for m in icons:
+            ox = (m.center[0] - fw / 2.0) * w / fw
+            oy = (m.center[1] - fh / 2.0) * h / fh
+            dx, dy = pan_model.ground_offset(ox, oy, h)
+            out.append((int(round(cam[0] + dx)), int(round(cam[1] + dy))))
+        return out
 
     def _map_sync(self, frame, found: bool, force: bool = False,
-                  scan_count: int = 0):
+                  scan_count: int = 0, icons=None):
         """Read the HUD position, open the right book, file what we just saw."""
         if not force and scan_count % self.MAP_READ_EVERY:
             return getattr(self, "_last_map_xy", None)
@@ -214,7 +250,14 @@ class GemFlowMixin:
             if city and map_id == getattr(self, "_home_map_id", None):
                 self.mapmem.set_city(*city)
         self.mapmem.note_position(x, y)
-        self.mapmem.record_scan(x, y, found)
+        # The whole view, but only at icon zoom: the footprint in pan_model
+        # was measured there (the operator's condition for the survey), and
+        # zoomed in a frame shows far less ground than it would claim.
+        if getattr(self, "_pos_zoom_hint", None) == "icon":
+            self.mapmem.record_view(self._view_cells((x, y)),
+                                    self._icon_tiles((x, y), frame, icons))
+        else:
+            self.mapmem.record_scan(x, y, found)
         # How far the camera claims to have moved since the last reading.
         # Measurement only, for now: a misread coordinate ("Y:214" coming back
         # as "Y:2144") can only be told from a real move by how far it says it
@@ -1210,7 +1253,7 @@ class GemFlowMixin:
             # ground the camera left minutes ago -- on 2026-09-16 all six
             # crossings were judged from the same frozen (123,226).
             self._map_sync(frame, bool(icons), scan_count=scan_count,
-                           force=self._near_map_edge())
+                           force=self._near_map_edge(), icons=icons)
 
             # Crossed into another kingdom. On a KvK map the ground beyond the
             # border is not white fog but another participating kingdom's

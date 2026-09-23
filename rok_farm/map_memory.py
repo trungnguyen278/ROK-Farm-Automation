@@ -152,6 +152,30 @@ class MapMemory:
             self._dirty = 0
             self.save()
 
+    def record_view(self, cells, gem_cells=()):
+        """One frame's worth of ground, every cell it showed at once.
+
+        record_scan marks the single cell under the camera. A frame at icon
+        zoom shows about 460 tiles -- seven or so cells (pan_model, measured
+        2026-09-23) -- and all but one of them stayed "unexplored" here
+        however often they had been looked at, so the steering kept being
+        pulled toward ground it had already seen.
+
+        `cells` and `gem_cells` are tile positions; a cell is marked gem if a
+        gem icon stood in it, empty otherwise.
+        """
+        now = time.time()
+        gems = {_key(x, y) for x, y in gem_cells}
+        keys = {_key(x, y) for x, y in cells} | gems
+        for k in keys:
+            c = self.reach.setdefault(k, {"gem": 0, "empty": 0, "t": 0.0})
+            c["gem" if k in gems else "empty"] += 1
+            c["t"] = now
+        self._dirty = getattr(self, "_dirty", 0) + 1
+        if self._dirty >= 10:
+            self._dirty = 0
+            self.save()
+
     # --- consulting ---
 
     def is_wall(self, x: int, y: int) -> bool:
