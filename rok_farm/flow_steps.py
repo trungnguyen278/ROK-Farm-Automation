@@ -26,6 +26,7 @@ from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
                              MARCH_BTN_MAX_OFFSET, MARCH_BTN_PCT,
                              NEW_TROOP_BTN_PCT, TOGGLE_BTN_PCT,
                              ZOOM_IN_WINDOW_S, ZOOM_POLL_MAX)
+from rok_farm import pan_model
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
 from rok_farm.map_memory import MapMemory
 from rok_farm.queue_ocr import button_verdict, read_button_text
@@ -207,6 +208,11 @@ class GemFlowMixin:
             # different book. No configuration: the HUD says which one.
             self.mapmem = MapMemory(map_id)
             print(f"  [{INFO}] Map book opened -- {self.mapmem.stats()}")
+            # The city is usually read before the first book opens (the first
+            # mine starts from it); the sweep needs it either way.
+            city = getattr(self, "_city_xy", None)
+            if city and map_id == getattr(self, "_home_map_id", None):
+                self.mapmem.set_city(*city)
         self.mapmem.note_position(x, y)
         self.mapmem.record_scan(x, y, found)
         # How far the camera claims to have moved since the last reading.
@@ -229,17 +235,43 @@ class GemFlowMixin:
             logger.debug("map step: %d tiles (%d,%d -> %d,%d)",
                          step, prev_xy[0], prev_xy[1], x, y)
         self._last_map_xy = (x, y)
-        # Coming back from the city puts the camera on the city, so the first
-        # reading after one is where home is. No configuration, no template --
-        # the same trick _home_map_id uses two functions up.
-        if getattr(self, "_expect_home_read", False):
-            self._expect_home_read = False
-            if not self._off_home_map:
-                self._city_xy = (x, y)
-                logger.info("City is %d:%d", x, y)
-                if self.mapmem is not None:
-                    self.mapmem.set_city(x, y)
         return self._last_map_xy
+
+    def _learn_city(self, frame) -> tuple[int, int] | None:
+        """Read the city's position off a map that has just opened on it.
+
+        Called on the first frame after the city -> world toggle, before any
+        drag. The map opens centred on the player's city: measured 2026-09-23
+        with tools/dev/pan_survey.py, two round trips from 22 and 23 tiles
+        away both came back to 577,615, and a fresh launch opened at 575,615.
+
+        This used to be learned from "the first reading after a city trip",
+        which _map_sync only takes on every MAP_READ_EVERY-th scan -- so it
+        was read after up to four scans of dragging, and the city was learned
+        as 448:621, 532:625 and 498:664 within one day. The homing and the
+        sweep both measure distance from it.
+        """
+        pos = self._read_map_position(frame)
+        if pos is None:
+            return None
+        map_id, x, y = pos
+        home = getattr(self, "_home_map_id", None)
+        if home is not None and map_id != home:
+            # The id OCR misreads about 8% of the time; a city is only ever
+            # on the home map, so a disagreeing read teaches nothing.
+            logger.debug("city read on map %s, home is %s -- ignored",
+                         map_id, home)
+            return None
+        prev = getattr(self, "_city_xy", None)
+        self._city_xy = (x, y)
+        # The camera is on it right now, which is also a fresh fix.
+        self._last_map_xy = (x, y)
+        if prev is None or max(abs(prev[0] - x), abs(prev[1] - y)) > 3:
+            logger.info("City is %d:%d (read on arrival from the city%s)", x, y,
+                        "" if prev is None else f", was {prev[0]}:{prev[1]}")
+        if self.mapmem is not None and self.mapmem.map_id == map_id:
+            self.mapmem.set_city(x, y)
+        return self._city_xy
 
     def _tiles_from_home(self) -> int | None:
         """How far the camera has wandered, or None if either end is unknown."""
@@ -274,9 +306,21 @@ class GemFlowMixin:
         if pos is None or self.mapmem is None:
             return heading
         x, y = pos
+        # The wander's heading is a SCREEN direction; the book is laid out in
+        # map tiles. They are not the same angle. Measured 2026-09-23
+        # (tools/dev/pan_survey.py): screen right is +X but screen DOWN is
+        # -Y, and a tile is a different number of pixels across than down.
+        # This used to hand the screen angle straight to the book, so every
+        # vertical heading was scored -- and vetoed -- on the ground behind
+        # the camera instead of ahead of it.
+        ww, wh = self.win["width"], self.win["height"]
+
+        def on_map(h):
+            return pan_model.tile_heading(h, ww, wh)
+
         cands = [heading + d for d in
                  (0.0, 0.7, -0.7, 1.4, -1.4, 2.2, -2.2, math.pi)]
-        scored = [(self.mapmem.heading_score(x, y, h), h) for h in cands]
+        scored = [(self.mapmem.heading_score(x, y, on_map(h)), h) for h in cands]
         best_score, best = max(scored, key=lambda t: t[0])
 
         # A wall ahead is a veto, not a vote -- but ONLY a wall. Asking the
@@ -287,9 +331,9 @@ class GemFlowMixin:
         # empty scan -- the pinning the margin below exists to prevent.
         #
         # blocked() asks the map the question directly instead.
-        if self.mapmem.blocked(x, y, heading):
+        if self.mapmem.blocked(x, y, on_map(heading)):
             unblocked = [(s, h) for s, h in scored
-                         if not self.mapmem.blocked(x, y, h)]
+                         if not self.mapmem.blocked(x, y, on_map(h))]
             if unblocked:
                 best_score, best = max(unblocked, key=lambda t: t[0])
                 logger.info("steer: refusing %.0f deg (wall or map edge "
@@ -470,6 +514,11 @@ class GemFlowMixin:
             return False
 
         self._view_is_world = True
+        if toggled_from_city:
+            # The map has just opened centred on the city, before anything
+            # has moved it -- the one moment the city's position is on
+            # screen for the price of a read.
+            self._learn_city(self._grab())
 
         # On the world map. If already at icon-zoom with gems, scan; else zoom.
         frame = self._grab()
@@ -1032,7 +1081,6 @@ class GemFlowMixin:
                   f"run two to three times longer)")
             logger.info("drifted %d tiles from home -- returning to city "
                         "before the scan", drift)
-            self._expect_home_read = True
             self._step_return_city(tag)
             return None
 
@@ -1935,12 +1983,6 @@ class GemFlowMixin:
 
     def _step_return_city(self, tag: str):
         print(f"\n--- [{tag}] Return to city ---\n")
-
-        # Whatever reason brought us here, the camera is about to land on the
-        # city, so the next coordinate read is where home is. Setting it here
-        # rather than only in the homing path breaks the circle: the drift
-        # check needs a home, and a home is only ever seen on a city trip.
-        self._expect_home_read = True
 
         # Called from the world map (after a burst / scan-fail / fog), so click
         # the FIXED bottom-right corner to toggle to the city. We do NOT gate on

@@ -572,7 +572,17 @@ class MapPositionMixin:
         if not m:
             logger.debug("Map position unparsed: %r", text[:40])
             return None
-        return m.group(1), int(m.group(2)), int(m.group(3))
+        x, y = int(m.group(2)), int(m.group(3))
+        # The world is 1200 tiles a side. Over 3,433 logged reads the largest
+        # X was 999, and every Y above 1199 was the digit collision described
+        # above -- 1822 for 182, 5544 for 554 -- which still gets through the
+        # merge now and then, and got through two agreeing reads twice in
+        # one survey. A position off the map is a misread, not a place.
+        if not (0 <= x < 1200 and 0 <= y < 1200):
+            logger.debug("Map position off the map, a misread: %r -> %d,%d",
+                         text[:40], x, y)
+            return None
+        return m.group(1), x, y
 
     def read_zoom_gauge(self, frame=None) -> str | None:
         """'icon', 'close' or None. Shares the map-position OCR, never adds one."""

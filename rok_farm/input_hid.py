@@ -378,6 +378,21 @@ class HidInputMixin:
             prev_x, prev_y = float(sx), float(sy)
             for px, py, step_ms in path:
                 cx, cy = self._clamp_to_window(int(px), int(py))
+                # Steer from where the pointer IS, not from where the last
+                # step meant to put it. Relative moves go through Windows'
+                # pointer ballistics, so one calibrated scale cannot hold at
+                # every speed, and open-loop the errors added up along the
+                # drag. Measured 2026-09-23 with tools/dev/pan_survey.py: the
+                # real drag came out 0.76-1.77x the aimed length, and 3 of 40
+                # drags carried the pointer OUT of the game window -- two of
+                # them scan-speed swipes aimed at ~950px that travelled 1,650.
+                # _moveto has corrected from the real position all along; the
+                # drag now does the same, so it ends where it was aimed and
+                # never leaves the window the path was clamped to.
+                try:
+                    prev_x, prev_y = (float(v) for v in get_cursor_pos())
+                except Exception:
+                    pass
                 mdx = cx - prev_x
                 mdy = cy - prev_y
                 send_dx = int(mdx / sc) if sc != 1.0 else int(mdx)
@@ -387,6 +402,19 @@ class HidInputMixin:
                 elif step_ms > 0:
                     time.sleep(step_ms / 1000.0)   # a dwell, e.g. hold_ms
                 prev_x, prev_y = float(cx), float(cy)
+            # The last step still carries its own ballistic error -- half a
+            # step at worst. A small slow move has almost none, so settle
+            # onto the aim before letting go, the way a hand eases in.
+            fx, fy = self._clamp_to_window(ex, ey)
+            for _ in range(2):
+                try:
+                    ax, ay = get_cursor_pos()
+                except Exception:
+                    break
+                if abs(fx - ax) <= 3 and abs(fy - ay) <= 3:
+                    break
+                self.cmd.send("MOVE", int((fx - ax) / sc), int((fy - ay) / sc),
+                              random.randint(24, 48))
             time.sleep(random.uniform(0.01, 0.03))
             self.cmd.send("MUP", button)
 

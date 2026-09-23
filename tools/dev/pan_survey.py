@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import sys
 import time
@@ -49,7 +48,6 @@ sys.path.insert(0, str(ROOT))
 import numpy as np  # noqa: E402
 
 from capture.screen_info import get_cursor_pos  # noqa: E402
-from rok_farm import pan_model  # noqa: E402
 from rok_farm.config import ZOOM_OUT_QUIET_DIFF  # noqa: E402
 
 OUT = ROOT / "data" / "pan_survey.json"
@@ -59,8 +57,24 @@ OUT = ROOT / "data" / "pan_survey.json"
 # that refuses a leg if the geometry ever says otherwise.
 EDGE_PX = 60
 
-# Heights (fraction of the client) the horizontal legs run at.
-H_ROWS = (0.34, 0.50, 0.66)
+# Heights (fraction of the client) the horizontal legs run at. Spread wide
+# because the first run found perspective: 1.55 tiles/100px at row 0.34 and
+# 1.32 at 0.66, so the ground under a row depends on the row.
+H_ROWS = (0.25, 0.50, 0.75)
+
+# Vertical spans (rows, press -> release) besides the full-height pair: the
+# same perspective makes the upper half of the screen hold more ground than
+# the lower, and only separate spans can tell the two halves apart.
+V_SPANS = ((0.50, 0.18), (0.82, 0.50))
+
+# One drag cannot move the camera further than this. The position OCR has a
+# known Y misread (623 read as 5544) that two agreeing reads do not catch,
+# because both reads misread the same glyphs; the first run had two.
+OUTLIER_TILES = 60
+
+# A release this far from the aim means the drag did not do what it was
+# asked, whatever the tiles say. The closed-loop drag lands within a few px.
+RELEASE_ERR_MAX = 40
 
 
 def inside(win, x, y, margin=EDGE_PX) -> bool:
@@ -139,6 +153,18 @@ def group_legs(kind, frac, win, total_px, style, rng):
     return legs
 
 
+def span_legs(win, r1, r2, style, rng):
+    """One vertical drag from row r1 to row r2 and one back."""
+    x = win["left"] + win["width"] // 2
+    legs = []
+    for a, b in ((r1, r2), (r2, r1)):
+        wob = int(rng.uniform(-0.012, 0.012) * win["width"])
+        legs.append({"kind": "v", "row": round((a + b) / 2, 3), "style": style,
+                     "sx": x + wob, "sy": win["top"] + int(win["height"] * a),
+                     "ex": x - wob, "ey": win["top"] + int(win["height"] * b)})
+    return legs
+
+
 def farm_legs(win, rng):
     """Legs sized like the scan's own swipes, both axes, out and back."""
     margin = 80
@@ -185,6 +211,10 @@ def run_leg(r, leg, before):
     leg["dpx"] = c1[0] - c0[0]
     leg["dpy"] = c1[1] - c0[1]
     leg["release_err_px"] = int(max(abs(c1[0] - leg["ex"]), abs(c1[1] - leg["ey"])))
+    # Rows the pointer actually pressed and released on: under perspective
+    # the ground a drag covers depends on WHERE on screen it ran.
+    leg["press_row"] = round((c0[1] - win["top"]) / win["height"], 4)
+    leg["release_row"] = round((c1[1] - win["top"]) / win["height"], 4)
     # The operator's condition: only drags that stayed in the window count.
     leg["in_window"] = inside(win, *c0, margin=0) and inside(win, *c1, margin=0)
     leg["settle_s"] = round(wait_still(r), 3)
@@ -200,9 +230,16 @@ def run_leg(r, leg, before):
     elif not leg["in_window"]:
         leg["ok"] = False
         leg["why"] = "pointer left the window"
-    elif leg["release_err_px"] > 8:
+    elif leg["release_err_px"] > RELEASE_ERR_MAX:
         leg["ok"] = False
         leg["why"] = f"released {leg['release_err_px']}px from the aim"
+    elif (abs(after[1] - before[1]) > OUTLIER_TILES
+          or abs(after[2] - before[2]) > OUTLIER_TILES):
+        leg["ok"] = False
+        leg["why"] = (f"impossible jump {after[1] - before[1]:+d},"
+                      f"{after[2] - before[2]:+d} -- an OCR misread")
+        # Do not chain the next leg from a misread either.
+        after = None
     else:
         leg["ok"] = True
         leg["dX"] = after[1] - before[1]
@@ -215,70 +252,159 @@ def run_leg(r, leg, before):
     else:
         print(f"  {tag} -> DISCARDED: {leg['why']}")
     time.sleep(random.uniform(0.4, 1.3))
-    return after or before
+    # After a misread the chain restarts from a fresh reading, never from the
+    # bad one and never from a stale one.
+    return after or read_pos(r)
+
+
+def roundtrip_check(r, rng) -> dict:
+    """Does the world map come back on the city after a trip to the city?
+
+    The homing code assumes it does -- it learns the city from the first
+    reading after a trip. A comment from 2026-08-18 says the opposite (a fog
+    bail at X:0, a city trip, and the next mine opened at X:1), and on
+    2026-09-22/23 the "city" was learned as 448:621, 532:625 and 498:664 while
+    a fresh launch opened the map at 575,615. So: move a window away, go to
+    the city and back, and read.
+    """
+    win = r.win
+    start = read_pos(r)
+    pos = start
+    for leg in group_legs("h", 0.5, win, win["width"], "hold", rng)[:2]:
+        pos = run_leg(r, leg, pos)
+    away = read_pos(r)
+    r._toggle_view("survey: to the city")
+    time.sleep(rng.uniform(2.5, 4.0))
+    r._toggle_view("survey: back to the world map")
+    r._wait_until_world_map(timeout=5.0)
+    wait_still(r)
+    back = read_pos(r)
+    # The map opens close in when entered from the city. Leave it at icon
+    # zoom for whatever runs next, the way step 1 does after a city trip.
+    r._scroll_at_center(-1, r._zoom_scrolls())
+    r._wait_zoom_settled()
+    out = {"start": start, "away": away, "back": back,
+           "gauge_after": r.read_zoom_gauge()}
+
+    def near(a, b, tol=4):
+        return (a is not None and b is not None and a[0] == b[0]
+                and abs(a[1] - b[1]) <= tol and abs(a[2] - b[2]) <= tol)
+
+    if near(back, away):
+        out["verdict"] = "remembers the camera"
+    elif near(back, start):
+        out["verdict"] = "recentres on the start (the city, if it started there)"
+    else:
+        out["verdict"] = "neither -- see the numbers"
+    print(f"\n== city round trip ==\n  start {start}, a window away {away}, "
+          f"after city and back {back}: {out['verdict']}")
+    return out
+
+
+def _line(xs, ys):
+    """Least-squares a + b*x, returned as (a, b)."""
+    A = np.vstack([np.ones(len(xs)), np.asarray(xs, float)]).T
+    (a, b), *_ = np.linalg.lstsq(A, np.asarray(ys, float), rcond=None)
+    return float(a), float(b)
 
 
 def analyse(legs, win):
+    """Fit the per-row scales and turn them into what one window holds.
+
+    The game pans by keeping the ground under the pointer under the pointer,
+    and the camera is tilted, so the ground per pixel depends on the row:
+        kx(r) = ax + bx * (0.5 - r)   tiles per px, horizontal, at row r
+        ky(r) = ay + by * (0.5 - r)   tiles per px, vertical, around row r
+    with r the fraction down the client. A horizontal drag at row r moves
+    the camera -kx(r) * dpx in X; a vertical one moves it by the ground
+    between its press and release rows in Y.
+    """
     W, H = win["width"], win["height"]
-    hold = [l for l in legs if l.get("ok") and l["style"] == "hold"]
-    farm = [l for l in legs if l.get("ok") and l["style"] == "farm"]
-    out = {"legs_ok": len(hold) + len(farm), "legs_total": len(legs),
-           "client": [W, H]}
-    if len(hold) < 6:
-        print(f"\n[FAIL] only {len(hold)} usable hold legs -- not fitting")
+    ok = [l for l in legs if l.get("ok")]
+    hold = [l for l in ok if l["style"] == "hold"]
+    farm = [l for l in ok if l["style"] == "farm"]
+    out = {"legs_ok": len(ok), "legs_total": len(legs), "client": [W, H]}
+
+    hl = [l for l in hold if l["kind"] == "h" and abs(l["dpx"]) > 200]
+    vl = [l for l in hold if l["kind"] == "v" and abs(l["dpy"]) > 150]
+    if len(hl) < 6 or len(vl) < 4:
+        print(f"\n\n[FAIL] {len(hl)} horizontal and {len(vl)} vertical usable hold "
+              f"legs -- not enough to fit")
         return out
-    m, resid = pan_model.fit([(l["dpx"], l["dpy"], l["dX"], l["dY"]) for l in hold])
-    err = np.hypot(resid[:, 0], resid[:, 1])
-    moves = np.array([math.hypot(l["dX"], l["dY"]) for l in hold])
-    out["M"] = m.round(6).tolist()
-    out["resid_median"] = round(float(np.median(err)), 2)
-    out["resid_max"] = round(float(err.max()), 2)
-    out["move_median"] = round(float(np.median(moves)), 1)
-    print(f"\n== hold fit, {len(hold)} legs ==")
-    print(f"  M = [[{m[0,0]:+.5f} {m[0,1]:+.5f}]  (dX per px x, px y)")
-    print(f"       [{m[1,0]:+.5f} {m[1,1]:+.5f}]] (dY per px x, px y)")
-    print(f"  residual median {out['resid_median']} tiles, max "
-          f"{out['resid_max']}, on moves of median {out['move_median']}")
 
-    # Perspective: tiles per horizontal pixel at each height.
-    rows = {}
-    for l in hold:
-        if l["kind"] == "h" and abs(l["dpx"]) > 100:
-            rows.setdefault(l["row"], []).append(
-                math.hypot(l["dX"], l["dY"]) / abs(l["dpx"]))
-    out["h_tiles_per_100px_by_row"] = {
-        f"{k:.2f}": round(100 * float(np.median(v)), 3) for k, v in sorted(rows.items())}
-    print("  horizontal tiles per 100px by height:",
-          out["h_tiles_per_100px_by_row"])
+    # Axis leakage: does a horizontal drag move Y at all, and vice versa?
+    out["h_leak_dY_median"] = float(np.median([abs(l["dY"]) for l in hl]))
+    out["v_leak_dX_median"] = float(np.median([abs(l["dX"]) for l in vl]))
 
-    wv = pan_model.drag_to_tiles(m, W, 0)
-    hv = pan_model.drag_to_tiles(m, 0, H)
-    out["window_width_tiles"] = [round(wv[0], 1), round(wv[1], 1)]
-    out["window_height_tiles"] = [round(hv[0], 1), round(hv[1], 1)]
-    out["window_area_tiles"] = round(pan_model.view_area_tiles(m, W, H), 0)
+    hr = [(l["press_row"] + l["release_row"]) / 2 for l in hl]
+    kx = [l["dX"] / -l["dpx"] for l in hl]
+    ax, bx = _line([0.5 - r for r in hr], kx)
+    vr = [(l["press_row"] + l["release_row"]) / 2 for l in vl]
+    ky = [l["dY"] / l["dpy"] for l in vl]
+    ay, by = _line([0.5 - r for r in vr], ky)
+    out.update(kx_mid=round(ax, 6), kx_slope=round(bx, 6),
+               ky_mid=round(ay, 6), ky_slope=round(by, 6))
+    rx = [k - (ax + bx * (0.5 - r)) for k, r in zip(kx, hr)]
+    ry = [k - (ay + by * (0.5 - r)) for k, r in zip(ky, vr)]
+    print(f"\n== hold legs: {len(hl)} horizontal, {len(vl)} vertical ==")
+    print(f"  axis leakage: horizontal drags moved Y by {out['h_leak_dY_median']:.1f} "
+          f"(median), vertical drags moved X by {out['v_leak_dX_median']:.1f}")
+    print(f"  kx(r) = {100*ax:.3f} + {100*bx:+.3f}*(0.5-r) tiles/100px  "
+          f"(resid sd {100*np.std(rx):.3f})")
+    print(f"  ky(r) = {100*ay:.3f} + {100*by:+.3f}*(0.5-r) tiles/100px  "
+          f"(resid sd {100*np.std(ry):.3f})")
+    for row in sorted(set(round(r, 2) for r in hr)):
+        v = [k for k, r in zip(kx, hr) if abs(r - row) < 0.05]
+        print(f"    horizontal at row {row:.2f}: n={len(v)} "
+              f"median {100*np.median(v):.3f} tiles/100px")
+    for row in sorted(set(round(r, 2) for r in vr)):
+        v = [k for k, r in zip(ky, vr) if abs(r - row) < 0.05]
+        print(f"    vertical around row {row:.2f}: n={len(v)} "
+              f"median {100*np.median(v):.3f} tiles/100px")
+
+    # One window. The width of the ground under a row is W*kx(r); the ground
+    # between two rows is H times the integral of ky between them.
+    def ky_int(r1, r2):
+        def f(r):
+            return ay * r + by * (0.5 * r - r * r / 2)
+        return f(r2) - f(r1)
+    top_w = W * (ax + bx * 0.5)
+    mid_w = W * ax
+    bot_w = W * (ax - bx * 0.5)
+    depth = H * ky_int(0.0, 1.0)
+    upper = H * ky_int(0.0, 0.5)
+    lower = H * ky_int(0.5, 1.0)
+    out.update(window_top_width=round(top_w, 1), window_mid_width=round(mid_w, 1),
+               window_bottom_width=round(bot_w, 1), window_depth=round(depth, 1),
+               window_upper_depth=round(upper, 1), window_lower_depth=round(lower, 1),
+               window_area=round((top_w + bot_w) / 2 * depth, 0))
     print(f"\n== one window ({W}x{H} client) ==")
-    print(f"  its width  spans {wv[0]:+.1f},{wv[1]:+.1f} tiles "
-          f"({math.hypot(*wv):.1f} long)")
-    print(f"  its height spans {hv[0]:+.1f},{hv[1]:+.1f} tiles "
-          f"({math.hypot(*hv):.1f} long)")
-    print(f"  area {out['window_area_tiles']:.0f} tiles")
-    corners = pan_model.view_corners(m, W, H)
-    out["corners"] = [[round(c[0], 1), round(c[1], 1)] for c in corners]
-    print("  corners from the centre (TL, TR, BR, BL):", out["corners"])
+    print(f"  width of the ground: {top_w:.1f} tiles at the top edge, "
+          f"{mid_w:.1f} across the middle, {bot_w:.1f} at the bottom edge")
+    print(f"  depth: {depth:.1f} tiles ({upper:.1f} above the centre, "
+          f"{lower:.1f} below)")
+    print(f"  about {out['window_area']:.0f} tiles of ground in one frame")
 
     if farm:
         gains = []
         for l in farm:
-            px, py = pan_model.drag_to_tiles(m, l["dpx"], l["dpy"])
-            pred = math.hypot(px, py)
-            if pred >= 3:
-                gains.append(math.hypot(l["dX"], l["dY"]) / pred)
-        if gains:
-            out["farm_gain_median"] = round(float(np.median(gains)), 3)
-            out["farm_gain_range"] = [round(min(gains), 3), round(max(gains), 3)]
-            print(f"\n== scan-style drags, {len(farm)} legs ==")
-            print(f"  actual / hold-predicted: median {out['farm_gain_median']}, "
-                  f"range {out['farm_gain_range']}  (1.0 = no carry-on)")
+            r = (l["press_row"] + l["release_row"]) / 2
+            if l["kind"] == "h" and abs(l["dpx"]) > 100:
+                pred = -(ax + bx * (0.5 - r)) * l["dpx"]
+                gains.append(l["dX"] / pred if pred else float("nan"))
+            elif l["kind"] == "v" and abs(l["dpy"]) > 100:
+                pred = H * ky_int(l["press_row"], l["release_row"])
+                gains.append(l["dY"] / pred if pred else float("nan"))
+        g = [x for x in gains if x == x]
+        if g:
+            out["farm_gain_median"] = round(float(np.median(g)), 3)
+            out["farm_gain_all"] = [round(x, 2) for x in g]
+            print(f"\n== scan-style drags, {len(farm)} usable ==")
+            print(f"  actual / predicted from the pointer: median "
+                  f"{out['farm_gain_median']}  all {out['farm_gain_all']}")
+            print("  (1.0 = the map stops where the pointer stops; above = it "
+                  "carries on after a moving release; below or negative = "
+                  "it flicks back)")
     return out
 
 
@@ -287,11 +413,26 @@ def main() -> int:
     ap.add_argument("--rounds", type=int, default=2,
                     help="hold rounds; each is 3 horizontal rows + 1 vertical, "
                          "4 legs each")
-    ap.add_argument("--farm-rounds", type=int, default=1)
+    ap.add_argument("--farm-rounds", type=int, default=3)
     ap.add_argument("--dry-run", action="store_true",
                     help="read the position a few times, drag nothing")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--no-roundtrip", action="store_true",
+                    help="skip the city round-trip check at the end")
+    ap.add_argument("--analyse-only", action="store_true",
+                    help="re-fit the last saved run, drag nothing")
+    ap.add_argument("--keep-game", action="store_true",
+                    help="leave the client open at the end (only when the "
+                         "farm is started straight after)")
     args = ap.parse_args()
+
+    if args.analyse_only:
+        # Re-fit the last saved run without touching the game.
+        rec = json.loads(OUT.read_text(encoding="utf-8"))[-1]
+        w, h = rec["summary"]["client"]
+        print(f"  run of {rec['when']}, {len(rec['legs'])} legs")
+        analyse(rec["legs"], {"width": w, "height": h})
+        return 0
 
     from rok_farm import session_control as sc
     if sc.farm_procs():
@@ -315,6 +456,19 @@ def main() -> int:
             return 1
         gauge = r.read_zoom_gauge()
         if gauge != "icon":
+            # Seen on the second run: the map was entered by a toggle step 1
+            # did not recognise as coming from the city, the gauge could not
+            # be read, and the zoom was left at the close default. Going
+            # through the city is the one path whose zoom-out is known.
+            print(f"  zoom gauge reads {gauge!r} -- through the city to reset it")
+            r._toggle_view("survey: to the city")
+            time.sleep(rng.uniform(2.0, 3.0))
+            r._view_is_world = False
+            if not r._step_to_world_map("survey"):
+                print("[FAIL] could not get back to the world map")
+                return 1
+            gauge = r.read_zoom_gauge()
+        if gauge != "icon":
             print(f"[FAIL] zoom gauge reads {gauge!r}, not 'icon' -- the "
                   f"numbers only mean something at the farm's zoom")
             return 1
@@ -334,6 +488,7 @@ def main() -> int:
             groups = [group_legs("h", f, win, win["width"], "hold", rng)
                       for f in H_ROWS]
             groups.append(group_legs("v", 0.5, win, win["height"], "hold", rng))
+            groups += [span_legs(win, a, b, "hold", rng) for a, b in V_SPANS]
             rng.shuffle(groups)
             for g in groups:
                 plan.extend(g)
@@ -349,6 +504,8 @@ def main() -> int:
             legs.append(leg)
 
         summary = analyse(legs, win)
+        if not args.no_roundtrip:
+            summary["roundtrip"] = roundtrip_check(r, rng)
         record = {"when": datetime.now().isoformat(timespec="seconds"),
                   "summary": summary, "legs": legs}
         runs = []
@@ -362,6 +519,16 @@ def main() -> int:
         print(f"\n  saved to {OUT}")
         return 0
     finally:
+        # Never leave the client open with nothing running it. The first
+        # survey day did exactly that: the runs finished at 10:00, the game
+        # sat logged in and idle on the world map, and the operator closed it
+        # from Discord at 10:50 -- online time is what the account gets
+        # reclaimed for. Close it unless asked to keep it for the farm.
+        if not args.keep_game and not args.analyse_only:
+            try:
+                r.game.quit_game(r)
+            except Exception as e:
+                print(f"[WARN] could not close the game: {e} -- close it by hand")
         try:
             r._teardown()
         except Exception:

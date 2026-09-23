@@ -71,25 +71,48 @@ def test_the_scan_walks_back_before_searching_not_after_failing():
         "the mine before noticing")
 
 
-def test_every_city_trip_teaches_it_where_home_is():
-    """The drift check needs a home and a home is only seen on a city trip.
-    Setting the flag only inside the homing path would be a circle that never
-    starts."""
-    src = inspect.getsource(GemFlowMixin._step_return_city)
-    assert "_expect_home_read" in src, (
-        "home is only learned when the homing path runs, which cannot run "
-        "until home is known")
+def test_the_city_is_read_the_moment_the_map_opens_on_it():
+    """It used to be learned from the first reading after a city trip, which
+    the scan only takes every MAP_READ_EVERY-th scan -- after up to four
+    scans of dragging. On 2026-09-22/23 that gave 448:621, 532:625 and
+    498:664 for a city the survey found at 577,615 on every return."""
+    src = inspect.getsource(GemFlowMixin._step_to_world_map)
+    toggled = src.find("if toggled_from_city:")
+    learn = src.find("_learn_city(")
+    assert learn != -1, "nothing reads the city on arrival any more"
+    assert toggled != -1 and toggled < learn, (
+        "the city is read on arrivals that did not come from the city")
+    assert "_expect_home_read" not in inspect.getsource(flow_steps), (
+        "the late first-read mechanism is back")
+
+
+class Reader(GemFlowMixin):
+    def __init__(self, pos, home_map=None):
+        self._pos = pos
+        self.mapmem = None
+        if home_map:
+            self._home_map_id = home_map
+
+    def _read_map_position(self, frame=None):
+        return self._pos
+
+
+def test_the_city_read_sets_home_and_the_camera():
+    r = Reader(("4096", 577, 615), home_map="4096")
+    assert r._learn_city("frame") == (577, 615)
+    assert r._city_xy == (577, 615)
+    assert r._last_map_xy == (577, 615), "the camera IS on the city now"
+    assert r._tiles_from_home() == 0
 
 
 def test_home_is_only_taken_from_the_home_kingdom():
-    """A coordinate read while passing through another kingdom is a different
-    coordinate space."""
-    # _map_sync is where the accepted coordinate lands and where the home
-    # kingdom is decided; the raw OCR reader next door knows nothing about
-    # either. Two functions handle positions and picking the wrong one is
-    # what this assertion is guarding against in the first place.
-    src = inspect.getsource(GemFlowMixin._map_sync)
-    idx = src.find("_city_xy")
-    assert idx != -1, "home is never recorded"
-    assert "_off_home_map" in src[max(0, idx - 300):idx], (
-        "home can be learned from another kingdom's coordinates")
+    """A read that says another map id is the 8% id misread, not a city."""
+    r = Reader(("4093", 577, 615), home_map="4096")
+    assert r._learn_city("frame") is None
+    assert getattr(r, "_city_xy", None) is None
+
+
+def test_an_unreadable_hud_teaches_nothing():
+    r = Reader(None, home_map="4096")
+    assert r._learn_city("frame") is None
+    assert getattr(r, "_city_xy", None) is None
