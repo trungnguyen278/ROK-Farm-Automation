@@ -114,3 +114,26 @@ def test_the_trajectory_is_kept_and_bounded(book):
     book.save()
     again = MapMemory("4096")
     assert len(again.track) == book.TRACK_MAX
+
+
+def test_near_ground_wins_even_when_far_ground_is_plentiful(book):
+    """The first live target, 2026-09-23 15:50, was 133 tiles out while gaps
+    sat next to the city: hundreds of far cells outweighed a few near ones
+    one cell at a time. Rings first, then cells."""
+    city = (577, 615)
+    near = [(593, 615), (561, 615), (577, 631)]          # ~16 tiles out
+    far = [(577 + dx, 615 + dy) for dx in range(-150, 151, 8)
+           for dy in range(-150, 151, 8)
+           if max(abs(dx), abs(dy)) >= 100]              # hundreds of cells
+    _cover(book, city, 150, but=near + far)
+    assert len(book.gaps_near(city, 150, 6.0)) > 300
+    w = Wander(book, cam=city)
+    random.seed(11)
+    got_near = 0
+    for _ in range(400):
+        w._sweep_tgt = None
+        t = w._sweep_target()
+        if max(abs(t[0] - city[0]), abs(t[1] - city[1])) < 40:
+            got_near += 1
+    assert got_near >= 0.75 * 400, got_near
+    assert got_near < 400, "never the far ground: that is a fence, not a sweep"

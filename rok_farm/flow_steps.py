@@ -28,7 +28,7 @@ from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
                              ZOOM_IN_WINDOW_S, ZOOM_POLL_MAX)
 from rok_farm import pan_model
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
-from rok_farm.map_memory import MapMemory
+from rok_farm.map_memory import CELL as CELL_TILES, MapMemory
 from rok_farm.queue_ocr import button_verdict, read_button_text
 from rok_farm.screenshots import save_annotated, save_screenshot
 
@@ -407,9 +407,12 @@ class GemFlowMixin:
     # over hours; this is a starting value, not a measurement, and every
     # target logs how many gaps it was chosen from so it can be judged.
     SWEEP_STALE_H = 6.0
-    # Weights: half as likely every 40 tiles further from the city, and every
-    # 80 tiles further from the camera.
-    SWEEP_CITY_HALF = 40.0
+    # Weights: a distance ring half as likely every 25 tiles further from the
+    # city; within a ring, a cell half as likely every 80 tiles further from
+    # the camera. With a few gaps near the city and hundreds far out, 25 puts
+    # about five draws in six near (tests/test_sweep.py); 40 managed under two
+    # in three.
+    SWEEP_CITY_HALF = 25.0
     SWEEP_CAM_HALF = 80.0
     # How hard a scan leans toward the target, drawn fresh every scan.
     SWEEP_PULL = (0.25, 0.6)
@@ -437,11 +440,23 @@ class GemFlowMixin:
         if not gaps:
             self._sweep_tgt = None
             return None
-        weights = [0.5 ** (d / self.SWEEP_CITY_HALF)
-                   * 0.5 ** (max(abs(x - cam[0]), abs(y - cam[1]))
-                             / self.SWEEP_CAM_HALF)
-                   for x, y, d in gaps]
-        x, y, d = random.choices(gaps, weights=weights)[0]
+        # Two draws: first HOW FAR from the city, then WHERE at that distance.
+        # Weighting single cells let the far ground win by sheer numbers --
+        # the ring at 130 tiles holds sixteen times the cells of the ring at 8
+        # -- and the first live target, 2026-09-23 15:50, was 133 tiles out
+        # with gaps next to the city. A ring's weight does not grow with its
+        # size, so "near first" means near first.
+        rings: dict[int, list] = {}
+        for g in gaps:
+            rings.setdefault(g[2] // CELL_TILES, []).append(g)
+        ring_ids = sorted(rings)
+        ring = random.choices(
+            ring_ids, weights=[0.5 ** (r * CELL_TILES / self.SWEEP_CITY_HALF)
+                               for r in ring_ids])[0]
+        pool = rings[ring]
+        weights = [0.5 ** (max(abs(x - cam[0]), abs(y - cam[1]))
+                           / self.SWEEP_CAM_HALF) for x, y, _d in pool]
+        x, y, d = random.choices(pool, weights=weights)[0]
         self._sweep_tgt, self._sweep_age = (x, y), 0
         logger.debug("sweep: target %d,%d -- %d tiles from the city, %d from "
                      "the camera, one of %d gap cell(s) within %d", x, y, d,
