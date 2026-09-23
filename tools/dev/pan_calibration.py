@@ -27,9 +27,21 @@ LOG = Path(sys.argv[1] if len(sys.argv) > 1
 STEP = re.compile(
     r"map step: \d+ tiles \((\d+),(\d+) -> (\d+),(\d+)\) after ([+-]\d+),([+-]\d+) px")
 
+# Pairs from before 2026-09-23 09:10 are contaminated. Until then the pixel
+# total was reset only on a coordinate read, while node clicks, recentres,
+# retreats and city trips moved the camera without adding a pixel -- eight such
+# pairs fitted to a median error of 21 tiles on moves of 47, and leave-one-out
+# errors up to 113 tiles. From that time a pair is logged with pixels only when
+# drags were the ONLY thing that moved the camera.
+SINCE = "2026-09-23 09:10:00"
+TS = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
+
 rows = []
 with LOG.open(encoding="utf-8", errors="replace") as fh:
     for line in fh:
+        t = TS.match(line)
+        if t and t.group(1) < SINCE:
+            continue
         m = STEP.search(line)
         if not m:
             continue

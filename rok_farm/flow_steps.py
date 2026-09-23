@@ -225,9 +225,25 @@ class GemFlowMixin:
             # The pixels dragged since the last fix travel with the step, so
             # each line is a complete (drag -> tiles) pair ready to fit.
             px, py = getattr(self, "_pan_pixels", (0, 0))
-            logger.debug("map step: %d tiles (%d,%d -> %d,%d) after %+d,%+d px",
-                         step, prev_xy[0], prev_xy[1], x, y, px, py)
+            if getattr(self, "_pan_dirty", False):
+                # Something other than a scan drag moved the camera since the
+                # last fix -- a node click that centres on the deposit, a
+                # recentre, a retreat, a trip to the city. Those moves are not
+                # in the pixel total, so the pair would teach the fit a lie.
+                #
+                # Found the first time the pairs were fitted, 2026-09-23: eight
+                # of them, a median error of 21 tiles on moves of 47, and the
+                # first pair started at 448,621 -- the city itself -- so it
+                # spanned a city-to-map toggle with no drag in it at all.
+                logger.debug("map step: %d tiles (%d,%d -> %d,%d) -- camera "
+                             "moved by more than drags, not a calibration pair",
+                             step, prev_xy[0], prev_xy[1], x, y)
+            else:
+                logger.debug("map step: %d tiles (%d,%d -> %d,%d) after "
+                             "%+d,%+d px", step, prev_xy[0], prev_xy[1], x, y,
+                             px, py)
             self._pan_pixels = (0, 0)
+            self._pan_dirty = False
         self._last_map_xy = (x, y)
         # Coming back from the city puts the camera on the city, so the first
         # reading after one is where home is. No configuration, no template --
@@ -717,6 +733,7 @@ class GemFlowMixin:
         want the camera to travel), just committed and in one direction, so the
         next mine does not start life staring at the same void.
         """
+        self._pan_dirty = True  # moves the camera outside the scan drags
         cx, cy = self._center_screen()
         ww, wh = self.win["width"], self.win["height"]
         margin = 80
@@ -739,6 +756,7 @@ class GemFlowMixin:
 
     def _recenter_edge_gem(self, edge_match: Match) -> list[Match]:
         """Drag map to roughly center an edge gem, then re-scan."""
+        self._pan_dirty = True  # moves the camera outside the scan drags
         cx, cy = self._center_screen()
         mx, my = edge_match.center
         sx, sy = self._screen_xy(mx, my)
@@ -756,6 +774,7 @@ class GemFlowMixin:
 
     def _recenter_to_safe_zone(self, icon: Match) -> Match | None:
         """If icon is in no-click zone, drag map to move it to center."""
+        self._pan_dirty = True  # moves the camera outside the scan drags
         sx, sy = self._screen_xy(*icon.center)
         if not self._in_no_click_zone(sx, sy):
             return icon
@@ -1581,6 +1600,7 @@ class GemFlowMixin:
 
                 # Identify the deposit BEFORE opening the deploy panel: that
                 # panel covers the top-left corner where the coordinates live.
+                self._pan_dirty = True  # the click centred the camera
                 # Clicking a node centres the camera on it, so the HUD readout
                 # here is the node's own tile -- no pixel-to-tile calibration
                 # needed. An army still marching does not mark its target as
@@ -1942,6 +1962,7 @@ class GemFlowMixin:
     def _step_return_city(self, tag: str):
         print(f"\n--- [{tag}] Return to city ---\n")
 
+        self._pan_dirty = True  # the map re-opens on the city, not by a drag
         # Whatever reason brought us here, the camera is about to land on the
         # city, so the next coordinate read is where home is. Setting it here
         # rather than only in the homing path breaks the circle: the drift
