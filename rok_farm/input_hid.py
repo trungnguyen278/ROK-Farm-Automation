@@ -340,10 +340,16 @@ class HidInputMixin:
 
     def _human_drag(self, sx: int, sy: int, ex: int, ey: int,
                     button: str = "L", speed_factor: float = 1.0,
-                    easing: str = "in_out"):
+                    easing: str = "in_out", hold_ms: int = 0):
         # `easing` is accepted for call-site compatibility but ignored: the
         # humanizer now owns the acceleration profile. `speed_factor` still
         # scales the overall duration (e.g. fast camera pans).
+        #
+        # `hold_ms` keeps the button down, pointer still, before the release.
+        # A release while still moving can carry the map on past where the
+        # pointer stopped; a held one cannot, which is what a measurement of
+        # the drag itself needs (tools/dev/pan_survey.py). The farm's own
+        # drags leave it at 0 and are unchanged.
         sx, sy = self._clamp_to_window(sx, sy)
         ex, ey = self._clamp_to_window(ex, ey)
         self._moveto(sx, sy)
@@ -352,6 +358,15 @@ class HidInputMixin:
         path = self.humanizer.humanize_move(sx, sy, ex, ey)
         if speed_factor != 1.0:
             path = [(x, y, max(3, int(ms / speed_factor))) for x, y, ms in path]
+        if hold_ms > 0 and path:
+            # The board treats a repeated point as a dwell, and caps each
+            # step at 255ms -- so a long hold is several repeats.
+            lx, ly = path[-1][0], path[-1][1]
+            left = int(hold_ms)
+            while left > 0:
+                step = min(left, 250)
+                path.append((lx, ly, step))
+                left -= step
 
         if self._has_moveto:
             waypoints = self._path_to_hid([(sx, sy, 0), *path])
@@ -369,6 +384,8 @@ class HidInputMixin:
                 send_dy = int(mdy / sc) if sc != 1.0 else int(mdy)
                 if abs(send_dx) > 0 or abs(send_dy) > 0:
                     self.cmd.send("MOVE", send_dx, send_dy, step_ms)
+                elif step_ms > 0:
+                    time.sleep(step_ms / 1000.0)   # a dwell, e.g. hold_ms
                 prev_x, prev_y = float(cx), float(cy)
             time.sleep(random.uniform(0.01, 0.03))
             self.cmd.send("MUP", button)

@@ -221,10 +221,21 @@ DELAY_AFTER_ESCAPE = (0.18, 0.07)
 DELAY_AFTER_SCROLL = (0.30, 0.10)
 DELAY_ZOOM_IN = (1.5, 0.3)
 # Poll step while waiting for the mine to zoom in (see _click_icon_and_verify):
-# we re-check up to ZOOM_POLL_MAX times so a fast zoom proceeds immediately
-# instead of always paying the full DELAY_ZOOM_IN sleep.
+# a fast zoom proceeds on the first poll that sees the mine, a slow one is
+# given until ZOOM_IN_WINDOW_S after the click.
 DELAY_ZOOM_IN_POLL = (0.45, 0.12)
-ZOOM_POLL_MAX = 3
+# The window is what the old three-poll loop actually gave, measured rather
+# than inherited: click, DELAY_AFTER_CLICK 0.15, then three polls of 0.45 wait
+# plus 1.06s of matching (median over the day's saved frames, 2026-09-23), so
+# its last frame was grabbed about 3.6s after the click. The matching now runs
+# its scales in parallel and costs a fraction of that, which with a fixed
+# count would have cut the patience to ~2s without anyone deciding to.
+# Every poll now logs when the mine appeared ("zoom-in: mine 1.9s after the
+# click"), so this can be narrowed on data instead of on feel.
+ZOOM_IN_WINDOW_S = 3.6
+# A backstop on the count only, in case the clock misbehaves; the window is
+# what ends the wait.
+ZOOM_POLL_MAX = 12
 
 # --- Zoom-OUT settle (measured 2026-08-18: 30 trials, daylight, icon zoom,
 # capture at 36 fps) ---

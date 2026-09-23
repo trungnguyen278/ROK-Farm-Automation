@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -13,6 +15,36 @@ logger = logging.getLogger(__name__)
 Match = namedtuple("Match", ["name", "x", "y", "w", "h", "confidence", "center"])
 
 DEFAULT_SCALES = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
+
+# The scales of one match run side by side. cv2.matchTemplate releases the
+# GIL, and for templates this small OpenCV does not spread one call over the
+# cores itself -- measured 2026-09-23 on 12 saved scan frames, the icon scan's
+# seven scales took 669ms one after another and 166ms on a pool, the same
+# seven result maps either way. That is every scan of every mine.
+#
+# Private to this module and never re-entered: a job submitted here must not
+# itself wait on this pool, or a full pool deadlocks on its own children.
+_POOL = ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4),
+                           thread_name_prefix="match")
+
+
+def _scaled_result(frame: np.ndarray, template: np.ndarray, scale: float):
+    """(w, h, result map) for one scale, or None if it does not fit."""
+    resized = cv2.resize(template, None, fx=scale, fy=scale,
+                         interpolation=cv2.INTER_AREA)
+    rh, rw = resized.shape[:2]
+    fh, fw = frame.shape[:2]
+    if rw > fw or rh > fh:
+        return None
+    return rw, rh, cv2.matchTemplate(frame, resized, cv2.TM_CCOEFF_NORMED)
+
+
+def _all_scales(frame, template, scales):
+    """Every scale's result, in scale order -- the order the loops below
+    have always consumed them in, so ties resolve exactly as before."""
+    if len(scales) == 1:
+        return [_scaled_result(frame, template, scales[0])]
+    return list(_POOL.map(lambda s: _scaled_result(frame, template, s), scales))
 
 
 class TemplateMatcher:
@@ -35,16 +67,10 @@ class TemplateMatcher:
         best_loc = None
         best_size = None
 
-        for scale in self._scales:
-            resized = cv2.resize(
-                template, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
-            )
-            rh, rw = resized.shape[:2]
-            fh, fw = frame.shape[:2]
-            if rw > fw or rh > fh:
+        for scaled in _all_scales(frame, template, self._scales):
+            if scaled is None:
                 continue
-
-            result = cv2.matchTemplate(frame, resized, cv2.TM_CCOEFF_NORMED)
+            rw, rh, result = scaled
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
             if max_val > best_val:
@@ -73,16 +99,10 @@ class TemplateMatcher:
 
         matches: list[Match] = []
 
-        for scale in self._scales:
-            resized = cv2.resize(
-                template, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
-            )
-            rh, rw = resized.shape[:2]
-            fh, fw = frame.shape[:2]
-            if rw > fw or rh > fh:
+        for scaled in _all_scales(frame, template, self._scales):
+            if scaled is None:
                 continue
-
-            result = cv2.matchTemplate(frame, resized, cv2.TM_CCOEFF_NORMED)
+            rw, rh, result = scaled
             locs = np.where(result >= self._threshold)
 
             for pt in zip(*locs[::-1]):

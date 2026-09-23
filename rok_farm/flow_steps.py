@@ -25,7 +25,7 @@ from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
                              GEM_MINE_TEMPLATES, GEM_MINE_THRESHOLD,
                              MARCH_BTN_MAX_OFFSET, MARCH_BTN_PCT,
                              NEW_TROOP_BTN_PCT, TOGGLE_BTN_PCT,
-                             ZOOM_POLL_MAX)
+                             ZOOM_IN_WINDOW_S, ZOOM_POLL_MAX)
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
 from rok_farm.map_memory import MapMemory
 from rok_farm.queue_ocr import button_verdict, read_button_text
@@ -78,12 +78,10 @@ NO_CANDIDATE_GIVEUP = 3
 # and 68% of all marches were beyond 60 tiles, 45% beyond 100. Distance is
 # the whole story: within 60 tiles a march is five minutes, past 100 it is
 # thirteen, and the round trip that used to take half an hour was taking
-# over an hour by evening.
+# over an hour by evening. A walk back costs one trip through the city, which
+# resets the camera -- "map step: 267 tiles (844,465 -> 577,582)" straight
+# after a city return.
 #
-# A hundred, because that is where the march time doubles. The fix costs one
-# trip through the city, which resets the camera -- measured the same
-# evening: "map step: 267 tiles (844,465 -> 577,582)" straight after a city
-# return. Half a minute to save eight minutes a mine.
 # NOT a fence. The operator asked for a route rather than a cap: gems can be
 # genuinely scarce near the city, and then going far is the right answer, not
 # a fault. The sweep itself is what keeps the search near home -- unexplored
@@ -222,28 +220,14 @@ class GemFlowMixin:
         prev_xy = getattr(self, "_last_map_xy", None)
         if prev_xy:
             step = max(abs(x - prev_xy[0]), abs(y - prev_xy[1]))
-            # The pixels dragged since the last fix travel with the step, so
-            # each line is a complete (drag -> tiles) pair ready to fit.
-            px, py = getattr(self, "_pan_pixels", (0, 0))
-            if getattr(self, "_pan_dirty", False):
-                # Something other than a scan drag moved the camera since the
-                # last fix -- a node click that centres on the deposit, a
-                # recentre, a retreat, a trip to the city. Those moves are not
-                # in the pixel total, so the pair would teach the fit a lie.
-                #
-                # Found the first time the pairs were fitted, 2026-09-23: eight
-                # of them, a median error of 21 tiles on moves of 47, and the
-                # first pair started at 448,621 -- the city itself -- so it
-                # spanned a city-to-map toggle with no drag in it at all.
-                logger.debug("map step: %d tiles (%d,%d -> %d,%d) -- camera "
-                             "moved by more than drags, not a calibration pair",
-                             step, prev_xy[0], prev_xy[1], x, y)
-            else:
-                logger.debug("map step: %d tiles (%d,%d -> %d,%d) after "
-                             "%+d,%+d px", step, prev_xy[0], prev_xy[1], x, y,
-                             px, py)
-            self._pan_pixels = (0, 0)
-            self._pan_dirty = False
+            # What a drag buys is NOT measured here. The farm logged drag/tile
+            # pairs from this spot for a day, and the first fit of them came
+            # out at a median error of 21 tiles on moves of 47: node clicks,
+            # recentres, retreats and city trips all move the camera without
+            # a drag. The operator's call, 2026-09-23: measure it on its own
+            # -- tools/dev/pan_survey.py, numbers in rok_farm/pan_model.py.
+            logger.debug("map step: %d tiles (%d,%d -> %d,%d)",
+                         step, prev_xy[0], prev_xy[1], x, y)
         self._last_map_xy = (x, y)
         # Coming back from the city puts the camera on the city, so the first
         # reading after one is where home is. No configuration, no template --
@@ -733,7 +717,6 @@ class GemFlowMixin:
         want the camera to travel), just committed and in one direction, so the
         next mine does not start life staring at the same void.
         """
-        self._pan_dirty = True  # moves the camera outside the scan drags
         cx, cy = self._center_screen()
         ww, wh = self.win["width"], self.win["height"]
         margin = 80
@@ -756,7 +739,6 @@ class GemFlowMixin:
 
     def _recenter_edge_gem(self, edge_match: Match) -> list[Match]:
         """Drag map to roughly center an edge gem, then re-scan."""
-        self._pan_dirty = True  # moves the camera outside the scan drags
         cx, cy = self._center_screen()
         mx, my = edge_match.center
         sx, sy = self._screen_xy(mx, my)
@@ -774,7 +756,6 @@ class GemFlowMixin:
 
     def _recenter_to_safe_zone(self, icon: Match) -> Match | None:
         """If icon is in no-click zone, drag map to move it to center."""
-        self._pan_dirty = True  # moves the camera outside the scan drags
         sx, sy = self._screen_xy(*icon.center)
         if not self._in_no_click_zone(sx, sy):
             return icon
@@ -823,12 +804,22 @@ class GemFlowMixin:
         # Adaptive zoom-in wait: the game zooms into the mine after the icon
         # click. Poll for the mine structure (or an already-open gather popup)
         # instead of a fixed sleep, so a fast zoom continues immediately and a
-        # slow one still gets up to ZOOM_POLL_MAX tries before giving up.
+        # slow one still gets the whole ZOOM_IN_WINDOW_S before giving up.
+        #
+        # A window, not a count. It used to be three polls, and the patience
+        # that bought came mostly from the matching being slow -- 1.06s of
+        # compute per poll, measured 2026-09-23 on the day's saved frames --
+        # so the third frame was grabbed about 3.6s after the click. Making
+        # the matching fast would have quietly shortened that to 2s and
+        # written off every mine whose zoom is still running at that point.
+        clicked_at = time.monotonic()
         frame = None
         mine = None
         g_raw = None
-        for _poll in range(ZOOM_POLL_MAX):
+        polls = 0
+        while polls < ZOOM_POLL_MAX:
             self._wait(DELAY_ZOOM_IN_POLL)
+            polls += 1
             frame = self._grab()
             if frame is None:
                 continue
@@ -843,6 +834,17 @@ class GemFlowMixin:
             g_early = g_raw.confidence if g_raw else 0.0
             if mine is not None or g_early >= GATHER_BTN_THRESHOLD:
                 break
+            if time.monotonic() - clicked_at >= ZOOM_IN_WINDOW_S:
+                break
+        # How long the zoom really takes, which nothing recorded: the three
+        # polls were sized by feel, and this is the number that decides the
+        # window above.
+        logger.debug("zoom-in: %s %.2fs after the click, poll %d",
+                     "mine" if mine is not None else
+                     ("popup" if g_raw is not None
+                      and g_raw.confidence >= GATHER_BTN_THRESHOLD
+                      else "nothing"),
+                     time.monotonic() - clicked_at, polls)
 
         if frame is None:
             return False
@@ -892,18 +894,15 @@ class GemFlowMixin:
             return False
 
         if is_gem and not g:
-            self._wait(DELAY_RECHECK)
-            frame_recheck = self._grab()
-            if frame_recheck is not None:
-                save_screenshot(frame_recheck, f"{tag}_recheck_{attempt:02d}")
-                g_re_raw = self._match_verify(frame_recheck, "buttons/gather_btn",
-                                              self.matcher, GATHER_BTN_THRESHOLD)
-                g_re_conf = g_re_raw.confidence if g_re_raw else 0.0
-                print(f"  [{INFO}] [{attempt}] re-check gather_btn conf={g_re_conf:.3f}")
-                if g_re_conf >= GATHER_BTN_THRESHOLD:
-                    print(f"  [{PASS}] [{attempt}] Popup detected on re-check (conf={g_re_conf:.3f})")
-                    return True
-
+            # Straight to the mine. There used to be a second look for the
+            # popup first -- a short wait, a fresh frame and a full-scale
+            # search of the whole frame for the gather button -- and in the
+            # log it was asked 1,148 times and answered yes NONE of them: the
+            # popup opens when the mine is clicked, not by waiting. Measured
+            # on the day's frames it cost about 1.1s of compute and wait per
+            # gem, which is most of what the operator saw as the slow step
+            # after the zoom ("doan recheck sau khi zoom in vao mo thi kha
+            # cham"), 2026-09-23.
             print(f"  [{INFO}] [{attempt}] Gem confirmed, clicking mine structure...")
             msx, msy = self._screen_xy(*mine.center)
             msx += mine.w // 5
@@ -1137,30 +1136,6 @@ class GemFlowMixin:
                 sx, sy = self._clamp_to_play_area(sx, sy)
                 ex, ey = self._clamp_to_play_area(ex, ey)
                 self._human_drag(sx, sy, ex, ey, speed_factor=scan_speed, easing="in")
-                # Record the pixels dragged, so the tiles they buy can be
-                # measured later.
-                #
-                # The operator's point, 2026-09-22: the coordinates are
-                # already being read, so the relationship between a drag and
-                # the ground it covers is learnable rather than assumable.
-                # With it the wander could aim AT a cell instead of picking a
-                # heading and hoping; without it the pan is the one step in
-                # the flow with no idea how far it went.
-                #
-                # Logging only. Fitting the transform on guesses would be the
-                # thing this whole day has been about not doing -- the map is
-                # isometric, so the axes are rotated by an unknown angle and a
-                # sign error steers the opposite way. "map step: N tiles" from
-                # _map_sync is the other half of each pair.
-                self._pan_pixels = (getattr(self, "_pan_pixels", (0, 0))[0]
-                                    + (ex - sx),
-                                    getattr(self, "_pan_pixels", (0, 0))[1]
-                                    + (ey - sy))
-                logger.debug("pan: %+d,%+d px (heading %.0f deg, total "
-                             "%+d,%+d since the last fix)",
-                             ex - sx, ey - sy,
-                             math.degrees(wander_heading) % 360,
-                             self._pan_pixels[0], self._pan_pixels[1])
                 if _sw < num_swipes - 1:
                     # mid-sequence: barely pause -- we haven't arrived yet, so
                     # there's nothing new to load; no big delay needed.
@@ -1600,7 +1575,6 @@ class GemFlowMixin:
 
                 # Identify the deposit BEFORE opening the deploy panel: that
                 # panel covers the top-left corner where the coordinates live.
-                self._pan_dirty = True  # the click centred the camera
                 # Clicking a node centres the camera on it, so the HUD readout
                 # here is the node's own tile -- no pixel-to-tile calibration
                 # needed. An army still marching does not mark its target as
@@ -1962,7 +1936,6 @@ class GemFlowMixin:
     def _step_return_city(self, tag: str):
         print(f"\n--- [{tag}] Return to city ---\n")
 
-        self._pan_dirty = True  # the map re-opens on the city, not by a drag
         # Whatever reason brought us here, the camera is about to land on the
         # city, so the next coordinate read is where home is. Setting it here
         # rather than only in the homing path breaks the circle: the drift
