@@ -487,31 +487,82 @@ class GemFlowMixin:
     # All starting values: near = 40 tiles (inside it a march is ~5 min, the
     # table above), far = 80 (where marches start to lengthen), four cells of
     # near gap before it is worth a trip.
-    JUMP_NEAR_TILES = 40
-    JUMP_FAR_TILES = 80
-    JUMP_MIN_GAPS = 4
+    # --- ring by ring: the band the scan works in -----------------------------
+    #
+    # Measured 2026-09-23 16:20-18:00 on a clean book: rings out to 39 tiles
+    # were ~100% seen and 40-87 at 75-90%, yet 45 of 220 scans were past 100
+    # tiles and 22 past 140, while the ring at 88-103 was 38-59% seen. The
+    # scan ran out along one arm: unseen ground at the frontier pulled it on,
+    # the lean toward a near target was too weak to hold it, and the jump
+    # home was only asked at the start of a mine (one mine ran 31 scans).
+    # It cost: marches within 70 tiles took a median 4.5 min, past 100 tiles
+    # 16.1 min -- one deposit at 142 tiles, 20 min each way.
+    #
+    # The operator: near first -- "no dang di huong ra chu khong uu tien o gan
+    # truoc". So the scan works a band: out to the first ring less than 80%
+    # seen (the frontier), plus a margin. Targets are drawn inside it,
+    # unseen ground beyond it pulls nothing, and a camera past it by more
+    # than JUMP_SLACK takes the city road back -- asked every few scans, not
+    # once a mine. As the rings inside fill, the band grows by itself, so
+    # real scarcity still takes the scan far -- ring by ring, never down an
+    # arm. After SWEEP_STALE_H the inner rings count as unseen again and the
+    # band shrinks back to the city.
+    SWEEP_FULL = 0.8
+    SWEEP_BAND_MARGIN = 24
+    JUMP_SLACK = 16
+    JUMP_CHECK_SCANS = 4
     JUMP_CHANCE = 0.7
     JUMP_COOLDOWN_S = 8 * 60
 
-    def _jump_home_worth_it(self):
-        """(gap cells near the city, camera distance) if the city trip is the
-        better road to unseen near ground right now, else None."""
+    def _sweep_band(self) -> int | None:
+        """How far out from the city the scan should be working, in tiles."""
         book = self.mapmem
         city = getattr(self, "_city_xy", None)
+        if book is None or not city:
+            return None
+        band = book.frontier(city, self.SWEEP_STALE_H, self.SWEEP_FULL) \
+            + self.SWEEP_BAND_MARGIN
+        book.band = band
+        return band
+
+    def _jump_home_worth_it(self):
+        """(band, camera distance) if the camera is out past the band the scan
+        should be working and the city road is the way back, else None."""
+        city = getattr(self, "_city_xy", None)
         cam = getattr(self, "_last_map_xy", None)
-        if book is None or not city or not cam:
+        if not city or not cam:
+            return None
+        band = self._sweep_band()
+        if band is None:
             return None
         far = max(abs(cam[0] - city[0]), abs(cam[1] - city[1]))
-        if far <= self.JUMP_FAR_TILES:
+        if far <= band + self.JUMP_SLACK:
             return None
         if time.time() - getattr(self, "_last_jump_home", 0.0) < self.JUMP_COOLDOWN_S:
             return None
-        gaps = book.gaps_near(city, self.JUMP_NEAR_TILES, self.SWEEP_STALE_H)
-        if len(gaps) < self.JUMP_MIN_GAPS:
-            return None
         if random.random() >= self.JUMP_CHANCE:
             return None
-        return len(gaps), far
+        return band, far
+
+    def _jump_home_if_out_of_band(self, tag: str):
+        """Take the city road back if the camera is out past the band.
+
+        None: no trip needed. True: back on the world map at the city.
+        False: the trip did not get back onto the world map.
+        """
+        jump = self._jump_home_worth_it()
+        if not jump:
+            return None
+        band, far = jump
+        print(f"  [{INFO}] {far} tiles out, the scan is working the ground out "
+              f"to {band} -- back through the city")
+        logger.info("jump home: camera %d tiles out, band %d -- city trip, "
+                    "then scan from the city", far, band)
+        self._last_jump_home = time.time()
+        self._step_return_city(tag)
+        # Same mine, carried on from the city: a road taken on purpose is not
+        # a failed mine, and must not count toward the fail limits.
+        return bool(self._step_to_world_map(tag))
 
     def _sweep_target(self):
         """A gap near the city to lean toward, or None."""
@@ -530,6 +581,10 @@ class GemFlowMixin:
                 self._sweep_age = age
                 return tgt
         gaps = book.gaps_near(city, self.SWEEP_RADIUS_TILES, self.SWEEP_STALE_H)
+        band = self._sweep_band()
+        if band is not None:
+            inside = [g for g in gaps if g[2] <= band]
+            gaps = inside or gaps
         if not gaps:
             self._sweep_tgt = None
             return None
@@ -1402,20 +1457,8 @@ class GemFlowMixin:
             self._step_return_city(tag)
             return None
 
-        jump = self._jump_home_worth_it()
-        if jump:
-            gaps, far = jump
-            print(f"  [{INFO}] {far} tiles out with {gaps} unseen cell(s) near "
-                  f"the city -- back through the city to scan near ground first")
-            logger.info("jump home: camera %d tiles out, %d near gap cell(s) "
-                        "within %d -- city trip, then scan from the city",
-                        far, gaps, self.JUMP_NEAR_TILES)
-            self._last_jump_home = time.time()
-            self._step_return_city(tag)
-            # Same mine, carried on from the city: a road taken on purpose is
-            # not a failed mine, and must not count toward the fail limits.
-            if not self._step_to_world_map(tag):
-                return None
+        if self._jump_home_if_out_of_band(tag) is False:
+            return None
 
         wander_heading = getattr(self, '_wander_heading', random.uniform(0, 2 * math.pi))
         scan_count = 0
@@ -1496,6 +1539,19 @@ class GemFlowMixin:
         # Random wander scan (human-like, not spiral)
         while scan_count < max_scans and attempt < max_attempts:
             scan_count += 1
+
+            # Out past the band? Asked every few scans, not only when the
+            # mine began: one mine of 31 scans ran 150 tiles out on its own.
+            if scan_count % self.JUMP_CHECK_SCANS == 0:
+                back = self._jump_home_if_out_of_band(tag)
+                if back is False:
+                    return None
+                if back:
+                    # The map reopened on the city: every frame position
+                    # remembered so far is somewhere else now.
+                    clicked_positions = []
+                    empty_streak = 0
+                    no_candidate_floor = scan_count
 
             turn = random.gauss(0, 0.4)
             if random.random() < 0.15:

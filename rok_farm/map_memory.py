@@ -281,6 +281,44 @@ class MapMemory:
                 out.append((x, y, int(max(abs(x - city[0]), abs(y - city[1])))))
         return out
 
+    def frontier(self, city, stale_h: float, full: float = 0.8,
+                 max_tiles: int = 400, now: float | None = None) -> int:
+        """How far out from the city the ground is covered, in tiles.
+
+        Rings of cells around the city, from the inside out; the first ring
+        with less than `full` of its cells seen in the last `stale_h` hours
+        is where the covered ground ends. Cells off the map, walls and ground
+        out of reach do not count either way -- nothing there can be filled.
+        """
+        now = time.time() if now is None else now
+        stale = stale_h * 3600.0
+        cx, cy = int(city[0]) // CELL, int(city[1]) // CELL
+        for r in range(0, max_tiles // CELL + 1):
+            if r == 0:
+                ring = [(cx, cy)]
+            else:
+                ring = ([(i, cy - r) for i in range(cx - r, cx + r + 1)]
+                        + [(i, cy + r) for i in range(cx - r, cx + r + 1)]
+                        + [(cx - r, j) for j in range(cy - r + 1, cy + r)]
+                        + [(cx + r, j) for j in range(cy - r + 1, cy + r)])
+            tot = seen = 0
+            for i, j in ring:
+                x, y = i * CELL + CELL // 2, j * CELL + CELL // 2
+                if x < 0 or y < 0 or x >= MAP_TILES or y >= MAP_TILES:
+                    continue
+                k = f"{i},{j}"
+                if self.terrain.get(k, {}).get("wall", 0) > 0:
+                    continue
+                if self.unreachable_at(x, y, city):
+                    continue
+                tot += 1
+                t = self.reach.get(k, {}).get("t")
+                if t is not None and now - t < stale:
+                    seen += 1
+            if tot and seen < full * tot:
+                return r * CELL
+        return max_tiles
+
     def record_view(self, cells, gem_cells=()):
         """One frame's worth of ground, every cell it showed at once.
 
@@ -465,6 +503,14 @@ class MapMemory:
         if not city:
             return self.UNEXPLORED_NEAR
         dist = max(abs(x - city[0]), abs(y - city[1]))
+        # Past the band the scan is working, unseen ground pulls nothing: the
+        # frontier used to draw the camera outward along whichever arm it
+        # was on -- 2026-09-23, 45 of 220 scans past 100 tiles while the
+        # ring at 88-103 was barely a third seen. The band grows as the
+        # rings inside fill (see flow_steps._sweep_band).
+        band = getattr(self, "band", None)
+        if band is not None and dist > band:
+            return 0.0
         fade = 0.5 ** (dist / self.UNEXPLORED_HALF_TILES)
         return max(self.UNEXPLORED_FAR_FLOOR, self.UNEXPLORED_NEAR * fade)
 

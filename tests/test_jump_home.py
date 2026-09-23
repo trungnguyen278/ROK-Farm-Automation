@@ -1,10 +1,10 @@
-"""Far out with near ground still unseen: take the city road back.
+"""Near first, ring by ring: the scan works a band and takes the city road
+back when it strays past it.
 
-2026-09-23 15:48-16:01: the camera sat at a median 146 tiles from the city
-(max 208) while 30 of the 121 cells within 40 tiles of it were unseen. The
-sweep's lean turns a heading ~10 tiles a scan, and a gem found on the way
-ends the mine where it is -- so the camera never got home. The city button
-reopens the map on the city in seconds.
+2026-09-23 16:20-18:00, clean book: rings out to 39 tiles ~100% seen and
+40-87 at 75-90%, yet 45 of 220 scans were past 100 tiles and 22 past 140
+while the ring at 88-103 was 38-59% seen. Marches within 70 tiles took a
+median 4.5 min, past 100 tiles 16.1 min. The operator: near first.
 """
 
 import inspect
@@ -16,46 +16,63 @@ import pytest
 from rok_farm.flow_steps import GemFlowMixin
 from rok_farm.map_memory import CELL, MapMemory
 
+CITY = (577, 615)
+
 
 @pytest.fixture
 def book(tmp_path, monkeypatch):
     import rok_farm.map_memory as mm
     monkeypatch.setattr(mm, "MEM_DIR", tmp_path)
-    return MapMemory("4096")
+    b = MapMemory("4096")
+    b.city = CITY
+    return b
 
 
-def _seen_near(book, city, radius):
+def _seen_out_to(book, tiles, share=1.0, seed=0):
+    """Mark every ring out to `tiles` seen now (a share of each ring)."""
+    rnd = random.Random(seed)
     now = time.time()
-    cx, cy = city[0] // CELL, city[1] // CELL
-    r = radius // CELL
+    cx, cy = CITY[0] // CELL, CITY[1] // CELL
+    r = tiles // CELL
     for i in range(cx - r, cx + r + 1):
         for j in range(cy - r, cy + r + 1):
-            book.reach[f"{i},{j}"] = {"gem": 0, "empty": 1, "t": now}
+            if rnd.random() < share:
+                book.reach[f"{i},{j}"] = {"gem": 0, "empty": 1, "t": now}
 
 
 class Farm(GemFlowMixin):
-    def __init__(self, book, cam, city=(577, 615)):
+    def __init__(self, book, cam):
         self.mapmem = book
         self._last_map_xy = cam
-        self._city_xy = city
+        self._city_xy = CITY
 
 
-def test_far_out_with_near_gaps_goes_home(book, monkeypatch):
+def test_the_frontier_is_the_first_ring_not_yet_filled(book):
+    _seen_out_to(book, 40)
+    assert book.frontier(CITY, 6.0) == 48
+
+
+def test_a_fresh_book_works_right_beside_the_city(book):
+    assert book.frontier(CITY, 6.0) == 0
+
+
+def test_the_camera_past_the_band_goes_home(book, monkeypatch):
     monkeypatch.setattr(random, "random", lambda: 0.0)
-    f = Farm(book, cam=(577, 760))                 # 145 tiles out, nothing seen
-    assert f._jump_home_worth_it() is not None
+    _seen_out_to(book, 40)                       # band = 48 + 24 = 72
+    assert Farm(book, cam=(577, 760))._jump_home_worth_it() is not None
 
 
-def test_near_ground_covered_means_no_jump(book, monkeypatch):
-    """Once the neighbourhood is seen, far is allowed: a route, not a fence."""
+def test_the_camera_inside_the_band_stays(book, monkeypatch):
     monkeypatch.setattr(random, "random", lambda: 0.0)
-    _seen_near(book, (577, 615), 48)
+    _seen_out_to(book, 40)
+    assert Farm(book, cam=(577, 690))._jump_home_worth_it() is None   # 75 out
+
+
+def test_the_band_grows_as_the_rings_fill(book, monkeypatch):
+    """Real scarcity still takes the scan far -- ring by ring."""
+    monkeypatch.setattr(random, "random", lambda: 0.0)
+    _seen_out_to(book, 136)
     assert Farm(book, cam=(577, 760))._jump_home_worth_it() is None
-
-
-def test_close_to_home_never_jumps(book, monkeypatch):
-    monkeypatch.setattr(random, "random", lambda: 0.0)
-    assert Farm(book, cam=(600, 640))._jump_home_worth_it() is None
 
 
 def test_not_every_time_and_not_twice_in_a_row(book, monkeypatch):
@@ -67,10 +84,30 @@ def test_not_every_time_and_not_twice_in_a_row(book, monkeypatch):
     assert f._jump_home_worth_it() is None, "no second jump inside the cooldown"
 
 
-def test_the_jump_carries_the_mine_on():
-    """A road taken on purpose is not a failed mine."""
-    src = inspect.getsource(GemFlowMixin._step_scan_and_verify_gem)
-    j = src.index("jump = self._jump_home_worth_it()")
-    block = src[j:src.index("wander_heading = getattr", j)]
-    assert "_step_return_city(" in block and "_step_to_world_map(" in block
-    assert block.count("return None") == 1, "the jump ends the mine"
+def test_unseen_ground_past_the_band_pulls_nothing(book):
+    _seen_out_to(book, 40)
+    Farm(book, cam=CITY)._sweep_band()
+    assert book.score(577, 600 + 150) == 0.0     # 135 out, past band 72
+    assert book.score(577, 615 + 60) > 0         # 60 out, inside, unseen
+
+
+def test_targets_are_drawn_inside_the_band(book):
+    _seen_out_to(book, 40, share=0.9, seed=3)
+    f = Farm(book, cam=CITY)
+    band = f._sweep_band()
+    random.seed(2)
+    for _ in range(200):
+        f._sweep_tgt = None
+        t = f._sweep_target()
+        assert max(abs(t[0] - CITY[0]), abs(t[1] - CITY[1])) <= band + CELL
+
+
+def test_the_road_home_carries_the_mine_on_and_is_asked_during_the_scan():
+    """A road taken on purpose is not a failed mine; and one mine of 31
+    scans ran 150 tiles out because it was only asked at the start."""
+    helper = inspect.getsource(GemFlowMixin._jump_home_if_out_of_band)
+    assert "_step_return_city(" in helper and "_step_to_world_map(" in helper
+    scan = inspect.getsource(GemFlowMixin._step_scan_and_verify_gem)
+    assert scan.count("_jump_home_if_out_of_band(") >= 2
+    loop = scan[scan.index("while scan_count < max_scans"):]
+    assert "JUMP_CHECK_SCANS" in loop[:600]
