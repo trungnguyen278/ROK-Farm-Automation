@@ -281,6 +281,13 @@ class GemFlowMixin:
             city = getattr(self, "_city_xy", None)
             if city and map_id == getattr(self, "_home_map_id", None):
                 self.mapmem.set_city(*city)
+            elif not city and getattr(self.mapmem, "city", None):
+                # Restarted on the world map: no city trip yet this run, but
+                # the book remembers where it was. 2026-09-23 15:29, a restart
+                # ran three mines with no sweep at all for want of it.
+                self._city_xy = tuple(self.mapmem.city)
+                logger.info("City is %d:%d (from the map book)",
+                            *self._city_xy)
         self.mapmem.note_position(x, y)
         self.mapmem.note_track(x, y)
         # The whole view, but only at icon zoom: the footprint in pan_model
@@ -327,7 +334,17 @@ class GemFlowMixin:
         as 448:621, 532:625 and 498:664 within one day. The homing and the
         sweep both measure distance from it.
         """
-        pos = self._read_map_position(frame)
+        # A few looks, not one: the HUD redraws as the map opens, and on
+        # 2026-09-23 15:31:55 the strip read only the resource total
+        # ('28.534.274') -- the coordinates were not drawn yet.
+        pos = None
+        for attempt in range(3):
+            if attempt:
+                time.sleep(random.uniform(0.35, 0.55))
+                frame = self._grab()
+            pos = self._read_map_position(frame) if frame is not None else None
+            if pos is not None:
+                break
         if pos is None:
             return None
         map_id, x, y = pos
@@ -675,7 +692,7 @@ class GemFlowMixin:
             # The map has just opened centred on the city, before anything
             # has moved it -- the one moment the city's position is on
             # screen for the price of a read.
-            self._learn_city(self._grab())
+            city_read = self._learn_city(self._grab())
 
         # On the world map. If already at icon-zoom with gems, scan; else zoom.
         frame = self._grab()
@@ -696,6 +713,11 @@ class GemFlowMixin:
             print(f"  [{PASS}] Came from the city, zooming out {zs}x to icon level")
             self._scroll_at_center(-1, zs)
             self._wait_zoom_settled()
+            if city_read is None:
+                # The arrival read missed. The zoom-out moves the centre a
+                # tile or two at most (577,615 -> 577,614 in the survey), so a
+                # read now is still the city, to within the model's error.
+                self._learn_city(self._grab())
         else:
             # On the world map, and no gem was visible above -- which says
             # nothing on its own, because the gather chain zooms IN on the

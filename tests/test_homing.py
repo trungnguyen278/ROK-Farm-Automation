@@ -23,6 +23,8 @@ the camera; nothing was using that.
 import ast
 import inspect
 
+import pytest
+
 from rok_farm import flow_steps
 from rok_farm.flow_steps import GemFlowMixin, HOME_RADIUS_TILES
 
@@ -87,14 +89,46 @@ def test_the_city_is_read_the_moment_the_map_opens_on_it():
 
 
 class Reader(GemFlowMixin):
-    def __init__(self, pos, home_map=None):
+    def __init__(self, pos, home_map=None, misses=0):
         self._pos = pos
+        self._misses = misses
+        self.reads = 0
         self.mapmem = None
         if home_map:
             self._home_map_id = home_map
 
-    def _read_map_position(self, frame=None):
+    def _read_map_position(self, frame=None, full=False):
+        self.reads += 1
+        if self.reads <= self._misses:
+            return None
         return self._pos
+
+    def _grab(self):
+        return "frame"
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    monkeypatch.setattr(flow_steps.time, "sleep", lambda s: None)
+
+
+def test_a_hud_still_drawing_gets_another_look():
+    """2026-09-23 15:31:55: the first read as the map opened saw only the
+    resource total ('28.534.274'); the coordinates were not drawn yet."""
+    r = Reader(("4096", 577, 615), home_map="4096", misses=2)
+    assert r._learn_city("frame") == (577, 615)
+    assert r.reads == 3
+
+
+def test_the_book_keeps_the_city_across_restarts(tmp_path, monkeypatch):
+    """A farm restarted on the world map makes no city trip before its first
+    mines -- 2026-09-23 15:29 ran three of them with no sweep for want of it."""
+    import rok_farm.map_memory as mm
+    monkeypatch.setattr(mm, "MEM_DIR", tmp_path)
+    book = mm.MapMemory("4096")
+    book.set_city(577, 615)
+    again = mm.MapMemory("4096")
+    assert again.city == (577, 615)
 
 
 def test_the_city_read_sets_home_and_the_camera():

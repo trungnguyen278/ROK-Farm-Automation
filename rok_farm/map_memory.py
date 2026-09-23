@@ -82,6 +82,9 @@ class MapMemory:
             self.terrain = d.get("terrain", {})
             self.reach = d.get("reach", {})
             self.track = d.get("track", [])
+            city = d.get("city")
+            if city:
+                self.city = (int(city[0]), int(city[1]))
             logger.info("MapMemory %s: %d terrain cell(s), %d reach cell(s)",
                         self.map_id, len(self.terrain), len(self.reach))
         except Exception as e:
@@ -93,7 +96,9 @@ class MapMemory:
             MEM_DIR.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(
                 {"terrain": self.terrain, "reach": self.reach,
-                 "track": self.track}, indent=1),
+                 "track": self.track,
+                 "city": list(getattr(self, "city", None) or []) or None},
+                indent=1),
                 encoding="utf-8")
         except Exception as e:
             logger.warning("MapMemory save failed: %s", e)
@@ -372,8 +377,12 @@ class MapMemory:
     UNEXPLORED_FAR_FLOOR = 0.25
 
     def set_city(self, x: int, y: int) -> None:
-        """Where the sweep expands from. Learned, not configured."""
-        self.city = (int(x), int(y))
+        """Where the sweep expands from. Learned, not configured -- and kept
+        in the book, so a farm restarted on the world map still knows it."""
+        city = (int(x), int(y))
+        if getattr(self, "city", None) != city:
+            self.city = city
+            self.save()
 
     def _unexplored_worth(self, x: int, y: int) -> float:
         city = getattr(self, "city", None)
