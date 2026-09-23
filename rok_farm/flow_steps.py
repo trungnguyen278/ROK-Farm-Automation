@@ -366,8 +366,15 @@ class GemFlowMixin:
         # was measured there (the operator's condition for the survey), and
         # zoomed in a frame shows far less ground than it would claim.
         if getattr(self, "_pos_zoom_hint", None) == "icon":
-            self.mapmem.record_view(self._view_cells((x, y)),
-                                    self._icon_tiles((x, y), frame, icons))
+            gem_tiles = self._icon_tiles((x, y), frame, icons)
+            self.mapmem.record_view(self._view_cells((x, y)), gem_tiles)
+            # One line a view: which ground was on screen (the camera, with
+            # pan_model's footprint) and where gems stood on it. The book
+            # keeps only the latest visit per cell, so how soon gems come
+            # back to ground already looked at -- what SWEEP_STALE_H should
+            # be, still a starting value -- can only be measured from here.
+            logger.debug("view: cam %d,%d gems %s", x, y,
+                         ";".join(f"{gx},{gy}" for gx, gy in gem_tiles) or "-")
         else:
             self.mapmem.record_scan(x, y, found)
         # How far the camera claims to have moved since the last reading.
