@@ -43,6 +43,7 @@ from rok_farm.input_hid import HidInputMixin
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
 from rok_farm.persona import PersonaMixin
 from rok_farm.phases import PhasesMixin
+from rok_farm.map_edge import MapEdgeMixin
 from rok_farm.map_memory import MapMemory
 from rok_farm.queue_ocr import (DeployPanelMixin, GatherModelMixin,
                                 GemCounterMixin, MapPositionMixin,
@@ -58,7 +59,8 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
                     StateProbeMixin, DismissMixin, QueueMixin,
                     MapPositionMixin, DeployPanelMixin, GemCounterMixin,
                     GatherModelMixin, RecoveryMixin,
-                    GameLifecycleMixin, GemFlowMixin, PhasesMixin):
+                    GameLifecycleMixin, GemFlowMixin, PhasesMixin,
+                    MapEdgeMixin):
     """Live gem farm runner."""
 
     def __init__(self, port: str, count: int = 1, auto_learn: bool = False,
