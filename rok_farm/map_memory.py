@@ -296,12 +296,47 @@ class MapMemory:
                 if max(abs(p["city"][0] - city[0]),
                        abs(p["city"][1] - city[1])) <= tol]
 
+    # --- provinces ---
+    #
+    # The zones themselves, where the map has been surveyed: the minimap
+    # draws the kingdom's province lines, and tools/dev/minimap_zones.py
+    # --save turns them into the province of every book cell (home kingdom
+    # 4096, 2026-09-24: 10 provinces, the standard 6 + 3 + 1).
+
+    def _province_grid(self):
+        if not hasattr(self, "_provinces"):
+            self._provinces = None
+            path = MEM_DIR / f"{self.map_id}_provinces.png"
+            if path.exists():
+                import cv2
+                grid = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+                if grid is not None and grid.ndim == 2:
+                    self._provinces = grid
+        return self._provinces
+
+    def province_of(self, x: int, y: int) -> int | None:
+        """The province this tile lies in, or None (map not surveyed)."""
+        grid = self._province_grid()
+        if grid is None:
+            return None
+        i, j = int(x) // CELL, int(y) // CELL
+        if 0 <= j < grid.shape[0] and 0 <= i < grid.shape[1]:
+            return int(grid[j, i]) or None
+        return None
+
     def unreachable_at(self, x: int, y: int, city=None) -> bool:
         """Is this tile in ground we could not march to (from this city)?"""
-        pts = self._unreach_points(city if city is not None
-                                   else getattr(self, "city", None))
+        city = city if city is not None else getattr(self, "city", None)
+        pts = self._unreach_points(city)
         if not pts:
             return False
+        # A deposit out of reach puts its whole province out of reach -- the
+        # pass in the way closes all of it. Never the city's own province:
+        # it is always open to the city, and closing it would stop the sweep.
+        prov = self.province_of(x, y)
+        if prov is not None and prov != self.province_of(*city):
+            if prov in {self.province_of(px, py) for px, py in pts}:
+                return True
         r = self.UNREACH_RADIUS
         for px, py in pts:
             if max(abs(px - x), abs(py - y)) <= r:

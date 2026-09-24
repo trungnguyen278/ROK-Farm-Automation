@@ -255,7 +255,7 @@ def main() -> int:
             city = (577, 615) if map_id == "4096" else None
             cv2.imwrite(str(OUT / f"{map_id}_provinces.png"), draw_grid(grid, city))
             ids, counts = np.unique(grid[grid > 0], return_counts=True)
-            print(f"  book cells per province: " + ", ".join(
+            print("  book cells per province: " + ", ".join(
                 f"#{i} {c}" for i, c in sorted(zip(ids, counts), key=lambda t: -t[1])))
             if city:
                 print(f"  the city {city} is in province #{grid[city[1] // 8, city[0] // 8]}")
