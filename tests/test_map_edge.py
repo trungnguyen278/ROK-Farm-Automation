@@ -199,3 +199,24 @@ def test_a_leg_stays_well_under_the_gap_between_sizes():
     per_leg = 64 / 0.2 * map_edge.EDGE_LEG_FRAC
     assert per_leg * 1.77 < 240
     assert per_leg * 1.77 * 2 < map_edge.MISREAD_TILES < 196 * 9
+
+
+def test_the_dev_tool_keeps_a_minimap_crop_beside_every_read(tmp_path):
+    """With a folder, every read keeps the frame's top-right quarter and the
+    read that places it -- the minimap calibration's data. The farm's own
+    run passes no folder and keeps nothing."""
+    import numpy as np
+
+    class Filmed(World):
+        def _edge_frame(self, wait=4.0):
+            return np.zeros((863, 1534, 3), np.uint8)
+
+    res = Filmed(1200)._probe_map_size(tmp_path)
+    names = [n for n, _hud in res["frames"]]
+    assert names and all((tmp_path / n).exists() for n in names)
+    assert any(hud and hud[0] == "4096" for _n, hud in res["frames"])
+    import cv2
+    assert cv2.imread(str(tmp_path / names[0])).shape[:2] == (863 // 4, 1534 - 1534 * 3 // 4)
+    farm = Filmed(1200)
+    assert "frames" not in farm._probe_map_size()
+    assert farm._edge_keep_dir is None

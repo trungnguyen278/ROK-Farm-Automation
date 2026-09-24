@@ -93,7 +93,19 @@ class MapEdgeMixin:
             time.sleep(random.uniform(0.07, 0.11))
 
     def _edge_read(self):
-        return self._read_map_position(self._edge_frame(), full=True)
+        """The HUD's (map id, x, y) or None. With a keep folder set (the dev
+        tool), every read also keeps the frame's top-right quarter -- the
+        minimap and its viewport outline, beside the read that places them:
+        what calibrating the minimap to tiles needs."""
+        frame = self._edge_frame()
+        hud = self._read_map_position(frame, full=True)
+        keep = getattr(self, "_edge_keep_dir", None)
+        if keep is not None and frame is not None:
+            fh, fw = frame.shape[:2]
+            name = f"read_{len(self._edge_kept):03d}.png"
+            cv2.imwrite(str(Path(keep) / name), frame[:fh // 4, fw * 3 // 4:])
+            self._edge_kept.append([name, list(hud) if hud else None])
+        return hud
 
     def _edge_notch(self, direction: int) -> None:
         """One notch (-1 out, +1 in), the pointer near the centre."""
@@ -220,6 +232,13 @@ class MapEdgeMixin:
                     cv2.imwrite(str(Path(out_dir) / f"{name}.png"), frame)
 
         t0 = time.monotonic()
+        self._edge_keep_dir, self._edge_kept = out_dir, []
+        try:
+            return self._probe_map_size_walks(keep, t0)
+        finally:
+            self._edge_keep_dir = None
+
+    def _probe_map_size_walks(self, keep, t0) -> dict:
         start = self._edge_read()
         book = getattr(self, "mapmem", None)
         out, back, hud = self._edge_widest_readable()
@@ -245,11 +264,13 @@ class MapEdgeMixin:
         res["size"] = sx if sx is not None and sx == sy else None
         res["confident"] = res["size"] is not None and ends_ok
         res["seconds"] = round(time.monotonic() - t0, 1)
+        if self._edge_kept:
+            res["frames"] = self._edge_kept
         print(f"  [{INFO}] map {map_id}: east edge after X "
               f"{res['east'].get('last')} ({res['east']['ended']}), north edge "
               f"after Y {res.get('north', {}).get('last')} "
               f"({res.get('north', {}).get('ended')}) -> "
               f"{res['size'] or 'no agreed size'}"
               f"{'' if res['confident'] else ' (not confident)'}")
-        logger.info("Map size probe: %s", res)
+        logger.info("Map size probe: %s", {k: v for k, v in res.items() if k != "frames"})
         return res
