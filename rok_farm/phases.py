@@ -332,6 +332,11 @@ class PhasesMixin:
         """
         from rok_farm import ap_burn
 
+        if not ap_burn.enabled():
+            # Switched off (!ap off, --no-ap-burn): not even read, so the log
+            # never promises a spend that is not coming.
+            self._ap_pending = False
+            return -1.0
         fill = ap_burn.arc_fill(self._grab())
         if fill < 0:
             return fill
@@ -366,6 +371,11 @@ class PhasesMixin:
         from rok_farm.screenshots import save_screenshot
 
         if not getattr(self, "_ap_pending", False):
+            return False
+        if not ap_burn.enabled():
+            # Switched off between the reading in the city and this free slot.
+            self._ap_pending = False
+            logger.info("AP burn: switched off -- leaving the bar alone")
             return False
         fill = 1.0
 

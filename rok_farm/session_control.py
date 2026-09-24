@@ -458,6 +458,33 @@ def session_summary():
     return out
 
 
+def ap_burn_text():
+    """One line on the AP burn switch, for !ap and the menu."""
+    from rok_farm import ap_burn
+
+    on, at, by = ap_burn.switch_state()
+    when = f" (set {datetime.fromtimestamp(at):%Y-%m-%d %H:%M} by {by})" if at else ""
+    if on:
+        last, fill = ap_burn.last_run()
+        ran = (f" Last run {datetime.fromtimestamp(last):%m-%d %H:%M}, bar "
+               f"{fill * 100:.0f}%." if last else " It has not run yet.")
+        return (f"AP burn is ON{when}: with the bar {ap_burn.AP_BURN_AT * 100:.0f}%+ "
+                f"full and a march slot free, the farm sends the game's barbarian "
+                f"auto (needs the monthly pass).{ran} `!ap off` turns it off.")
+    return (f"AP burn is OFF{when}: the farm leaves the action points alone. "
+            f"`!ap on` turns it back on.")
+
+
+def do_ap_burn(on, by):
+    """Flip the switch. A running farm reads it at its next decision."""
+    from rok_farm import ap_burn
+
+    ap_burn.set_enabled(on, by)
+    blog(f"AP burn switched {'ON' if on else 'OFF'} by {by}")
+    return (f"AP burn is now {'ON' if on else 'OFF'}. A running farm picks this "
+            f"up at its next look at the bar -- no restart needed.")
+
+
 def do_report():
     try:
         r = subprocess.run(roles.command("report"), cwd=str(PROJECT),
@@ -474,6 +501,8 @@ HELP = """```
 !report          full run report from report.py
 !feed on|off     live progress: mines, marches, queue, gather-time maths
 !check           stop waiting and look at the queue now (troops home early)
+!ap              AP burn (the game's barbarian auto): on or off
+!ap on|off       switch it -- off for an account without the monthly pass
 !stats [period]  gems/hour since yesterday; or today, 24h, 7d, 2026-09-23
 !map [period]    map book: ground not reached, ground gone over (default today)
 !runs            today's runs out of the city, one line each

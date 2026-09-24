@@ -25,6 +25,10 @@ SECRETS_FILE = PROJECT_ROOT / "profiles" / "secrets.json"
 # --- Runtime knobs (rebound by main(); always read via the module) ---
 SAVE_SCREENSHOTS = True
 ICON_ZOOM_SCROLLS = 0
+# The barbarian auto (rok_farm/ap_burn.py). False keeps it off for this process
+# whatever the saved switch says -- run_farm.py --no-ap-burn. A farm started by
+# !start, the menu or the watchdog follows the saved switch (!ap on|off).
+AP_BURN_ENABLED = True
 
 # --- Thresholds ---
 GEM_ICON_THRESHOLD = 0.72

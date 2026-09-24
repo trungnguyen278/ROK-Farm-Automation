@@ -74,6 +74,10 @@ def main():
     parser.add_argument("--oracle-model", action="append", default=None,
                         help="Vision model id to try, repeatable; overrides the "
                              "default list in config.py")
+    parser.add_argument("--no-ap-burn", action="store_true",
+                        help="Never send the game's barbarian auto to spend action "
+                             "points (it needs the monthly pass). A farm started "
+                             "by !start follows the saved switch, !ap on|off")
     parser.add_argument("--profile", default=None,
                         help="behaviour profile to use (cautious/default/aggressive). Omit for the account's stable default.")
     args = parser.parse_args()
@@ -82,6 +86,8 @@ def main():
         cfg.SAVE_SCREENSHOTS = False
     if args.zoom_scrolls is not None:
         cfg.ICON_ZOOM_SCROLLS = args.zoom_scrolls
+    if args.no_ap_burn:
+        cfg.AP_BURN_ENABLED = False
 
     if args.find_only:
         run_find_only()

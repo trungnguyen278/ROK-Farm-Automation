@@ -76,6 +76,23 @@ def do_start() -> None:
     say(sc.do_start(with_watchdog=True))
 
 
+def do_ap_burn() -> None:
+    title(t("XẢ AP", "AP BURN"))
+    from rok_farm import ap_burn
+    on = ap_burn.switch_state()[0]
+    say(t("Xả AP đang BẬT: thanh AP đầy từ 80% và có slot trống thì farm bấm "
+          "đánh man rợ tự động của game (cần gói tháng)." if on else
+          "Xả AP đang TẮT: farm không đụng tới điểm hành động.",
+          "AP burn is ON: with the bar 80%+ full and a march slot free, the "
+          "farm starts the game's barbarian auto (needs the monthly pass)."
+          if on else "AP burn is OFF: the farm leaves the action points alone."))
+    ask_it = (t("Tắt xả AP? (acc chưa có gói tháng thì nên tắt)",
+                "Turn it off? (do, on an account without the monthly pass)")
+              if on else t("Bật lại xả AP?", "Turn it back on?"))
+    if confirm(ask_it, default=False):
+        say(sc.do_ap_burn(not on, "menu"))
+
+
 def do_stop() -> None:
     title(t("DỪNG FARM", "STOP THE FARM"))
     keep = not confirm(t("Đóng luôn Rise of Kingdoms?", "Close Rise of Kingdoms too?"),
@@ -141,6 +158,8 @@ ITEMS = [
     ("6", do_flash, ("Kiểm tra / nạp lại mạch ESP32",
                      "Check / re-flash the ESP32 board")),
     ("7", do_report, ("Báo cáo phiên vừa chạy", "Report on the last run")),
+    ("8", do_ap_burn, ("Xả AP (đánh man rợ tự động): bật / tắt",
+                       "AP burn (barbarian auto): on / off")),
 ]
 
 

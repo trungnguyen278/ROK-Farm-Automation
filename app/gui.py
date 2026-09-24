@@ -288,6 +288,17 @@ class App(tk.Tk):
                                    command=self.do_stop)
         self.btn_stop.pack(side="left", padx=8)
 
+        # The AP burn switch. Same file as !ap on|off, so the box is re-read
+        # on every refresh and a change from the phone shows up here.
+        self.ap_var = tk.BooleanVar(value=self._ap_on())
+        tk.Checkbutton(
+            row, variable=self.ap_var, command=self.do_ap_toggle,
+            text=t("Xả AP (đánh man rợ tự động, cần gói tháng)",
+                   "AP burn (barbarian auto, needs the monthly pass)"),
+            bg=BG, fg=FG, selectcolor=CARD, activebackground=BG,
+            activeforeground=FG, font=("Segoe UI", 10)
+        ).pack(side="left", padx=16)
+
         tk.Label(
             parent, bg=BG, fg=MUTED, justify="left", anchor="nw",
             font=("Segoe UI", 9), wraplength=780,
@@ -473,6 +484,15 @@ class App(tk.Tk):
                       "Start anyway?")):
                 return
         self.worker.start("start", lambda w: w(sc.do_start(with_watchdog=True)))
+
+    @staticmethod
+    def _ap_on() -> bool:
+        from rok_farm import ap_burn
+        return ap_burn.switch_state()[0]
+
+    def do_ap_toggle(self):
+        on = bool(self.ap_var.get())
+        self.worker.start("ap", lambda w: w(sc.do_ap_burn(on, "app")))
 
     def do_stop(self):
         if not sc.farm_procs() and not sc.wd_procs():
@@ -675,6 +695,8 @@ class App(tk.Tk):
                 f"Bot: đang chạy (pid {bot[0].pid})" if bot else "Bot: không chạy",
                 f"Bot: running (pid {bot[0].pid})" if bot else "Bot: not running"))
 
+            if self.ap_var.get() != self._ap_on():
+                self.ap_var.set(self._ap_on())
             self._refresh_board()
             self.dots.configure(text=t(
                 f"farm {'ON' if farm else 'off'}   bot {'ON' if bot else 'off'}",

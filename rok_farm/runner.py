@@ -417,6 +417,10 @@ class GemFarmRunner(PersonaMixin, HidInputMixin, CaptureMixin, DetectMixin,
         else:
             print(f"  Target mines: {self.count}")
         print(f"  Profile: {self._profile.get('name', 'default')}")
+        from rok_farm import ap_burn
+        ap_on = ap_burn.enabled()
+        print(f"  AP burn: {'on' if ap_on else 'OFF'}")
+        logger.info("AP burn is %s", "on" if ap_on else "OFF")
         print()
 
         try:

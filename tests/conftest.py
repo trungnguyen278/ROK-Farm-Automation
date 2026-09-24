@@ -30,3 +30,15 @@ def _map_books_stay_out_of_the_real_ones(tmp_path, monkeypatch):
     """
     import rok_farm.map_memory as mm
     monkeypatch.setattr(mm, "MEM_DIR", tmp_path / "map_knowledge")
+
+
+@pytest.fixture(autouse=True)
+def _ap_switch_stays_out_of_the_real_one(tmp_path, monkeypatch):
+    """Tests must not read or flip the live AP burn switch.
+
+    The operator turns it off for an account without the monthly pass. A test
+    that saved "off" there would stop the real farm's barbarian runs, and a
+    real "off" would change what every AP test sees.
+    """
+    from rok_farm import ap_burn
+    monkeypatch.setattr(ap_burn, "AP_SWITCH", tmp_path / "ap_burn_switch.json")

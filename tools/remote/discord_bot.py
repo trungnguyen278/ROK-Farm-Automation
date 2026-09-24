@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from rok_farm import PROJECT_ROOT as PROJECT
+from rok_farm import ap_burn
 from rok_farm import reports
 from rok_farm import session_control as sc
 from rok_farm import wake
@@ -49,6 +50,7 @@ from rok_farm.session_control import (       # noqa: F401
     SERIAL_PORT, START_SETTLE_S, START_SETTLE_WAIT_S, do_report, do_start,
     do_stop, farm_procs, find_procs, game_proc, idle_seconds, kill_tree,
     shutdown_board, spawn_detached, wait_until_idle, wd_procs,
+    ap_burn_text, do_ap_burn,
 )
 
 import discord
@@ -66,7 +68,7 @@ WATCH_POLL = 60.0
 # Every verb the handler below answers to, including the short aliases.
 KNOWN_CMDS = ("help", "h", "status", "s", "shot", "pic", "live", "log",
               "report", "feed", "check", "wake", "stats", "map", "run", "runs",
-              "start", "stop")
+              "ap", "start", "stop")
 
 # What a typo may be pointed AT. "start" and "stop" are deliberately absent.
 #
@@ -304,6 +306,7 @@ def status_spec():
          if farms else "**DOWN**", True),
         ("Watchdog", f"UP · pid {wds[0].pid}" if wds else "**DOWN**", True),
         ("Game", "UP" if game else "DOWN", True),
+        ("AP burn", "on" if ap_burn.enabled() else "**OFF**", True),
     ]
     attempts = c["done"] + c["failed"]
     rate = f" ({100.0 * c['done'] / attempts:.0f}%)" if attempts else ""
@@ -750,6 +753,15 @@ async def on_message(message):
                             "queue. It picks this up within a few seconds of "
                             "its next check; if it is mid-mine it will simply "
                             "finish that first.")
+
+        elif cmd == "ap":
+            # The operator's switch (2026-09-24): an account without the
+            # monthly pass has no barbarian auto to press.
+            if args and args[0] in ("on", "off"):
+                await reply(message, await asyncio.to_thread(
+                    do_ap_burn, args[0] == "on", f"Discord ({message.author})"))
+            else:
+                await reply(message, await asyncio.to_thread(ap_burn_text))
 
         elif cmd == "start":
             # Typing !start is itself input, so the old "was the machine used

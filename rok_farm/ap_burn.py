@@ -31,12 +31,13 @@ fine, and they did not want much spent on barbarians anyway.
 from __future__ import annotations
 
 import json
+import os
 import time
 
 import cv2
 import numpy as np
 
-from rok_farm import PROJECT_ROOT
+from rok_farm import PROJECT_ROOT, config
 
 # --- Where the buttons are -------------------------------------------------
 # Fixed positions, as the operator confirmed they are. Measured on a 1533x862
@@ -166,6 +167,49 @@ AP_MIN_GAP_S = (2400.0, 4800.0)
 # spending anything -- worth saying out loud rather than quietly retrying.
 AP_SPENT_EPS = 0.05
 AP_STATE = PROJECT_ROOT / "data" / "ap_burn.json"
+
+# --- The operator's switch -------------------------------------------------
+# 2026-09-24, "them lua chon tat xa ap di": their second account has no
+# monthly pass, and without it the auto this module presses is not there.
+#
+# A file, not only a command-line flag: !start, the menu and the watchdog all
+# start the farm with one fixed argv. Read at every decision rather than once
+# at startup, so "!ap off" reaches a farm that is already running. Kept apart
+# from AP_STATE because the farm rewrites that one after every run, and two
+# writers on one file lose each other's keys. No file means on -- what the
+# main account has always done.
+AP_SWITCH = PROJECT_ROOT / "data" / "ap_burn_switch.json"
+
+
+def switch_state() -> tuple[bool, float, str]:
+    """(on, when it was set, who set it). On when nothing was ever saved."""
+    try:
+        d = json.loads(AP_SWITCH.read_text(encoding="utf-8"))
+        return bool(d.get("on", True)), float(d.get("at", 0.0)), str(d.get("by", ""))
+    except FileNotFoundError:
+        return True, 0.0, ""
+    except Exception:
+        # set_enabled replaces the file whole, so an unreadable one is damage.
+        # Pressing buttons on an account that may not have them is the worse
+        # way to be wrong.
+        return False, 0.0, "unreadable switch file"
+
+
+def enabled() -> bool:
+    """May the farm spend action points at all?"""
+    if not config.AP_BURN_ENABLED:
+        return False
+    return switch_state()[0]
+
+
+def set_enabled(on: bool, by: str = "") -> None:
+    """Save the switch. Written aside and moved into place, so the farm never
+    reads half a file."""
+    AP_SWITCH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = AP_SWITCH.with_name(AP_SWITCH.name + ".tmp")
+    tmp.write_text(json.dumps({"on": bool(on), "at": time.time(), "by": by}),
+                   encoding="utf-8")
+    os.replace(tmp, AP_SWITCH)
 
 
 def _arc_pixels(frame):
