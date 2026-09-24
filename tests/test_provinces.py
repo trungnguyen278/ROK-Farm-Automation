@@ -119,3 +119,59 @@ def test_a_closed_province_opens_again_after_the_reach_half_life(books):
     assert not b.unreachable_at(1000, 300), "not even its own disc"
     b.record_unreachable((1000, 300), CITY)
     assert b.unreachable_at(1150, 1150)
+
+
+# --- The city's own province, from where its marches went ------------------
+# 3560, 2026-09-24: the city 6 tiles from a pass, the surveyed line 20-30
+# tiles off, and the grid gave the city the province the pass closes -- four
+# refused deposits there and one that went, never closed.
+
+def test_the_city_province_is_where_its_marches_went(books):
+    survey(books)
+    b = MapMemory("4096")
+    b.set_city(*CITY)                          # the grid: province 3
+    for site in [(300, 300), (200, 900), (400, 500)]:
+        b.record_reached(site, CITY)           # province 1
+    assert b.own_province(CITY) == 1
+    b.record_unreachable((620, 620), CITY)     # the grid's city square
+    assert b.unreachable_at(560, 670), "3 is not the city's own after all"
+    assert not b.unreachable_at(100, 1000), "where the marches went"
+
+
+def test_a_province_stays_open_while_more_went_than_were_refused(books):
+    survey(books)
+    b = MapMemory("4096")
+    b.set_city(*CITY)
+    for site in [(300, 300), (200, 900), (400, 500), (1000, 300)]:
+        b.record_reached(site, CITY)           # 1, 1, 1 and 2
+    b.record_unreachable((1000, 1000), CITY)   # 2
+    assert not b.unreachable_at(1150, 600), "one went, one refused"
+    b.record_unreachable((1100, 1100), CITY)
+    assert b.unreachable_at(1150, 600), "two refused, one went"
+
+
+def test_without_a_march_the_grid_names_the_city_province(books):
+    survey(books)
+    b = MapMemory("4096")
+    b.set_city(*CITY)
+    assert b.own_province(CITY) == 3
+    b.record_unreachable((620, 620), CITY)
+    assert not b.unreachable_at(560, 670)
+
+
+def test_marches_that_went_are_kept_and_follow_the_city(books):
+    survey(books)
+    b = MapMemory("4096")
+    b.set_city(*CITY)
+    b.record_reached((300, 300), CITY)
+    assert MapMemory("4096").own_province(CITY) == 1
+    b.set_city(900, 900)
+    assert b._reached_points((900, 900)) == []
+
+
+def test_the_mine_records_each_march_that_went():
+    import inspect
+    from rok_farm.flow_steps import GemFlowMixin
+    src = inspect.getsource(GemFlowMixin)
+    at = src.index('logger.info("Marched to deposit %s %d:%d"')
+    assert "record_reached" in src[at:at + 600]

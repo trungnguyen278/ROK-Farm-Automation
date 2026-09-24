@@ -131,6 +131,7 @@ class MapMemory:
             if city:
                 self.city = (int(city[0]), int(city[1]))
             self.unreachable = d.get("unreachable", [])
+            self.reached = d.get("reached", [])
             # A KvK map's size as learned -- or as the operator wrote it in
             # the file with the farm stopped. A home map's is not a question.
             if not is_home_map(self.map_id):
@@ -155,6 +156,7 @@ class MapMemory:
                  "track": self.track,
                  "city": list(getattr(self, "city", None) or []) or None,
                  "unreachable": getattr(self, "unreachable", []),
+                 "reached": getattr(self, "reached", []),
                  "size": self.size, "size_measured": self.size_measured,
                  "size_probe_t": self.size_probe_t,
                  "size_probe_tries": self.size_probe_tries},
@@ -293,21 +295,59 @@ class MapMemory:
         self.unreachable = pts
         self.save()
 
+    # Marches that went, kept like the refused ones: the evidence of which
+    # province the city is in.
+    REACHED_KEEP = 200
+
+    def record_reached(self, site, city):
+        """A march that went: its province is open from this city."""
+        pts = list(getattr(self, "reached", []))[-(self.REACHED_KEEP - 1):]
+        pts.append({"x": int(site[0]), "y": int(site[1]), "t": time.time(),
+                    "city": [int(city[0]), int(city[1])]})
+        self.reached = pts
+        self.save()
+
+    def _points_from(self, key, city, now: float | None = None):
+        if not city:
+            return []
+        now = time.time() if now is None else now
+        tol = self.UNREACH_CITY_TOL
+        fresh = REACH_HALFLIFE_H * 3600.0
+        return [(p["x"], p["y"]) for p in getattr(self, key, [])
+                if max(abs(p["city"][0] - city[0]),
+                       abs(p["city"][1] - city[1])) <= tol
+                and now - p.get("t", now) <= fresh]
+
     def _unreach_points(self, city, now: float | None = None):
         """Out-of-reach deposits recorded from this city, in the last
         REACH_HALFLIFE_H: a pass changes hands, and one deposit now closes
         its whole province -- kept for ever, a pass the alliance takes
         would never open it again. Still closed, the next march there
         records it afresh."""
-        if not city:
-            return []
-        now = time.time() if now is None else now
-        tol = self.UNREACH_CITY_TOL
-        fresh = REACH_HALFLIFE_H * 3600.0
-        return [(p["x"], p["y"]) for p in getattr(self, "unreachable", [])
-                if max(abs(p["city"][0] - city[0]),
-                       abs(p["city"][1] - city[1])) <= tol
-                and now - p.get("t", now) <= fresh]
+        return self._points_from("unreachable", city, now)
+
+    def _reached_points(self, city, now: float | None = None):
+        """Deposits marched to from this city, in the last REACH_HALFLIFE_H."""
+        return self._points_from("reached", city, now)
+
+    def own_province(self, city):
+        """The city's province: the one most of its marches went to.
+
+        The minimap draws a province line to a pixel -- 9 to 13 tiles -- and
+        a city beside a pass sits on that line. 3560, 2026-09-24: the city
+        6 tiles from the pass at 1126:554, and the surveyed line ran 20-30
+        tiles south of the true one, so the grid gave the city the province
+        the pass closes -- with four refused deposits in it and one that
+        went, never closed, because it was "the city's own". Without a march
+        yet, the grid's cell."""
+        votes: dict[int, int] = {}
+        for x, y in self._reached_points(city):
+            prov = self.province_of(x, y)
+            if prov:
+                votes[prov] = votes.get(prov, 0) + 1
+        if votes:
+            return max(votes, key=votes.get)
+        return self.province_of(*city) if city else None
 
     # --- provinces ---
     #
@@ -363,11 +403,16 @@ class MapMemory:
         if not pts:
             return False
         # A deposit out of reach puts its whole province out of reach -- the
-        # pass in the way closes all of it. Never the city's own province:
-        # it is always open to the city, and closing it would stop the sweep.
+        # pass in the way closes all of it -- while more marches there were
+        # refused than went (a line a pixel off puts a few that went on the
+        # wrong side of it). Never the city's own province: it is always open
+        # to the city, and closing it would stop the sweep.
         prov = self.province_of(x, y)
-        if prov is not None and prov != self.province_of(*city):
-            if prov in {self.province_of(px, py) for px, py in pts}:
+        if prov is not None and prov != self.own_province(city):
+            refused = sum(1 for px, py in pts if self.province_of(px, py) == prov)
+            went = sum(1 for px, py in self._reached_points(city)
+                       if self.province_of(px, py) == prov)
+            if refused > went:
                 return True
         r = self.UNREACH_RADIUS
         for px, py in pts:
@@ -652,10 +697,11 @@ class MapMemory:
             self.city = city
             # Ground out of reach from where the city WAS says nothing about
             # where it is now.
-            self.unreachable = [
-                p for p in getattr(self, "unreachable", [])
-                if max(abs(p["city"][0] - city[0]),
-                       abs(p["city"][1] - city[1])) <= self.UNREACH_CITY_TOL]
+            for key in ("unreachable", "reached"):
+                setattr(self, key, [
+                    p for p in getattr(self, key, [])
+                    if max(abs(p["city"][0] - city[0]),
+                           abs(p["city"][1] - city[1])) <= self.UNREACH_CITY_TOL])
             self.save()
 
     def _unexplored_worth(self, x: int, y: int) -> float:

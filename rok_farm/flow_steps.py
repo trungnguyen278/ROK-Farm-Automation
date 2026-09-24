@@ -1034,6 +1034,11 @@ class GemFlowMixin:
             print(f"  [{INFO}] Marched to {sx}:{sy} "
                   f"({len(self._marched_sites)} deposit(s) this session)")
             logger.info("Marched to deposit %s %d:%d", mid, sx, sy)
+            # Which province the city is really in (MapMemory.own_province).
+            city = getattr(self, "_city_xy", None)
+            book = getattr(self, "mapmem", None)
+            if book is not None and city and mid == book.map_id:
+                book.record_reached((sx, sy), city)
             self._pending_site = None
             # Onto the march's own record, which is saved and reloaded: the
             # session list died with every restart, and a restart while an
