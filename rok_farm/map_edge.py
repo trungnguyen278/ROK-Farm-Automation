@@ -36,6 +36,7 @@ import cv2
 
 from rok_farm.config import ZOOM_OUT_QUIET_DIFF
 from rok_farm.logging_setup import INFO, logger
+from rok_farm import minimap
 from rok_farm.map_memory import MAP_SIZES
 
 # A leg is two drags of this fraction of the window. At the widest readable
@@ -57,6 +58,15 @@ FOG_READS = 3
 # most HELD_TILES on the axis walked.
 HELD_LEGS = 2
 HELD_TILES = 2
+# What a leg moves at the widest readable zoom, measured on the home
+# kingdom's three runs (2026-09-24): 96-97 tiles east, 76-78 north.
+LEG_TILES_X = 96
+LEG_TILES_Y = 77
+# The spread walk (only when the home minimap calibration does not fit a
+# map): columns this far apart, each this long, capped in legs.
+SPREAD_COLUMNS = 3
+SPREAD_COLUMN_FRAC = 0.7
+SPREAD_LEGS_MAX = 60
 # A read further on than this from the last one is a stray digit, not a leg:
 # two legs (one unreadable in between) at the 1.77x drag error are ~340
 # tiles, the digit collision multiplies Y by ten (196 read as 1965).
@@ -93,18 +103,22 @@ class MapEdgeMixin:
             time.sleep(random.uniform(0.07, 0.11))
 
     def _edge_read(self):
-        """The HUD's (map id, x, y) or None. With a keep folder set (the dev
-        tool), every read also keeps the frame's top-right quarter -- the
-        minimap and its viewport outline, beside the read that places them:
-        what calibrating the minimap to tiles needs."""
+        """The HUD's (map id, x, y) or None. Every read can also keep the
+        frame's top-right quarter -- the minimap and its view outline beside
+        the read that places them, what rok_farm.minimap builds provinces
+        from: in memory while _edge_crops is a list (the farm), on disk with
+        a keep folder set (the dev tools)."""
         frame = self._edge_frame()
         hud = self._read_map_position(frame, full=True)
-        keep = getattr(self, "_edge_keep_dir", None)
-        if keep is not None and frame is not None:
-            fh, fw = frame.shape[:2]
-            name = f"read_{len(self._edge_kept):03d}.png"
-            cv2.imwrite(str(Path(keep) / name), frame[:fh // 4, fw * 3 // 4:])
-            self._edge_kept.append([name, list(hud) if hud else None])
+        if frame is not None:
+            crops = getattr(self, "_edge_crops", None)
+            if crops is not None:
+                crops.append((minimap.crop_of(frame).copy(), hud))
+            keep = getattr(self, "_edge_keep_dir", None)
+            if keep is not None:
+                name = f"read_{len(self._edge_kept):03d}.png"
+                cv2.imwrite(str(Path(keep) / name), minimap.crop_of(frame))
+                self._edge_kept.append([name, list(hud) if hud else None])
         return hud
 
     def _edge_notch(self, direction: int) -> None:
@@ -274,3 +288,65 @@ class MapEdgeMixin:
               f"{'' if res['confident'] else ' (not confident)'}")
         logger.info("Map size probe: %s", {k: v for k, v in res.items() if k != "frames"})
         return res
+
+
+    def _edge_spread(self, map_id: str, size: int) -> int:
+        """Legs over the map for a minimap fit of its own: back onto it from
+        past its north edge, then columns south and north a third of the map
+        apart, going west. A column ends early off the map (two reads in a
+        row of another id, or blank). Returns the legs walked."""
+        legs = 0
+        if not self._edge_back_onto(1, map_id):
+            return legs
+        col = max(1, round(SPREAD_COLUMN_FRAC * size / LEG_TILES_Y))
+        step = max(1, round(size / SPREAD_COLUMNS / LEG_TILES_X))
+        sign = -1                                   # the first column goes south
+        for c in range(SPREAD_COLUMNS):
+            off = 0
+            for _leg in range(col):
+                if legs >= SPREAD_LEGS_MAX:
+                    return legs
+                self._edge_leg(*self._edge_leg_for(1, sign))
+                legs += 1
+                hud = self._edge_read()
+                off = off + 1 if not hud or hud[0] != map_id else 0
+                if off >= 2:
+                    break
+            if c + 1 < SPREAD_COLUMNS:
+                for _leg in range(step):
+                    if legs >= SPREAD_LEGS_MAX:
+                        return legs
+                    self._edge_leg(*self._edge_leg_for(0, -1))
+                    legs += 1
+                    self._edge_read()
+            sign = -sign
+        return legs
+
+    def _survey_map(self, city=None, out_dir: Path | None = None) -> dict:
+        """The map's size and its provinces in one trip: the size probe with
+        its minimap crops kept, and the provinces built from them
+        (rok_farm.minimap). Where the home calibration does not fit this
+        map, a spread walk first, for a fit of its own. Leaves the camera
+        zoomed out -- the caller comes back through the city."""
+        self._edge_crops = []
+        try:
+            res = self._probe_map_size(out_dir)
+            map_id = res.get("map_id")
+            size = res.get("size") if res.get("confident") else None
+            if size is None or map_id is None:
+                res["provinces"] = {"error": "no confident size"}
+                return res
+            prov = minimap.build(self._edge_crops, map_id, size, city)
+            if prov.get("stage") in ("crops", "calibrate"):
+                if out_dir is not None:
+                    self._edge_keep_dir = out_dir       # the dev tool keeps these too
+                res["spread_legs"] = self._edge_spread(map_id, size)
+                prov = minimap.build(self._edge_crops, map_id, size, city)
+            res["provinces"] = prov
+            print(f"  [{INFO}] map {map_id}: "
+                  + (f"{prov['provinces']} provinces ({prov['how']})" if "grid" in prov
+                     else f"no provinces -- {prov['error']}"))
+            return res
+        finally:
+            self._edge_crops = None
+            self._edge_keep_dir = None

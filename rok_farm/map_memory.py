@@ -114,6 +114,7 @@ class MapMemory:
         # more -- and when that was last tried.
         self.size_measured = False
         self.size_probe_t = 0.0
+        self.size_probe_tries = 0
         self.load()
 
     # --- persistence ---
@@ -137,6 +138,7 @@ class MapMemory:
                     self.size = int(d["size"])
                 self.size_measured = bool(d.get("size_measured"))
                 self.size_probe_t = float(d.get("size_probe_t") or 0.0)
+                self.size_probe_tries = int(d.get("size_probe_tries") or 0)
             logger.info("MapMemory %s: %d terrain cell(s), %d reach cell(s)",
                         self.map_id, len(self.terrain), len(self.reach))
         except Exception as e:
@@ -152,7 +154,8 @@ class MapMemory:
                  "city": list(getattr(self, "city", None) or []) or None,
                  "unreachable": getattr(self, "unreachable", []),
                  "size": self.size, "size_measured": self.size_measured,
-                 "size_probe_t": self.size_probe_t},
+                 "size_probe_t": self.size_probe_t,
+                 "size_probe_tries": self.size_probe_tries},
                 indent=1),
                 encoding="utf-8")
         except Exception as e:
@@ -313,6 +316,13 @@ class MapMemory:
                 if grid is not None and grid.ndim == 2:
                     self._provinces = grid
         return self._provinces
+
+    def has_provinces(self) -> bool:
+        return self._province_grid() is not None
+
+    def reload_provinces(self) -> None:
+        """Read the province file again (a survey has just written it)."""
+        self.__dict__.pop("_provinces", None)
 
     def province_of(self, x: int, y: int) -> int | None:
         """The province this tile lies in, or None (map not surveyed)."""

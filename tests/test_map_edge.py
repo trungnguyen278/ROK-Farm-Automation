@@ -220,3 +220,76 @@ def test_the_dev_tool_keeps_a_minimap_crop_beside_every_read(tmp_path):
     farm = Filmed(1200)
     assert "frames" not in farm._probe_map_size()
     assert farm._edge_keep_dir is None
+
+
+# --- the one-trip survey: size and provinces --------------------------------
+
+class Filmed(World):
+    def _edge_frame(self, wait=4.0):
+        import numpy as np
+        return np.zeros((863, 1534, 3), np.uint8)
+
+
+def fake_build(monkeypatch, answers):
+    """map_edge's minimap.build answers in turn; returns the calls seen."""
+    calls = []
+
+    def build(items, map_id, size, city=None):
+        calls.append((len(items), map_id, size, city))
+        return answers[min(len(calls), len(answers)) - 1]
+    monkeypatch.setattr(map_edge.minimap, "build", build)
+    return calls
+
+
+GRID = {"grid": [[1]], "how": "home calibration scaled to 1200", "fit_px": 0.2,
+        "provinces": 1, "H": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "crops": 9}
+
+
+def test_the_survey_builds_provinces_from_the_probe_own_crops(monkeypatch):
+    calls = fake_build(monkeypatch, [GRID])
+    w = Filmed(1200)
+    res = w._survey_map(city=(577, 615))
+    assert res["size"] == 1200 and res["provinces"] is GRID
+    assert len(calls) == 1 and calls[0][1:] == ("4096", 1200, (577, 615))
+    assert calls[0][0] >= 10, "the walks' crops went to the build"
+    assert "spread_legs" not in res
+    assert w._edge_crops is None, "nothing kept after the trip"
+
+
+def test_a_calibration_that_fails_gets_a_spread_walk_then_a_second_build(monkeypatch):
+    calls = fake_build(monkeypatch, [{"error": "not spread", "stage": "calibrate"}, GRID])
+    w = Filmed(1440, map_id="S20001")
+    res = w._survey_map()
+    assert res["spread_legs"] > 0 and len(calls) == 2
+    assert calls[1][0] > calls[0][0], "the spread walk added crops"
+    assert res["provinces"] is GRID
+
+
+def test_a_segmentation_failure_is_not_walked_for(monkeypatch):
+    fake_build(monkeypatch, [{"error": "1 province(s)", "stage": "segment"}])
+    res = Filmed(1200)._survey_map()
+    assert "spread_legs" not in res and res["provinces"]["stage"] == "segment"
+
+
+def test_no_confident_size_no_provinces(monkeypatch):
+    calls = fake_build(monkeypatch, [GRID])
+    res = Filmed(2400, map_id="S20001", per_leg=10)._survey_map()
+    assert not res["confident"] and "error" in res["provinces"] and not calls
+
+
+def test_the_spread_walk_crosses_the_map_in_columns():
+    w = World(1200, start=(1100, 1250), fog_north=True)    # past the north edge
+    w.z = READABLE
+    w._edge_crops = None
+    xs = []
+    orig = w._edge_read
+
+    def read():
+        hud = orig()
+        if hud and hud[0] == "4096":
+            xs.append(hud[1])
+        return hud
+    w._edge_read = read
+    legs = w._edge_spread("4096", 1200)
+    assert 0 < legs <= map_edge.SPREAD_LEGS_MAX
+    assert max(xs) - min(xs) >= 600, "columns a third of the map apart, going west"

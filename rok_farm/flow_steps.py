@@ -28,6 +28,7 @@ from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
                              ZOOM_IN_WINDOW_S, ZOOM_POLL_MAX)
 from rok_farm import pan_model
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
+from rok_farm import minimap
 from rok_farm.map_memory import (CELL as CELL_TILES, HOME_TILES, MAP_SIZES,
                                  MapMemory, is_home_map)
 from rok_farm.queue_ocr import button_verdict, read_button_text
@@ -268,30 +269,36 @@ class GemFlowMixin:
     # next one to agree (see _map_sync): a scan step moves 6-29 tiles.
     MISREAD_JUMP_TILES = 60
 
-    # A failed size probe is tried again after this long: a popup or a lost
-    # frame is worth another go, the same failure every mine is not.
+    # A failed map survey is tried again after this long -- a popup or a
+    # lost frame is worth another go, the same failure every mine is not --
+    # and at most this many times a map.
     SIZE_PROBE_RETRY_S = 6 * 3600.0
+    SIZE_PROBE_MAX_TRIES = 3
 
     def _maybe_probe_map_size(self, tag: str) -> bool:
-        """Measure a KvK map at its top-right corner, once (map_edge).
+        """Survey a KvK map once: its size and its provinces (map_edge,
+        minimap), until both are known or the tries run out.
 
         Runs at the start of a mine from the world map, and brings the view
         back to icon zoom through the city -- the road whose end is known.
         False only if that road failed, and so the mine cannot go on.
         """
         book = getattr(self, "mapmem", None)
-        if (book is None or is_home_map(book.map_id) or book.size_measured
+        if (book is None or is_home_map(book.map_id)
+                or (book.size_measured and book.has_provinces())
+                or book.size_probe_tries >= self.SIZE_PROBE_MAX_TRIES
                 or time.time() - book.size_probe_t < self.SIZE_PROBE_RETRY_S):
             return True
         book.size_probe_t = time.time()
+        book.size_probe_tries += 1
         book.save()
-        print(f"  [{INFO}] Map {book.map_id}: measuring its size -- out to "
-              f"its east and north edges")
+        print(f"  [{INFO}] Map {book.map_id}: measuring its size and zones -- "
+              f"out to its east and north edges")
         res: dict = {}
         try:
-            res = self._probe_map_size()
+            res = self._survey_map(city=getattr(self, "_city_xy", None))
         except Exception as e:
-            logger.warning("map size probe failed: %s", e)
+            logger.warning("map survey failed: %s", e)
         self._toggle_view(f"{tag}: back from the map's edge")
         self._wait(random.uniform(2.5, 3.5))
         self._view_is_world = False
@@ -306,6 +313,15 @@ class GemFlowMixin:
                            res.get("error") or {k: res.get(k) for k in
                                                 ("map_id", "size", "confident")},
                            book.size)
+        prov = res.get("provinces") or {}
+        if "grid" in prov and res.get("map_id") == book.map_id and book.size_measured:
+            minimap.save(prov, book.map_id)
+            book.reload_provinces()
+            logger.info("Map %s: %d provinces from the minimap (%s, %.2f px)",
+                        book.map_id, prov["provinces"], prov["how"], prov["fit_px"])
+        elif prov:
+            logger.warning("Map %s: no provinces (%s)", book.map_id,
+                           prov.get("error"))
         return back
 
     def _note_unproven_edge(self) -> None:
