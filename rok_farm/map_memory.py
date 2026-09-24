@@ -291,13 +291,21 @@ class MapMemory:
         self.unreachable = pts
         self.save()
 
-    def _unreach_points(self, city):
+    def _unreach_points(self, city, now: float | None = None):
+        """Out-of-reach deposits recorded from this city, in the last
+        REACH_HALFLIFE_H: a pass changes hands, and one deposit now closes
+        its whole province -- kept for ever, a pass the alliance takes
+        would never open it again. Still closed, the next march there
+        records it afresh."""
         if not city:
             return []
+        now = time.time() if now is None else now
         tol = self.UNREACH_CITY_TOL
+        fresh = REACH_HALFLIFE_H * 3600.0
         return [(p["x"], p["y"]) for p in getattr(self, "unreachable", [])
                 if max(abs(p["city"][0] - city[0]),
-                       abs(p["city"][1] - city[1])) <= tol]
+                       abs(p["city"][1] - city[1])) <= tol
+                and now - p.get("t", now) <= fresh]
 
     # --- provinces ---
     #

@@ -104,3 +104,18 @@ def test_the_home_kingdom_survey_puts_the_city_in_the_centre():
     ids, counts = np.unique(grid[grid > 0], return_counts=True)
     assert len(ids) == 10
     assert grid[615 // CELL, 577 // CELL] == ids[np.argmin(counts)]
+
+
+def test_a_closed_province_opens_again_after_the_reach_half_life(books):
+    """A pass changes hands: after REACH_HALFLIFE_H the deposit no longer
+    closes anything; still closed, the next march there records it again."""
+    import time
+    survey(books)
+    b = MapMemory("4096")
+    b.set_city(*CITY)
+    b.record_unreachable((1000, 300), CITY)
+    b.unreachable[-1]["t"] = time.time() - (mm.REACH_HALFLIFE_H * 3600 + 60)
+    assert not b.unreachable_at(1150, 1150)
+    assert not b.unreachable_at(1000, 300), "not even its own disc"
+    b.record_unreachable((1000, 300), CITY)
+    assert b.unreachable_at(1150, 1150)
