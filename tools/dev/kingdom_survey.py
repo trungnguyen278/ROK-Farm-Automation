@@ -83,10 +83,91 @@ def raw_frame(r, wait=4.0):
     return None
 
 
+def zoom_until(r, direction: int, want_hud: bool, max_notches: int = 24):
+    """Scroll one notch at a time (-1 out, +1 in) until the HUD position
+    reads (want_hud) or stops reading (not want_hud). Returns (notches
+    scrolled, the HUD read at the stop, the last HUD read before it)."""
+    last_read = r._read_map_position(raw_frame(r))
+    for n in range(1, max_notches + 1):
+        r._scroll_at_center(direction, 1)
+        time.sleep(random.uniform(0.35, 0.6))
+        wait_still(r)
+        hud = r._read_map_position(raw_frame(r))
+        if (hud is not None) == want_hud:
+            return n, hud, last_read
+        if hud is not None:
+            last_read = hud
+    return max_notches, None, last_read
+
+
+def zoom_to_limit(r, max_notches: int = 24) -> int:
+    """Out until the frame stops changing; returns the notches scrolled."""
+    prev = raw_frame(r)
+    still = 0
+    for n in range(1, max_notches + 1):
+        r._scroll_at_center(-1, 1)
+        time.sleep(random.uniform(0.35, 0.6))
+        wait_still(r)
+        frame = raw_frame(r)
+        diff = float(np.mean(cv2.absdiff(cv2.resize(prev, (320, 180)),
+                                         cv2.resize(frame, (320, 180)))))
+        prev = frame
+        still = still + 1 if diff < STILL_DIFF else 0
+        if still >= 2:
+            return n
+    return max_notches
+
+
+def calibrate_leg(r, dx_frac: float, dy_frac: float, out_dir: Path, tag: str):
+    """One calibration: HUD at the far edge of readable, out to the limit,
+    a measured drag (two halves, pointer kept off the window's edge), in
+    until the HUD reads again. Tiles moved over pixels dragged."""
+    from capture.screen_info import get_cursor_pos
+    win = r.win
+    n_out, _hud, before = zoom_until(r, -1, want_hud=False)
+    zoom_to_limit(r)
+    cv2.imwrite(str(out_dir / f"{tag}_limit_before.png"), raw_frame(r))
+    cx = win["left"] + win["width"] // 2
+    cy = win["top"] + win["height"] // 2
+    hx, hy = int(win["width"] * dx_frac / 2), int(win["height"] * dy_frac / 2)
+    total = [0, 0]
+    for _half in range(2):
+        sx, sy = cx + hx // 2, cy + hy // 2
+        ex, ey = cx - hx // 2, cy - hy // 2
+        r._moveto(sx, sy)
+        time.sleep(random.uniform(0.12, 0.3))
+        c0 = get_cursor_pos()
+        r._human_drag(c0[0], c0[1], ex, ey, speed_factor=random.uniform(1.0, 1.4),
+                      hold_ms=random.randint(320, 480))
+        c1 = get_cursor_pos()
+        total[0] += c1[0] - c0[0]
+        total[1] += c1[1] - c0[1]
+        wait_still(r)
+    cv2.imwrite(str(out_dir / f"{tag}_limit_after.png"), raw_frame(r))
+    n_in, after, _last = zoom_until(r, +1, want_hud=True)
+    res = {"tag": tag, "hud_before": before, "hud_after": after,
+           "drag_px": total, "notches_out_to_blank": n_out,
+           "notches_in_to_read": n_in}
+    if before and after and before[0] == after[0]:
+        dX, dY = after[1] - before[1], after[2] - before[2]
+        res["tiles"] = [dX, dY]
+        # The pointer dragged left moves the camera east: tiles and pixels
+        # run opposite ways in X, and (screen down = -Y) the same way in Y.
+        if abs(total[0]) > 100 and dX:
+            res["px_per_tile_x"] = round(-total[0] / dX, 3)
+        if abs(total[1]) > 100 and dY:
+            res["px_per_tile_y"] = round(total[1] / dY, 3)
+    print(f"  {tag}: {res}")
+    return res
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--max-steps", type=int, default=14)
     ap.add_argument("--keep-game", action="store_true")
+    ap.add_argument("--calibrate", type=int, default=0, metavar="N",
+                    help="instead of the walk out: N pairs of calibration "
+                         "drags (one across, one down) at the zoom limit")
     args = ap.parse_args()
 
     from rok_farm import session_control as sc
@@ -120,8 +201,15 @@ def main() -> int:
                       "diff": None})
         cv2.imwrite(str(out_dir / "step_00.png"), prev)
         print(f"  start {start}, gauge {steps[0]['gauge']}, saving to {out_dir}")
+        calibration = []
+        for k in range(args.calibrate):
+            # Alternate the way, so the camera wanders back and stays on the
+            # map: ~0.3 of the window is a few hundred tiles at the limit.
+            sign = 1 if k % 2 == 0 else -1
+            calibration.append(calibrate_leg(r, 0.3 * sign, 0.0, out_dir, f"x{k}"))
+            calibration.append(calibrate_leg(r, 0.0, 0.3 * sign, out_dir, f"y{k}"))
         still = 0
-        for n in range(1, args.max_steps + 1):
+        for n in range(1, 0 if args.calibrate else args.max_steps + 1):
             if not r._ensure_game_focused("kingdom survey"):
                 print("[FAIL] lost the foreground -- stopping the walk out")
                 break
@@ -154,7 +242,8 @@ def main() -> int:
         (out_dir / "survey.json").write_text(json.dumps(
             {"when": datetime.now().isoformat(timespec="seconds"),
              "client": [r.win["width"], r.win["height"]],
-             "steps": steps, "restored_gauge": gauge}, indent=1),
+             "steps": steps, "calibration": calibration,
+             "restored_gauge": gauge}, indent=1),
             encoding="utf-8")
         print(f"  saved {len(steps)} step(s) to {out_dir}")
         return 0
