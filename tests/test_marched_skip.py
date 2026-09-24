@@ -83,7 +83,9 @@ def test_a_duplicate_is_left_behind():
     src = inspect.getsource(GemFlowMixin._step_click_gather)
     dup = src[src.index("Duplicate deposit %s"):]
     dup = dup[:dup.index("return False")]
-    assert "_press_escape()" in dup and "_return_to_icon_zoom(" in dup
+    # The back-out itself -- dismiss, undo the zoom, pan away -- is driven
+    # for real in tests/test_gather_refusal_backs_out.py.
+    assert "_back_out_of_popup()" in dup
 
 
 def test_a_deposit_tried_and_found_unusable_is_left_alone_by_its_tile():

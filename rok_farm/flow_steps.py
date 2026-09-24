@@ -2013,6 +2013,7 @@ class GemFlowMixin:
                                    read_button_text(frame, m.x, m.y, m.w, m.h),
                                    m.confidence)
                     save_screenshot(frame, f"{tag}_WRONG_BUTTON_{attempt:02d}")
+                    self._back_out_of_popup()
                     self._record(f"{tag}_gather", False, "wrong button")
                     return False
 
@@ -2069,6 +2070,7 @@ class GemFlowMixin:
                                        m.confidence, m.center)
                         save_screenshot(frame,
                                         f"{tag}_WRONG_PLACE_{attempt:02d}")
+                        self._back_out_of_popup()
                         self._record(f"{tag}_gather", False, "button misplaced")
                         return False
 
@@ -2095,9 +2097,7 @@ class GemFlowMixin:
                         # found the same icon first and clicked it again --
                         # 2026-09-23 15:25-15:26, mines 2 to 6 all failed on
                         # 632:622, one click on the same deposit after another.
-                        self._press_escape()
-                        self._wait(DELAY_AFTER_ESCAPE)
-                        self._return_to_icon_zoom()
+                        self._back_out_of_popup()
                         self._record(f"{tag}_gather", False, "duplicate deposit")
                         return False
                     self._pending_site = site
@@ -2125,6 +2125,23 @@ class GemFlowMixin:
         print(f"  [{FAIL}] gather_btn not found")
         self._record(f"{tag}_gather", False, "Not found")
         return False
+
+    def _back_out_of_popup(self):
+        """Close a mine's popup and leave the deposit, as after a dud icon.
+
+        Every refusal in _step_click_gather leaves the game zoomed in on the
+        deposit with its popup open, and the next mine starts from exactly
+        that. The duplicate path learned it first (2026-09-23 15:25, mines 2
+        to 6 on 632:622); the misplaced-button path had it on 2026-09-24
+        07:38-07:40 -- mines 37 to 41 all refused the same popup, still open
+        at the top of the screen (the button at y 0.350-0.358 every time, the
+        mine colour check reading 2.1-2.4% gem where a centred gem mine reads
+        ~46%), until mine 42 met the deposit afresh and marched to it.
+        _press_escape clicks empty ground; it does not press ESC.
+        """
+        self._press_escape()
+        self._wait(DELAY_AFTER_ESCAPE)
+        self._return_to_icon_zoom()
 
     def _marched_before(self, site):
         """(already marched?, tiles to the nearest one already marched).
