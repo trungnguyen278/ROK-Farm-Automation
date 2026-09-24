@@ -42,13 +42,14 @@ def crop_of(frame):
 HOME_H = np.array([[0.12068756, 0.07416308, 217.98613591],
                    [-0.00023254, -0.07802386, 100.92274318],
                    [-7.41424e-06, 0.00025557, 1.0]])
-# The view outline there, on a 1200 map; a map drawn in the same box at
-# another size draws the same view smaller or larger by 1200 / size.
-OUTLINE_SIZE = (24, 12)
+# Outlines at one zoom only: the outline's size is the zoom, and where the
+# camera point sits inside it moves with the zoom.
 OUTLINE_SIZE_TOL = 2
 # The home calibration, scaled to a map's size, is taken when it places the
-# map's own outlines this well (median). Right, it sits near the fit's 0.2;
-# wrong by one map size (1440 read as 1200), it misses by ~17 px at X 1000.
+# map's own outlines this well (median), at whatever zoom the walks ran:
+# 0.20 px at the survey's zoom (legs of 96 tiles), 0.70 one notch wider
+# (legs of 125, 2026-09-24 14:50); wrong by one map size (1440 read as
+# 1200) it misses by ~17 px at X 1000.
 PRIOR_OK_PX = 1.0
 # Else a fit of the map's own, from at least this many outlines, placing
 # them at least this well (median) -- and only from outlines spread over
@@ -64,6 +65,14 @@ FIT_MIN_SPREAD = 0.5            # of the map's size, on both axes
 LINE_TOPHAT_MIN = 3
 # A piece of land smaller than this is a scrap between lines, not a province.
 MIN_PROVINCE_PX = 60
+# The map's square through H, pulled in by this many pixels before it is
+# split. The province lines stop at the drawn coast, a few pixels inside
+# the square, and the rim provinces met round their ends: 9 provinces by
+# day, 8 by night on the home kingdom with none. Measured 2026-09-24 against
+# the saved split: 10 provinces both ways for 2 to 10 px, the best at 5
+# (99.7% of cells by day, 99.5% by night). Cells in the pulled-in rim take
+# the nearest province (tile_grid), so none is lost.
+RIM_ERODE_PX = 5
 
 
 def land_box(crop):
@@ -156,14 +165,11 @@ def scaled_prior(size: int):
 def calibrate(items, map_id, size):
     """(H, how, median px) placing this map's tiles on the minimap, or
     (None, why, None)."""
-    k = HOME_TILES / float(size)
-    at_home_zoom = outline_points(items, map_id,
-                                  (OUTLINE_SIZE[0] * k, OUTLINE_SIZE[1] * k))
-    if len(at_home_zoom) >= 4:
-        err = residual(scaled_prior(size), at_home_zoom)
+    pts = outline_points(items, map_id)
+    if len(pts) >= 4:
+        err = residual(scaled_prior(size), pts)
         if err <= PRIOR_OK_PX:
             return scaled_prior(size), f"home calibration scaled to {size}", err
-    pts = outline_points(items, map_id)
     if len(pts) < FIT_MIN_POINTS:
         return None, f"{len(pts)} outlines, {FIT_MIN_POINTS} needed for a fit", None
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
@@ -178,20 +184,48 @@ def calibrate(items, map_id, size):
     return H, f"fitted on {len(pts)} outlines", err
 
 
-def segment(median):
-    """(labels, lines) for a median minimap crop; label 0 is not a province."""
-    hsv = cv2.cvtColor(median, cv2.COLOR_BGR2HSV)
-    s, v = hsv[..., 1].astype(int), hsv[..., 2].astype(int)
+def map_mask(shape, H, size=HOME_TILES):
+    """The map's own square, [0, size) both ways, through H onto the crop."""
+    corners = np.float32([[[0, 0], [size, 0], [size, size], [0, size]]])
+    quad = cv2.perspectiveTransform(corners, np.asarray(H, np.float64))[0]
+    mask = np.zeros(shape[:2], np.uint8)
+    cv2.fillPoly(mask, [np.round(quad).astype(np.int32)], 1)
+    return mask
+
+
+def _dark_land(v):
+    """The minimap's land where it is drawn dark (the day theme)."""
     dark = (v < 75).astype(np.uint8)
     n, lab, st, _c = cv2.connectedComponentsWithStats(dark, 8)
     if n < 2:
-        return np.zeros(median.shape[:2], np.int32), np.zeros(median.shape[:2], np.uint8)
+        return np.zeros(v.shape, np.uint8)
     k = 1 + int(np.argmax(st[1:, 4]))
     land = (lab == k).astype(np.uint8)
     ff = np.pad(1 - land, 1, constant_values=1).astype(np.uint8)
     m = np.zeros((ff.shape[0] + 2, ff.shape[1] + 2), np.uint8)
     cv2.floodFill(ff, m, (0, 0), 2)
-    inside = cv2.erode((ff[1:-1, 1:-1] != 2).astype(np.uint8), np.ones((3, 3), np.uint8))
+    return (ff[1:-1, 1:-1] != 2).astype(np.uint8)
+
+
+def segment(median, H=None, size=HOME_TILES):
+    """(labels, lines) for a median minimap crop; label 0 is not a province.
+
+    The map's ground is its own square through H where the calibration is
+    known -- not the colour: the minimap is see-through, and over the night
+    theme or the fog its land is not dark at all (2026-09-24 14:50: the
+    dark-land mask ran round the panel's margin and joined all six rim
+    provinces into one). Without H, the dark land, as measured by day.
+    """
+    hsv = cv2.cvtColor(median, cv2.COLOR_BGR2HSV)
+    s, v = hsv[..., 1].astype(int), hsv[..., 2].astype(int)
+    if H is not None:
+        k = 2 * RIM_ERODE_PX + 1
+        land = cv2.erode(map_mask(median.shape, H, size), np.ones((k, k), np.uint8))
+    else:
+        land = _dark_land(v)
+    if not land.any():
+        return np.zeros(median.shape[:2], np.int32), np.zeros(median.shape[:2], np.uint8)
+    inside = cv2.erode(land, np.ones((3, 3), np.uint8))
     # Members' cities and the like: saturated dots on the lines -- painted out.
     dots = cv2.dilate((((s > 110) & (v > 90)) & (inside > 0)).astype(np.uint8),
                       np.ones((3, 3), np.uint8))
@@ -249,7 +283,7 @@ def build(items, map_id, size, city=None) -> dict:
     if H is None:
         return {"error": how, "stage": "calibrate"}
     median = np.median(np.stack([c for c, _h in on_map]), axis=0).astype(np.uint8)
-    labels, _lines = segment(median)
+    labels, _lines = segment(median, H, size)
     grid = tile_grid(labels, H, size)
     n = int(grid.max())
     if n < 2 or n > 255:
@@ -276,3 +310,20 @@ def save(res: dict, map_id: str) -> None:
         "homography": res["H"], "how": res.get("how"), "fit_px": res.get("fit_px"),
         "crops": res.get("crops"), "made": time.strftime("%Y-%m-%d %H:%M")},
         indent=1), encoding="utf-8")
+
+
+def agreement(a, b) -> float:
+    """Share of cells two province grids put together: each province read
+    as the other grid's province it overlaps most (their numbers need not
+    match), both ways, the lower -- one grid splitting what the other joins
+    counts against either. 1.0 is the same split."""
+    a, b = np.asarray(a), np.asarray(b)
+    if a.shape != b.shape or not a.size:
+        return 0.0
+
+    def one_way(x, y):
+        same = 0
+        for k in np.unique(x):
+            same += int(np.bincount(y[x == k].astype(np.int64)).max())
+        return same / float(x.size)
+    return min(one_way(a, b), one_way(b, a))

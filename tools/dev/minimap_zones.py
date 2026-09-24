@@ -12,8 +12,9 @@ The work is rok_farm.minimap's, the same the farm runs on a new KvK map:
      projective fit of the map's own where it does not.
   2. The median of the crops on the map: the outline and anything else that
      moves with the camera drop out.
-  3. Light, unsaturated pixels on the dark land are the province lines; the
-     land between them, in pieces, the provinces.
+  3. Thin bright lines inside the map's square (through the calibration,
+     pulled in 5 px) are the province lines; the land between them, in
+     pieces, the provinces -- by day and by night alike.
 
 Writes screenshots/minimap_zones/<map>_minimap.png (the provinces on the
 minimap) and <map>_provinces.png (on the map, north up, a line every 100
@@ -129,7 +130,7 @@ def main() -> int:
         print(f"  {res['provinces']} provinces from {res['crops']} crops, {res['how']} "
               f"({res['fit_px']:.2f} px)")
         median = np.median(np.stack([c for c, _h in items]), axis=0).astype(np.uint8)
-        labels, lines = minimap.segment(median)
+        labels, lines = minimap.segment(median, res["H"], size)
         vis = median.copy()
         rng = np.random.default_rng(7)
         for k in range(1, labels.max() + 1):

@@ -83,7 +83,8 @@ def main() -> int:
             if known.exists():
                 ref = cv2.imread(str(known), cv2.IMREAD_UNCHANGED)
                 if ref is not None and ref.shape == grid.shape:
-                    prov["same_as_saved_pct"] = round(100.0 * float((ref == grid).mean()), 2)
+                    from rok_farm import minimap
+                    prov["same_as_saved_pct"] = round(100.0 * minimap.agreement(ref, grid), 2)
         res["provinces"] = prov
         print(f"  result: {json.dumps({k: v for k, v in res.items() if k != 'frames'})}")
         # Back to icon zoom by the known road.

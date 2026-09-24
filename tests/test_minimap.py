@@ -91,13 +91,16 @@ def test_too_few_outlines_are_not_a_calibration(monkeypatch):
     assert H is None and "needed" in how
 
 
-def test_outlines_at_another_zoom_do_not_test_the_prior(monkeypatch):
-    """Where the camera point sits in the outline moves with the zoom: the
-    prior is only checked at the zoom it was measured at."""
-    pts = points_from(minimap.scaled_prior(1440), grid_tiles(100, 1300))
-    items = fake_items(monkeypatch, pts, size_px=(40, 20))
-    _H, how, _ = minimap.calibrate(items, "S20001", 1440)
-    assert not how.startswith("home calibration")
+@pytest.mark.parametrize("shift_px,taken", [(0.6, True), (1.5, False)])
+def test_the_prior_is_checked_at_the_zoom_the_walks_ran(monkeypatch, shift_px, taken):
+    """Where the camera point sits in the outline moves with the zoom: 0.20
+    px off at the survey's zoom, 0.70 one notch wider (14:50). Within
+    PRIOR_OK_PX it is still the home calibration; beyond, it is not."""
+    pts = [(x, y, px + shift_px, py) for x, y, px, py in
+           points_from(minimap.HOME_H, grid_tiles(100, 1100))]
+    items = fake_items(monkeypatch, pts, size_px=(30, 15), map_id="4096")
+    _H, how, _ = minimap.calibrate(items, "4096", 1200)
+    assert how.startswith("home calibration") == taken, how
 
 
 def test_the_tile_grid_reads_the_province_under_each_cell():
@@ -115,7 +118,7 @@ def test_build_refuses_a_city_off_the_map(monkeypatch):
     """Every cell of the map takes its nearest province, so a city in none
     is a city not on the map -- a misread, or the wrong map."""
     monkeypatch.setattr(minimap, "calibrate", lambda *a: (np.eye(3), "t", 0.0))
-    monkeypatch.setattr(minimap, "segment", lambda m: (
+    monkeypatch.setattr(minimap, "segment", lambda m, *a: (
         np.pad(np.ones((50, 50), np.int32), ((0, 50), (0, 50))) * 1
         + np.pad(np.ones((50, 50), np.int32), ((50, 0), (50, 0))) * 2,
         np.zeros((100, 100), np.uint8)))
@@ -166,3 +169,53 @@ def test_the_prior_is_checked_at_the_outline_size_of_the_map(monkeypatch):
     items = fake_items(monkeypatch, pts, size_px=(12, 6))
     H, how, _ = minimap.calibrate(items, "S20001", 2400)
     assert H is not None and how.startswith("home calibration")
+
+
+def test_agreement_does_not_care_how_provinces_are_numbered():
+    a = np.array([[1, 1, 2, 2], [1, 1, 2, 2]])
+    assert minimap.agreement(a, 3 - a) == 1.0
+    merged = np.ones_like(a)
+    assert minimap.agreement(merged, a) == 0.5 == minimap.agreement(a, merged)
+
+
+def night_minimap():
+    """A see-through minimap over a light background: the land is not dark,
+    four provinces split by a bright cross, drawn inside HOME_H's square."""
+    img = np.full((215, 384, 3), (150, 140, 150), np.uint8)
+    quad = cv2.perspectiveTransform(
+        np.float32([[[0, 0], [1200, 0], [1200, 1200], [0, 1200]]]), minimap.HOME_H)[0]
+    cv2.fillPoly(img, [np.round(quad).astype(np.int32)], (140, 130, 125))
+    c = cv2.perspectiveTransform(np.float32([[[600, 600]]]), minimap.HOME_H)[0, 0]
+    cv2.line(img, (int(c[0]), 0), (int(c[0]), 214), (230, 230, 230), 1)
+    cv2.line(img, (0, int(c[1])), (383, int(c[1])), (230, 230, 230), 1)
+    return img
+
+
+def test_a_minimap_whose_land_is_not_dark_is_split_by_the_map_square():
+    """2026-09-24 14:50, night theme: the dark-land mask ran round the
+    panel's margin and joined the rim provinces. The calibrated square
+    does not care what colour the land is."""
+    img = night_minimap()
+    labels_dark, _ = minimap.segment(img)
+    labels_sq, _ = minimap.segment(img, minimap.HOME_H, 1200)
+    assert labels_dark.max() != 4
+    assert labels_sq.max() == 4
+
+
+NIGHT = ROOT / "screenshots" / "map_edge" / "20260924_145045"
+
+
+@pytest.mark.skipif(not (NIGHT.exists() and SURVEY.exists()),
+                    reason="the home kingdom's day and night crops are not on this machine")
+def test_day_and_night_give_the_same_ten_provinces():
+    import json
+
+    def items(folder, key):
+        meta = json.loads((folder / key).read_text(encoding="utf-8"))
+        rows = meta.get("reads") or meta.get("frames")
+        return [(cv2.imread(str(folder / n)), tuple(h)) for n, h in rows if h]
+    day = minimap.build(items(SURVEY, "survey.json"), "4096", 1200, city=(577, 615))
+    night = minimap.build(items(NIGHT, "probe.json"), "4096", 1200, city=(577, 615))
+    assert day["provinces"] == night["provinces"] == 10
+    assert night["how"].startswith("home calibration"), night["how"]
+    assert minimap.agreement(day["grid"], night["grid"]) > 0.98
