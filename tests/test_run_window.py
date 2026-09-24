@@ -103,13 +103,3 @@ def test_a_remote_start_is_refused_outside_the_window(monkeypatch):
     assert "window" in msg.lower()
 
 
-def test_force_still_starts_it(monkeypatch):
-    """The override stays, for the times the operator knows better."""
-    from rok_farm import session_control as sc
-
-    monkeypatch.setattr(sc, "farm_procs", lambda: [])
-    monkeypatch.setattr(run_window, "in_window", lambda *a: False)
-    monkeypatch.setattr(sc, "spawn_detached", lambda *a, **k: 4321)
-    monkeypatch.setattr(sc, "blog", lambda *a, **k: None)
-    msg = sc.do_start(with_watchdog=False, force=True)
-    assert "4321" in msg

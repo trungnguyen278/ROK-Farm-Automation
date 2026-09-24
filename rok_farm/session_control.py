@@ -21,7 +21,6 @@ The behaviours worth not losing to a second implementation:
 from __future__ import annotations
 
 import ctypes
-import os
 import random
 import re
 import subprocess
@@ -309,7 +308,7 @@ DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
-def spawn_detached(role, *args, env_extra=None):
+def spawn_detached(role, *args):
     """Launch a role so it outlives this process, and return its real pid.
 
     An ordinary subprocess is a child, and killing the bot's process tree kills
@@ -321,17 +320,15 @@ def spawn_detached(role, *args, env_extra=None):
 
     The pid `start` hands back is cmd's, so the real one is found by watching
     for a process that was not there before.
+
+    The child gets this process's environment as it is. It used to take extra
+    variables, and the only one ever passed opened the run window -- see
+    do_start.
     """
     before = {p.pid for p in find_procs(role)}
-    env = None
-    if env_extra:
-        # Only this child gets it. Setting it on the controller's own
-        # environment would leak into every later spawn, so a forced test run
-        # would quietly turn the window off for the rest of the day.
-        env = dict(os.environ, **env_extra)
     subprocess.Popen(
         ["cmd", "/c", "start", "", "/b", *roles.command(role, *args)],
-        cwd=str(PROJECT), env=env,
+        cwd=str(PROJECT),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
     deadline = time.time() + 25.0
@@ -343,28 +340,30 @@ def spawn_detached(role, *args, env_extra=None):
     return None
 
 
-def do_start(with_watchdog, force=False):
+def do_start(with_watchdog):
+    """Start the farm (and its watchdog) -- inside the run window only.
+
+    There is no force. do_start(force=True) used to open the window for the
+    farm and its watchdog, and on the night of 2026-09-23/24 every restart
+    after a test went through it: 00:45-07:55 online, 17.1 h in the UTC day,
+    marches blocked for 12 h by the next audit.
+    """
     from rok_farm import run_window
 
     if farm_procs():
         return "Farm is already running -- !stop first."
-    outside = not run_window.in_window()
-    if not force and outside:
+    if not run_window.in_window():
         return (f"Outside the run window {run_window.window_label()} -- not "
                 f"starting. The account needs its hours off: 3,006 gems were "
-                f"reclaimed on 2026-09-14 for being online too much.")
-    # A forced start has to reach the farm itself, not just get past this
-    # check. Without it the farm read the window on its own and stopped a
-    # third of a second after launch -- 2026-09-18 02:00, "No mines completed"
-    # with no hint that the window was the reason.
-    env_extra = {run_window.IGNORE_ENV: "1"} if (force and outside) else None
-    pid = spawn_detached("farm", env_extra=env_extra)
+                f"reclaimed on 2026-09-14 for being online too much, and a "
+                f"night online on 2026-09-23 got its marches blocked.")
+    pid = spawn_detached("farm")
     if pid is None:
         return ("Launched the farm but it never appeared in the process list. "
                 "Check !log.")
     msg = [f"Farm started (pid {pid}), detached -- it now survives a bot restart."]
     if with_watchdog:
-        wd = spawn_detached("watchdog", pid, env_extra=env_extra)
+        wd = spawn_detached("watchdog", pid)
         msg.append(f"Watchdog started (pid {wd}), no deadline." if wd
                    else "Watchdog did NOT come up -- nothing is supervising the farm.")
     else:

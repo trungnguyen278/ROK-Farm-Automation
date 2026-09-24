@@ -20,23 +20,16 @@ the watchdog does not relaunch it, and a remote start is refused.
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 
 from rok_farm import config
 
-# The operator can ask for one session outside the window -- a test run before
-# a trip, a check after a game update. That has to reach the FARM, not just the
-# command that launches it: on 2026-09-18 02:00 a forced start spawned a farm
-# that read the window itself and stopped 0.3s later, reporting "No mines
-# completed". The flag travels as an environment variable because the farm is
-# spawned detached through `cmd /c start` with a fixed argv.
-IGNORE_ENV = "ROK_IGNORE_RUN_WINDOW"
-
-
-def ignored() -> bool:
-    """Has this process been told to run regardless of the clock?"""
-    return os.environ.get(IGNORE_ENV) == "1"
+# No way round it. There was one -- do_start(force=True) handed the farm and
+# its watchdog an environment variable that opened the window -- and on the
+# night of 2026-09-23/24 every restart after a test went through it: the farm
+# ran 00:45-07:55, the account was online 17.1 h of the UTC day, and the next
+# audit blocked its marches for 12 h ("dung phan mem ben thu ba de vi pham quy
+# tac"). Hours outside the window are a config change, made on purpose.
 
 
 def _hour(now: datetime | None = None) -> float:
@@ -46,8 +39,6 @@ def _hour(now: datetime | None = None) -> float:
 
 def seconds_left(now: datetime | None = None) -> float:
     """Seconds the window still has to run; 0.0 when it is already shut."""
-    if ignored():
-        return 24 * 3600.0
     start = float(config.RUN_WINDOW_START_H)
     end = float(config.RUN_WINDOW_END_H)
     if start == end:                      # configured to cover the whole day
@@ -65,9 +56,8 @@ def in_window(now: datetime | None = None) -> bool:
 
 
 def window_label() -> str:
-    label = (f"{int(config.RUN_WINDOW_START_H):02d}:00-"
-             f"{int(config.RUN_WINDOW_END_H):02d}:00")
-    return f"{label} (overridden for this run)" if ignored() else label
+    return (f"{int(config.RUN_WINDOW_START_H):02d}:00-"
+            f"{int(config.RUN_WINDOW_END_H):02d}:00")
 
 
 def offline_hours() -> float:
