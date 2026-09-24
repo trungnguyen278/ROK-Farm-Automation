@@ -361,18 +361,26 @@ class MapEdgeMixin:
             sign = -sign
         return legs
 
-    def _survey_map(self, city=None, out_dir: Path | None = None) -> dict:
+    def _survey_map(self, city=None, out_dir: Path | None = None,
+                    known_size: int | None = None) -> dict:
         """The map's size and its provinces in one trip: the size probe with
         its minimap crops kept, and the provinces built from them
         (rok_farm.minimap). Where the home calibration does not fit this
-        map, a spread walk first, for a fit of its own. Leaves the camera
-        zoomed out -- the caller comes back through the city."""
+        map, a spread walk first, for a fit of its own. `known_size` (a home
+        kingdom's 1200) splits the provinces at that size whatever the walks
+        made of it. Leaves the camera zoomed out -- the caller comes back
+        through the city."""
         self._edge_crops = []
         self._edge_t0 = time.monotonic()
         try:
             res = self._probe_map_size(out_dir)
             map_id = res.get("map_id")
             size = res.get("size") if res.get("confident") else None
+            if known_size is not None:
+                if size is not None and size != known_size:
+                    logger.warning("map %s: the walks made it %s, it is %d",
+                                   map_id, size, known_size)
+                size = known_size
             if size is None or map_id is None:
                 res["provinces"] = {"error": "no confident size"}
                 return res

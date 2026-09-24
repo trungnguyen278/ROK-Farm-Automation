@@ -354,3 +354,12 @@ def test_the_spread_walk_crosses_the_map_in_columns():
     legs = w._edge_spread("4096", 1200)
     assert 0 < legs <= map_edge.SPREAD_LEGS_MAX
     assert max(xs) - min(xs) >= 600, "columns a third of the map apart, going west"
+
+
+def test_a_known_size_splits_the_provinces_whatever_the_walks_made_of_it(monkeypatch):
+    """A home kingdom is 1200: its provinces are split at 1200 even when the
+    walks ran out of legs before an edge."""
+    calls = fake_build(monkeypatch, [GRID])
+    res = Filmed(1200, per_leg=10)._survey_map(known_size=1200)
+    assert not res["confident"]
+    assert calls and calls[0][2] == 1200 and res["provinces"] is GRID

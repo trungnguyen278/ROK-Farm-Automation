@@ -230,16 +230,88 @@ def rate_chart(r: GemRate) -> bytes:
 # the map book and the camera's track
 
 def active_book() -> Path | None:
-    """The map book the farm is using: the one written most recently."""
-    books = sorted(BOOKS.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    """The map book the farm is using: the one written most recently. Only
+    books -- <map>.json -- not the provinces beside them (<map>_provinces.json,
+    written by a survey, newer than the book for a while after one) nor a
+    kept copy (4096.before-clean-....json)."""
+    books = sorted((p for p in BOOKS.glob("*.json")
+                    if not p.stem.endswith("_provinces") and "." not in p.stem),
+                   key=lambda p: p.stat().st_mtime)
     return books[-1] if books else None
 
 
 def load_book(path: Path | None = None) -> dict:
+    """The book, with "map_id" (its file's name) added for the pictures."""
     path = path or active_book()
     if path is None:
         return {}
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    book = json.loads(Path(path).read_text(encoding="utf-8"))
+    book.setdefault("map_id", Path(path).stem)
+    return book
+
+
+# Province borders on the pictures (the minimap's zones, tools/dev/
+# minimap_zones.py or the farm's survey of a new map).
+_PROVINCE_LINE = (150, 50, 150)
+
+
+def province_grid(book: dict):
+    """The province of every book cell (data/map_knowledge/<map>_provinces.png),
+    or None for a map not surveyed."""
+    mid = book.get("map_id")
+    path = BOOKS / f"{mid}_provinces.png" if mid else None
+    if path is None or not path.exists():
+        return None
+    grid = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    return grid if grid is not None and grid.ndim == 2 else None
+
+
+def _cells_in(grid, x0, y0, span):
+    n_j, n_i = grid.shape
+    i0, j0 = max(0, int(x0) // CELL), max(0, int(y0) // CELL)
+    i1 = min(n_i - 1, int(x0 + span) // CELL)
+    j1 = min(n_j - 1, int(y0 + span) // CELL)
+    return i0, j0, i1, j1
+
+
+def tint_provinces(img, grid, to_px, x0, y0, span):
+    """A faint colour a province under the picture, so the ground between
+    visited cells shows whose it is."""
+    i0, j0, i1, j1 = _cells_in(grid, x0, y0, span)
+    rng = np.random.default_rng(5)
+    pal = {int(k): rng.integers(0, 255, 3) for k in np.unique(grid)}
+    for j in range(j0, j1 + 1):
+        for i in range(i0, i1 + 1):
+            (xa, ya), (xb, yb) = to_px(i * CELL, j * CELL + CELL), to_px(i * CELL + CELL, j * CELL)
+            xa, xb = max(0, xa), min(img.shape[1], xb)
+            ya, yb = max(0, ya), min(img.shape[0], yb)
+            if xa < xb and ya < yb:
+                patch = img[ya:yb, xa:xb]
+                img[ya:yb, xa:xb] = (0.85 * patch + 0.15 * pal[int(grid[j, i])]).astype(np.uint8)
+
+
+def province_borders(img, grid, to_px, x0, y0, span):
+    """The borders between provinces, and each province's number (P1...)
+    where the picture shows it."""
+    i0, j0, i1, j1 = _cells_in(grid, x0, y0, span)
+    for j in range(j0, j1 + 1):
+        for i in range(i0, i1 + 1):
+            k = grid[j, i]
+            if i < i1 and grid[j, i + 1] != k:
+                cv2.line(img, to_px((i + 1) * CELL, j * CELL),
+                         to_px((i + 1) * CELL, j * CELL + CELL), _PROVINCE_LINE, 2)
+            if j < j1 and grid[j + 1, i] != k:
+                cv2.line(img, to_px(i * CELL, (j + 1) * CELL),
+                         to_px(i * CELL + CELL, (j + 1) * CELL), _PROVINCE_LINE, 2)
+    window = grid[j0:j1 + 1, i0:i1 + 1]
+    for k in np.unique(window):
+        if k == 0:
+            continue
+        jj, ii = np.nonzero(window == k)
+        x = (ii.mean() + i0 + 0.5) * CELL
+        y = (jj.mean() + j0 + 0.5) * CELL
+        cv2.putText(img, f"P{int(k)}", to_px(x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, _PROVINCE_LINE, 2)
 
 
 def view_cells(cam) -> list[tuple[int, int]]:
@@ -335,7 +407,11 @@ def book_map(since: str, until: str | None = None,
     until_txt = time.strftime("%Y-%m-%d %H:%M", time.localtime(end))
     went = marches(since, until_txt[:16] + ":59", log) if log.exists() else []
 
+    provinces = province_grid(book)
+
     def overlay(img):
+        if provinces is not None:
+            province_borders(img, provinces, to_px, x0, y0, 2 * radius)
         for t in range(0, tiles, 50):
             if x0 <= t <= x0 + 2 * radius:
                 x, _ = to_px(t, y0)
@@ -371,6 +447,8 @@ def book_map(since: str, until: str | None = None,
         cv2.drawMarker(img, to_px(*city), (0, 0, 160), cv2.MARKER_STAR, 20, 2)
 
     left = np.full((size, size, 3), _MAP_BG, np.uint8)
+    if provinces is not None:
+        tint_provinces(left, provinces, to_px, x0, y0, 2 * radius)
     cx, cy = city[0] // CELL, city[1] // CELL
     r = SWEEP_RADIUS // CELL
     gaps = seen = near_gaps = near_total = 0
@@ -389,6 +467,8 @@ def book_map(since: str, until: str | None = None,
                 near_gaps += near
     overlay(left)
     right = np.full((size, size, 3), _MAP_BG, np.uint8)
+    if provinces is not None:
+        tint_provinces(right, provinces, to_px, x0, y0, 2 * radius)
     for (i, j), n in counts.items():
         for lo, hi, colour in _REPEAT_BANDS:
             if lo <= n <= hi:
@@ -531,6 +611,9 @@ def run_map(run, idx: int, book: dict | None = None,
         return (int((x - x0) * px), int(size - (y - y0) * px))
 
     img = np.full((size, size, 3), _MAP_BG, np.uint8)
+    provinces = province_grid(book)
+    if provinces is not None:
+        tint_provinces(img, provinces, to_px, x0, y0, 2 * radius)
     for (i, j), n in s["counts"].items():
         if (i, j) in s["seen_before"]:
             colour = _OLD[0 if n == 1 else 1 if n <= 3 else 2]
@@ -549,6 +632,8 @@ def run_map(run, idx: int, book: dict | None = None,
             cv2.line(img, (0, y), (size, y), (210, 210, 210), 1)
             cv2.putText(img, str(t), (3, y - 3),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (110, 110, 110), 1)
+    if provinces is not None:
+        province_borders(img, provinces, to_px, x0, y0, 2 * radius)
     pts = s["points"]
     for a, b in zip(pts, pts[1:]):
         cv2.line(img, to_px(a[1], a[2]), to_px(b[1], b[2]), (50, 50, 50), 2)
@@ -582,7 +667,8 @@ def run_map(run, idx: int, book: dict | None = None,
         f" seen in the {stale_h:g}h before {s['shown'] - s['new']}",
         f"views on ground already seen: {100 * s['rescan']:.0f}%",
         "green new ground; yellow/orange/red already seen (1 / 2-3 / 4+)",
-        "circle = sweep target, x = marched to, star = city"])
+        "circle = sweep target, x = marched to, star = city"
+        + (", purple = province borders (P1...)" if provinces is not None else "")])
     ok, png = cv2.imencode(".png", img)
     for key in ("points", "counts", "seen_before"):
         s.pop(key)

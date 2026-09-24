@@ -108,3 +108,57 @@ def test_a_run_is_drawn_and_counted(tmp_path):
     assert s["farthest"] == 70
     spec = reports.run_spec(s, 1)
     assert spec["image"] == "run.png" and spec["title"].startswith("Run 1:")
+
+
+# --- provinces on the pictures ---------------------------------------------
+
+def _purple(png):
+    import cv2
+    import numpy as np
+    img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+    b, g, r = img[..., 0].astype(int), img[..., 1].astype(int), img[..., 2].astype(int)
+    return int(((abs(b - 150) < 8) & (abs(g - 50) < 8) & (abs(r - 150) < 8)).sum())
+
+
+def _survey(folder, map_id="4096"):
+    import cv2
+    import numpy as np
+    grid = np.full((150, 150), 1, np.uint8)
+    grid[:, 75:] = 2                         # a border at X 600
+    cv2.imwrite(str(folder / f"{map_id}_provinces.png"), grid)
+
+
+def test_the_pictures_draw_the_province_borders_when_the_map_has_them(tmp_path, monkeypatch):
+    """The operator, 2026-09-24: put the zones we worked out on the scan
+    pictures."""
+    monkeypatch.setattr(reports, "BOOKS", tmp_path)
+    start = time.mktime(time.strptime("2026-09-24 09:00", "%Y-%m-%d %H:%M"))
+    run = (start - 1, start + 60, [(start + 30, "done", 1)])
+    book = dict(_book(start), map_id="4096")
+    plain_run, _ = reports.run_map(run, 1, book=book, px=2)
+    plain_map, _ = reports.book_map("2026-09-24 08:00", book=book, px=1,
+                                    log=tmp_path / "none.log")
+    assert _purple(plain_run) == 0 and _purple(plain_map) == 0
+    _survey(tmp_path)
+    run_png, _ = reports.run_map(run, 1, book=book, px=2)
+    map_png, _ = reports.book_map("2026-09-24 08:00", book=book, px=1,
+                                  log=tmp_path / "none.log")
+    assert _purple(run_png) > 100 and _purple(map_png) > 100
+
+
+def test_the_active_book_is_a_book_not_its_provinces(tmp_path, monkeypatch):
+    """A survey writes <map>_provinces.json after the book: for a while the
+    newest .json in the folder, and !map drew it as the book."""
+    import os
+    monkeypatch.setattr(reports, "BOOKS", tmp_path)
+    book = tmp_path / "4096.json"
+    book.write_text('{"city": [577, 615], "track": []}', encoding="utf-8")
+    old = tmp_path / "4096.before-clean-20260923-162029.json"
+    old.write_text("{}", encoding="utf-8")
+    prov = tmp_path / "4096_provinces.json"
+    prov.write_text('{"provinces": 10}', encoding="utf-8")
+    t = time.time()
+    os.utime(book, (t - 60, t - 60))
+    assert reports.active_book() == book
+    loaded = reports.load_book()
+    assert loaded["map_id"] == "4096" and loaded["city"] == [577, 615]

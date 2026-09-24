@@ -137,8 +137,10 @@ class MapMemory:
                 if d.get("size"):
                     self.size = int(d["size"])
                 self.size_measured = bool(d.get("size_measured"))
-                self.size_probe_t = float(d.get("size_probe_t") or 0.0)
-                self.size_probe_tries = int(d.get("size_probe_tries") or 0)
+            # When the map was last surveyed, and how often: every map, a home
+            # kingdom's provinces are surveyed too.
+            self.size_probe_t = float(d.get("size_probe_t") or 0.0)
+            self.size_probe_tries = int(d.get("size_probe_tries") or 0)
             logger.info("MapMemory %s: %d terrain cell(s), %d reach cell(s)",
                         self.map_id, len(self.terrain), len(self.reach))
         except Exception as e:
@@ -327,6 +329,18 @@ class MapMemory:
 
     def has_provinces(self) -> bool:
         return self._province_grid() is not None
+
+    @property
+    def size_known(self) -> bool:
+        """A home kingdom's size is the rule (1200); a KvK map's is known
+        once measured at its edges."""
+        return is_home_map(self.map_id) or self.size_measured
+
+    def needs_survey(self) -> bool:
+        """The operator, 2026-09-24: what the map is -- its size, its zones
+        -- is looked up in the book; only a map the book knows nothing
+        about is surveyed, once."""
+        return not (self.size_known and self.has_provinces())
 
     def reload_provinces(self) -> None:
         """Read the province file again (a survey has just written it)."""

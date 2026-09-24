@@ -1,5 +1,6 @@
-"""The farm surveys a KvK map once -- its size and its provinces -- and only
-a KvK map.
+"""The farm surveys a map once -- its size and its provinces -- when the
+book has nothing saved about it (the operator, 2026-09-24: look the map up
+in the book; only when it is not there, zoom out and work it out).
 
 rok_farm/map_edge.py walks to the map's east and north edges, where the HUD
 starts naming the kingdom next door, keeping the minimap beside every read;
@@ -29,8 +30,9 @@ class Flow(GemFlowMixin):
         self.result, self.back, self.boom = result or {}, back, boom
         self.surveys, self.trips = 0, []
 
-    def _survey_map(self, city=None, out_dir=None):
+    def _survey_map(self, city=None, out_dir=None, known_size=None):
         self.surveys += 1
+        self.known_size = known_size
         if self.boom:
             raise RuntimeError("capture lost")
         return dict(self.result)
@@ -92,11 +94,37 @@ def test_a_kvk_map_is_surveyed_once_and_remembered(book, clock):
     assert g._maybe_probe_map_size("m3") and g.surveys == 0
 
 
-def test_a_home_kingdom_is_never_surveyed(tmp_path, monkeypatch):
+def test_a_home_kingdom_with_its_zones_saved_is_not_surveyed(tmp_path, monkeypatch):
     monkeypatch.setattr(mm, "MEM_DIR", tmp_path)
+    from rok_farm import minimap
+    minimap.save(provinces(1200), "4096")
     f = Flow(MapMemory("4096"), measured(1200, map_id="4096"))
     assert f._maybe_probe_map_size("m1")
     assert (f.surveys, f.trips) == (0, [])
+
+
+def test_a_home_kingdom_without_zones_is_surveyed_once_at_its_known_size(
+        tmp_path, monkeypatch, clock):
+    """Delete the saved zones and the farm works them out again by itself;
+    the size of a home kingdom is not in question (1200)."""
+    monkeypatch.setattr(mm, "MEM_DIR", tmp_path)
+    home = MapMemory("4096")
+    assert home.needs_survey()
+    f = Flow(home, measured(1200, map_id="4096"))
+    assert f._maybe_probe_map_size("m1")
+    assert f.surveys == 1 and f.known_size == 1200
+    assert home.has_provinces() and home.size == 1200 and not home.needs_survey()
+    clock[0] += 10 * GemFlowMixin.SIZE_PROBE_RETRY_S
+    assert f._maybe_probe_map_size("m2") and f.surveys == 1
+
+
+def test_a_home_survey_spacing_survives_a_restart(tmp_path, monkeypatch, clock):
+    """A failed home survey is not tried again at every farm start."""
+    monkeypatch.setattr(mm, "MEM_DIR", tmp_path)
+    Flow(MapMemory("4096"), {"error": "x"})._maybe_probe_map_size("m1")
+    again = Flow(MapMemory("4096"), measured(1200, map_id="4096"))
+    again._maybe_probe_map_size("m2")
+    assert again.surveys == 0
 
 
 @pytest.mark.parametrize("res,why", [

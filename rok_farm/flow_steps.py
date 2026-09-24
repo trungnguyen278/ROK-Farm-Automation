@@ -276,27 +276,34 @@ class GemFlowMixin:
     SIZE_PROBE_MAX_TRIES = 3
 
     def _maybe_probe_map_size(self, tag: str) -> bool:
-        """Survey a KvK map once: its size and its provinces (map_edge,
-        minimap), until both are known or the tries run out.
+        """Survey a map the book knows nothing about, once: its size and its
+        provinces (map_edge, minimap), until both are known or the tries run
+        out. The operator, 2026-09-24: look the map up in the book; only
+        when it is not there, zoom out and work it out -- every map, the
+        home kingdom's provinces too.
 
         Runs at the start of a mine from the world map, and brings the view
         back to icon zoom through the city -- the road whose end is known.
         False only if that road failed, and so the mine cannot go on.
         """
         book = getattr(self, "mapmem", None)
-        if (book is None or is_home_map(book.map_id)
-                or (book.size_measured and book.has_provinces())
+        if (book is None or not book.needs_survey()
                 or book.size_probe_tries >= self.SIZE_PROBE_MAX_TRIES
                 or time.time() - book.size_probe_t < self.SIZE_PROBE_RETRY_S):
             return True
         book.size_probe_t = time.time()
         book.size_probe_tries += 1
         book.save()
-        print(f"  [{INFO}] Map {book.map_id}: measuring its size and zones -- "
-              f"out to its east and north edges")
+        missing = [w for w, known in (("size", book.size_known),
+                                      ("zones", book.has_provinces())) if not known]
+        print(f"  [{INFO}] Map {book.map_id}: no saved {' or '.join(missing)} -- "
+              f"surveying it, once")
+        logger.info("Map %s: no saved %s -- surveying", book.map_id,
+                    " or ".join(missing))
         res: dict = {}
         try:
-            res = self._survey_map(city=getattr(self, "_city_xy", None))
+            res = self._survey_map(city=getattr(self, "_city_xy", None),
+                                   known_size=book.size if book.size_known else None)
         except Exception as e:
             logger.warning("map survey failed: %s", e)
         self._toggle_view(f"{tag}: back from the map's edge")
@@ -304,7 +311,9 @@ class GemFlowMixin:
         self._view_is_world = False
         back = self._step_to_world_map(tag)
         size = res.get("size")
-        if (res.get("map_id") == book.map_id and res.get("confident") and size
+        if book.size_known:
+            pass
+        elif (res.get("map_id") == book.map_id and res.get("confident") and size
                 and size >= book.size):
             book.set_measured_size(size)
         else:
@@ -314,7 +323,7 @@ class GemFlowMixin:
                                                 ("map_id", "size", "confident")},
                            book.size)
         prov = res.get("provinces") or {}
-        if "grid" in prov and res.get("map_id") == book.map_id and book.size_measured:
+        if "grid" in prov and res.get("map_id") == book.map_id and book.size_known:
             minimap.save(prov, book.map_id)
             book.reload_provinces()
             logger.info("Map %s: %d provinces from the minimap (%s, %.2f px)",
