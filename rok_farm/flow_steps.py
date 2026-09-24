@@ -328,6 +328,12 @@ class GemFlowMixin:
             book.reload_provinces()
             logger.info("Map %s: %d provinces from the minimap (%s, %.2f px)",
                         book.map_id, prov["provinces"], prov["how"], prov["fit_px"])
+        if not book.needs_survey():
+            # Done: the spacing and the tries are for surveys that fail. The
+            # zones deleted later (the operator's test, 2026-09-24) are
+            # surveyed again at once, not six hours on.
+            book.size_probe_t, book.size_probe_tries = 0.0, 0
+            book.save()
         elif prov:
             logger.warning("Map %s: no provinces (%s)", book.map_id,
                            prov.get("error"))

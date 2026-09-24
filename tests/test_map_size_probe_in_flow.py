@@ -194,3 +194,19 @@ def test_the_mine_calls_it_right_after_reaching_the_world_map():
     i = order.index("_maybe_probe_map_size")
     assert order[i - 1] == "_step_to_world_map"
     assert "_step_scan_and_verify_gem" in order[i + 1:]
+
+
+def test_zones_deleted_after_a_survey_are_surveyed_again_at_once(tmp_path, monkeypatch, clock):
+    """The operator's test: delete the saved zones and the farm works them
+    out again -- the six hours between tries are for surveys that failed."""
+    monkeypatch.setattr(mm, "MEM_DIR", tmp_path)
+    home = MapMemory("4096")
+    f = Flow(home, measured(1200, map_id="4096"))
+    f._maybe_probe_map_size("m1")
+    assert home.has_provinces() and home.size_probe_tries == 0
+    (tmp_path / "4096_provinces.png").unlink()
+    home.reload_provinces()
+    clock[0] += 60
+    f._maybe_probe_map_size("m2")
+    assert f.surveys == 2 and home.has_provinces()
+
