@@ -19,7 +19,8 @@ class World(MapEdgeMixin):
     """Camera in world tiles; our map is [0, size) on both axes."""
 
     def __init__(self, size, map_id="4096", start=(577, 615), per_leg=95,
-                 walls=False, misread=None, collision=None):
+                 walls=False, misread=None, collision=None, fog_north=False,
+                 blank_band=None):
         self.size, self.map_id = size, map_id
         self.x, self.y, self.z = float(start[0]), float(start[1]), 0
         self.per_leg, self.walls = per_leg, walls
@@ -27,6 +28,10 @@ class World(MapEdgeMixin):
         self.misread = misread
         # (lo, hi, Y read): the first read with lo <= Y < hi reads that Y
         self.collision = collision
+        # no map north of ours: the HUD's coordinate box is empty there
+        self.fog_north = fog_north
+        # (lo, hi): reads with lo <= X < hi fail on our own map (OCR blips)
+        self.blank_band = blank_band
         self.win = {"left": 0, "top": 0, "width": 1534, "height": 863}
         self.n_reads = 0
         self.legs = []
@@ -52,6 +57,10 @@ class World(MapEdgeMixin):
         if self.z > READABLE:
             return None
         x, y = int(self.x), int(self.y)
+        if self.fog_north and y >= self.size:
+            return None
+        if self.blank_band and self.blank_band[0] <= x < self.blank_band[1]:
+            return None
         mid = self.map_id
         if x >= self.size and y >= self.size:
             mid, x, y = "NE", x - self.size, y - self.size
@@ -83,6 +92,35 @@ def test_the_live_walk_of_2026_09_24():
     east = w._edge_walk(0, "4096")
     assert east["last"] == 1193 and east["size"] == 1200
     assert east["neighbour"] == "S11001" and abs(east["estimate"] - 1200) <= 1
+
+
+def test_the_live_probe_of_12_58():
+    """East: X 602 ... 1177, then S11001 76 and 173. North: Y 714 ... 1179,
+    then the HUD blank -- fog past the world's edge -- 24 reads running,
+    which walked on to the leg cap and left the size unconfirmed."""
+    w = World(1200, start=(602, 713), per_leg=96, fog_north=True)
+    w.z = READABLE
+    east = w._edge_walk(0, "4096")
+    assert east["ended"] == "left" and east["last"] == 1178 and east["size"] == 1200
+    assert w._edge_back_onto(0, "4096")
+    north = w._edge_walk(1, "4096")
+    assert north["ended"] == "fog" and north["size"] == 1200
+    assert len(north["reads"]) <= 1 + 6 + map_edge.FOG_READS + 1, "walked on into the fog"
+
+
+def test_fog_past_an_edge_is_an_edge():
+    res = World(1440, map_id="S20001", fog_north=True)._probe_map_size()
+    assert res["north"]["ended"] == "fog"
+    assert res["size"] == 1440 and res["confident"]
+
+
+def test_a_blank_read_or_two_on_the_map_is_not_the_fog():
+    """The full read fails now and then on a readable HUD: two in a row
+    (two legs through X 800-990) must not end the walk there."""
+    w = World(1200, blank_band=(800, 990))
+    res = w._probe_map_size()
+    assert res["east"]["ended"] == "left" and res["east"]["last"] > 1100
+    assert res["size"] == 1200 and res["confident"]
 
 
 def test_a_world_edge_with_nothing_beyond_holds_the_camera():

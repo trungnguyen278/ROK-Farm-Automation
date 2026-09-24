@@ -7,9 +7,11 @@ kingdom -- some forty legs past its corner moved nothing, and the frame still
 changed 3-11 a leg, so "the frame stood still" could not even tell -- but at
 the widest zoom where the HUD reads, the world goes on: panning east on 4096
 read X 1065, 1130, 1193 and then #S11001 X:58, the kingdom next door; south
-on S11001, Y 15 and then #4093 Y:1166. So an edge is where the id changes,
-and the last coordinate read on this map, plus one, is within a leg of the
-size -- which snaps to map_memory.MAP_SIZES, 240+ tiles apart.
+on S11001, Y 15 and then #4093 Y:1166. North of 4096 there is no map at
+all: fog and snow, and the HUD's coordinate box is empty (12:58 run). So an
+edge is where the id changes or the HUD goes blank, and the last coordinate
+read on this map, plus one, is within a leg of the size -- which snaps to
+map_memory.MAP_SIZES, 240+ tiles apart.
 
 East gives the size from X, north from Y (screen up is +Y): the top-right
 corner, where both are size - 1. (The bottom-right one the operator named
@@ -47,6 +49,10 @@ EDGE_LEGS_MAX = 30
 # The id OCR misreads about 8% of reads (flow_steps._map_sync): the map is
 # left when this many reads in a row name the same other map.
 LEFT_READS = 2
+# Past the world's edge the HUD shows no coordinates at all: this many blank
+# reads in a row after reads on the map. 2026-09-24 12:58, north of 4096: 24
+# blank in a row; on the map the full read failed 0 times in 16 that run.
+FOG_READS = 3
 # Held where there is nothing beyond: this many legs in a row that gained at
 # most HELD_TILES on the axis walked.
 HELD_LEGS = 2
@@ -142,7 +148,8 @@ class MapEdgeMixin:
 
     def _edge_walk(self, axis: int, map_id: str) -> dict:
         """Legs toward +X (axis 0) or +Y (axis 1), a HUD read after each,
-        until the map is left, the camera is held, or the cap.
+        until the map is left ("left": another map's id; "fog": no map, the
+        HUD blank), the camera is held, or the cap.
 
         size: the smallest map size above the furthest read on this map;
         estimate: that read plus the mean leg minus the neighbour's first
@@ -153,13 +160,18 @@ class MapEdgeMixin:
         reads = [self._edge_read()]
         own = [r for r in reads if r and r[0] == map_id]
         other: list = []
-        still, ended = 0, "cap"
+        still, blank, ended = 0, 0, "cap"
         for _leg in range(EDGE_LEGS_MAX):
             self._edge_leg(dx, dy)
             hud = self._edge_read()
             reads.append(hud)
             if hud is None:
+                blank += 1
+                if own and blank >= FOG_READS:
+                    ended = "fog"
+                    break
                 continue
+            blank = 0
             if hud[0] == map_id:
                 other = []
                 gained = hud[1 + axis] - own[-1][1 + axis] if own else None
@@ -228,7 +240,7 @@ class MapEdgeMixin:
             keep("north_end")
         sx = res["east"].get("size")
         sy = res.get("north", {}).get("size")
-        ends_ok = all(res.get(k, {}).get("ended") in ("left", "held")
+        ends_ok = all(res.get(k, {}).get("ended") in ("left", "fog", "held")
                       for k in ("east", "north"))
         res["size"] = sx if sx is not None and sx == sy else None
         res["confident"] = res["size"] is not None and ends_ok
