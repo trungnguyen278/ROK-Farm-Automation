@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from rok_farm import PROJECT_ROOT as PROJECT
+from rok_farm import reports
 from rok_farm import session_control as sc
 from rok_farm import wake
 # Starting, stopping and finding a run live in session_control, so the
@@ -64,7 +65,8 @@ WATCH_POLL = 60.0
 
 # Every verb the handler below answers to, including the short aliases.
 KNOWN_CMDS = ("help", "h", "status", "s", "shot", "pic", "live", "log",
-              "report", "feed", "check", "wake", "start", "stop")
+              "report", "feed", "check", "wake", "stats", "map", "run", "runs",
+              "start", "stop")
 
 # What a typo may be pointed AT. "start" and "stop" are deliberately absent.
 #
@@ -285,63 +287,101 @@ def uptime_str(proc):
     return f"{h}h{rem // 60:02d}m" if h else f"{rem // 60}m"
 
 
-def build_status():
+def status_spec():
+    """!status as an embed: the counters as fields, the last lines as text.
+
+    It was one block of monospaced "key : value" lines; the operator, 2026-
+    09-24: the log reads fine as plain text, the numbers look odd that way.
+    """
     farms, wds = farm_procs(), wd_procs()
     game = game_proc()
     seg, started = current_segment(log_tail(FARM_LOG))
     lines = seg.splitlines()
     c = {k: sum(bool(p.search(ln)) for ln in lines) for k, p in STAT.items()}
 
-    out = ["```"]
-    if farms:
-        out.append(f"farm     : UP   pid={farms[0].pid}  up {uptime_str(farms[0])}")
-    else:
-        out.append("farm     : DOWN")
-    out.append(f"watchdog : {'UP   pid=' + str(wds[0].pid) if wds else 'DOWN'}")
-    out.append(f"game     : {'UP' if game else 'DOWN'}")
-    out.append(f"segment  : started {started}")
-
+    fields = [
+        ("Farm", f"UP · pid {farms[0].pid} · {uptime_str(farms[0])}"
+         if farms else "**DOWN**", True),
+        ("Watchdog", f"UP · pid {wds[0].pid}" if wds else "**DOWN**", True),
+        ("Game", "UP" if game else "DOWN", True),
+    ]
     attempts = c["done"] + c["failed"]
-    rate = f"  ({100.0 * c['done'] / attempts:.0f}% ok)" if attempts else ""
-    out.append(f"mines    : {c['done']} done / {c['failed']} failed{rate}")
-    out.append(f"marches  : {c['march']} sent, {c['march_fail']} did not fire")
-    out.append(f"fog      : {c['fog']} bail(s), {c['fog_saved']} false bail(s) blocked")
-    out.append(f"scans    : {c['empty']} empty")
-    out.append(f"trouble  : {c['restart']} fault restart(s), {c['recovery']} recovery")
+    rate = f" ({100.0 * c['done'] / attempts:.0f}%)" if attempts else ""
+    fields.append(("Mines", f"**{c['done']}** done · {c['failed']} failed{rate}",
+                   True))
+    fields.append(("Marches", f"{c['march']} sent · {c['march_fail']} did not "
+                   f"fire", True))
 
     q = [m for ln in lines for m in [QUEUE.search(ln)] if m]
-    if q:
-        out.append(f"queue    : last {q[-1].group(1)}/{q[-1].group(2)}")
-
+    fields.append(("Queue", f"{q[-1].group(1)}/{q[-1].group(2)}" if q else "--",
+                   True))
     gems = [m for ln in lines for m in [GEMS.search(ln)] if m]
     if gems:
-        now_v, delta = gems[-1].group(1), gems[-1].group(2)
-        out.append(f"gems     : {int(now_v):,}  ({delta} this run)")
-
+        fields.append(("Gems", f"{int(gems[-1].group(1)):,} ({gems[-1].group(2)} "
+                       f"this run)", True))
     last = last_mine_time(lines)
     if last:
         mins = (datetime.now() - last).total_seconds() / 60.0
-        out.append(f"last mine: {last:%H:%M:%S}  ({mins:.0f} min ago)")
+        fields.append(("Last mine", f"{last:%H:%M:%S} ({mins:.0f} min ago)", True))
+    fields.append(("Scans / trouble", f"{c['empty']} empty scans · {c['fog']} fog "
+                   f"· {c['restart']} restart(s) · {c['recovery']} recovery",
+                   False))
 
-    # A planned wait produces no mines BY DESIGN. Without this line a healthy
+    # A planned wait produces no mines BY DESIGN. Without this a healthy
     # 25-minute gather reads as a hang.
     tail_txt = "\n".join(lines[-400:])
     still = STILL_OUT.findall(tail_txt)
     stay = STAY_OUT.findall(tail_txt)
     if still:
-        out.append(f"waiting  : planned wait, {still[-1]} min to go "
-                   f"(client closed on purpose)")
+        fields.append(("Waiting", f"planned wait, {still[-1]} min to go "
+                       f"(client closed on purpose)", False))
     elif stay:
-        out.append(f"waiting  : planned wait of {stay[-1]} min started")
+        fields.append(("Waiting", f"planned wait of {stay[-1]} min started", False))
 
     tail = interesting_tail(lines, 3)
     if tail:
-        out.append("")
-        out.append("last lines:")
-        for ln in tail:
-            out.append("  " + ln[:110])
-    out.append("```")
-    return "\n".join(out)
+        body = "\n".join(ln[:110] for ln in tail)
+        fields.append(("Last lines", f"```\n{body[:1000]}\n```", False))
+    return {"title": "Farm status", "description": f"run started {started}",
+            "colour": reports.COLOUR_OK if farms else reports.COLOUR_BAD,
+            "fields": fields, "image": None, "footer": None}
+
+
+def to_embed(spec):
+    """A reports-style spec dict as a Discord embed."""
+    emb = discord.Embed(title=spec["title"][:256],
+                        description=(spec.get("description") or "")[:4000],
+                        colour=spec.get("colour", reports.COLOUR_INFO))
+    for name, value, inline in spec.get("fields", [])[:25]:
+        emb.add_field(name=name[:256], value=(value or "--")[:1024], inline=inline)
+    if spec.get("image"):
+        emb.set_image(url=f"attachment://{spec['image']}")
+    if spec.get("footer"):
+        emb.set_footer(text=spec["footer"][:2048])
+    return emb
+
+
+async def send_spec(message, spec, png=None):
+    """The embed, with its picture attached when there is one."""
+    if png and spec.get("image"):
+        await message.channel.send(embed=to_embed(spec),
+                                   file=discord.File(io.BytesIO(png), spec["image"]))
+    else:
+        spec = dict(spec, image=None)
+        await message.channel.send(embed=to_embed(spec))
+
+
+def recent_runs(since, min_views=3):
+    """[(idx, run)] for runs since `since` with at least `min_views` views,
+    numbered from 1 in time order."""
+    book = reports.load_book()
+    track = book.get("track", [])
+    out = []
+    for run in reports.read_runs(since):
+        n = sum(1 for p in track if run[0] <= p[0] <= run[1] + 1)
+        if n >= min_views:
+            out.append(run)
+    return list(enumerate(out, 1)), book
 
 
 # --------------------------------------------------------------------------
@@ -609,7 +649,48 @@ async def on_message(message):
             await reply(message, HELP)
 
         elif cmd in ("status", "s"):
-            await reply(message, await asyncio.to_thread(build_status))
+            await send_spec(message, await asyncio.to_thread(status_spec))
+
+        elif cmd == "stats":
+            since = reports.parse_since(args, default="yesterday")
+            async with message.channel.typing():
+                r = await asyncio.to_thread(reports.gem_rate, since)
+                png = (await asyncio.to_thread(reports.rate_chart, r)
+                       if r.seconds else None)
+            await send_spec(message, reports.stats_spec(r), png)
+
+        elif cmd == "map":
+            since = reports.parse_since(args, default="today")
+            async with message.channel.typing():
+                png, summary = await asyncio.to_thread(
+                    reports.book_map, since, None, reports.SWEEP_STALE_H, 200, 2)
+            await send_spec(message, reports.map_spec(summary, since), png)
+
+        elif cmd in ("run", "runs"):
+            since = reports.parse_since([], default="today")
+            async with message.channel.typing():
+                runs, book = await asyncio.to_thread(recent_runs, since)
+            if not runs:
+                await reply(message, "No run out of the city yet today.")
+            elif cmd == "runs":
+                city = tuple(book.get("city") or reports.CITY_DEFAULT)
+                rows = [(i, reports.run_summary(run, book.get("track", []), city))
+                        for i, run in runs[-12:]]
+                await send_spec(message, reports.runs_spec(rows, since))
+            else:
+                # !run = the latest; !run 5 = the fifth of today, as !runs
+                # numbers them.
+                pick = int(args[0]) if args and args[0].isdigit() else runs[-1][0]
+                chosen = [(i, run) for i, run in runs if i == pick]
+                if not chosen:
+                    await reply(message, f"No run {pick} today -- `!runs` lists "
+                                f"1 to {runs[-1][0]}.")
+                else:
+                    i, run = chosen[0]
+                    async with message.channel.typing():
+                        png, s = await asyncio.to_thread(reports.run_map, run, i,
+                                                         book)
+                    await send_spec(message, reports.run_spec(s, i), png)
 
         elif cmd in ("shot", "pic", "live"):
             async with message.channel.typing():

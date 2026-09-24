@@ -475,6 +475,10 @@ HELP = """```
 !report          full run report from report.py
 !feed on|off     live progress: mines, marches, queue, gather-time maths
 !check           stop waiting and look at the queue now (troops home early)
+!stats [period]  gems/hour since yesterday; or today, 24h, 7d, 2026-09-23
+!map [period]    map book: ground not reached, ground gone over (default today)
+!runs            today's runs out of the city, one line each
+!run [n]         one run's path, view by view (default: the latest)
 !start           start farm + watchdog
 !start solo      start the farm with no watchdog
 !start force     start even if someone is using the machine
