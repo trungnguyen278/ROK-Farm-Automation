@@ -67,9 +67,20 @@ def wait_still(r, cap=5.0) -> float:
     return time.monotonic() - t0
 
 
-def raw_frame(r):
-    r._grab()
-    return r._raw_frame.copy() if r._raw_frame is not None else None
+def raw_frame(r, wait=4.0):
+    """The raw client frame, waiting for one if the capture has none.
+
+    The capture double-buffers, and on a still screen WGC hands over no new
+    frame until something changes -- so right after setup, with one frame
+    delivered and already taken, _grab() returns None for a while. The first
+    run of this tool (2026-09-24 11:17) died writing that None to disk.
+    """
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < wait:
+        if r._grab() is not None and r._raw_frame is not None:
+            return r._raw_frame.copy()
+        time.sleep(0.1)
+    return None
 
 
 def main() -> int:
@@ -101,6 +112,9 @@ def main() -> int:
             return 1
         wait_still(r)
         prev = raw_frame(r)
+        if prev is None:
+            print("[FAIL] no frame from the capture")
+            return 1
         start = r._read_map_position(prev)
         steps.append({"notches": 0, "hud": start, "gauge": r.read_zoom_gauge(),
                       "diff": None})
