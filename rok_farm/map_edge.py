@@ -62,6 +62,18 @@ HELD_TILES = 2
 # kingdom's three runs (2026-09-24): 96-97 tiles east, 76-78 north.
 LEG_TILES_X = 96
 LEG_TILES_Y = 77
+# The zoom out ends when the HUD has stopped reading this many times in a
+# row. 2026-09-24 14:21: one blank read stopped it 2-3 notches short (the
+# view outline 12-14 px wide on the minimap, 24 at the widest readable); the
+# legs there moved a fraction of 96 tiles, the walks ran to their caps and
+# the trip past the 600 s the dev tool allows.
+OUT_MISSES = 2
+# Legs moving under this share of LEG_TILES on the first two gains: the zoom
+# is not the widest readable -- zoom out again, once.
+LEG_MIN_FRAC = 0.5
+# The whole trip, walks and spread, stops here and gives what it has: the
+# three home runs took 184-354 s, a spread walk adds up to 60 legs.
+EDGE_TRIP_MAX_S = 480.0
 # The spread walk (only when the home minimap calibration does not fit a
 # map): columns this far apart, each this long, capped in legs.
 SPREAD_COLUMNS = 3
@@ -133,12 +145,13 @@ class MapEdgeMixin:
         self._edge_settle()
 
     def _edge_widest_readable(self, max_out: int = 16, max_in: int = 6):
-        """Out until the HUD stops reading, back in until it reads again.
-        (notches out, notches in, the read there)"""
-        out = 0
+        """Out until the HUD has stopped reading (OUT_MISSES blank reads in a
+        row), back in until it reads again. (notches out, notches in, read)"""
+        out, misses = 0, 0
         for out in range(1, max_out + 1):
             self._edge_notch(-1)
-            if self._edge_read() is None:
+            misses = misses + 1 if self._edge_read() is None else 0
+            if misses >= OUT_MISSES:
                 break
         hud, back = None, 0
         for back in range(1, max_in + 1):
@@ -187,7 +200,12 @@ class MapEdgeMixin:
         own = [r for r in reads if r and r[0] == map_id]
         other: list = []
         still, blank, ended = 0, 0, "cap"
+        gains: list = []
+        expect = LEG_TILES_X if axis == 0 else LEG_TILES_Y
         for _leg in range(EDGE_LEGS_MAX):
+            if self._edge_out_of_time():
+                ended = "time"
+                break
             self._edge_leg(dx, dy)
             hud = self._edge_read()
             reads.append(hud)
@@ -208,6 +226,12 @@ class MapEdgeMixin:
                 if still >= HELD_LEGS:
                     ended = "held"
                     break
+                if gained is not None and gained > HELD_TILES:
+                    gains.append(gained)
+                    if (len(gains) == 2
+                            and sorted(gains)[0] < LEG_MIN_FRAC * expect):
+                        ended = "short legs"
+                        break
             else:
                 other = other + [hud] if not other or other[-1][0] == hud[0] else [hud]
                 if len(other) >= LEFT_READS:
@@ -225,10 +249,16 @@ class MapEdgeMixin:
             res["estimate"] = round(last + sum(gains) / len(gains) - other[0][1 + axis])
         return res
 
+    def _edge_out_of_time(self) -> bool:
+        t0 = getattr(self, "_edge_t0", None)
+        return t0 is not None and time.monotonic() - t0 > EDGE_TRIP_MAX_S
+
     def _edge_back_onto(self, axis: int, map_id: str, max_legs: int = 5) -> bool:
         """Legs back the way a walk came until the HUD reads this map again."""
         dx, dy = self._edge_leg_for(axis, -1)
         for _leg in range(max_legs):
+            if self._edge_out_of_time():
+                return False
             self._edge_leg(dx, dy)
             hud = self._edge_read()
             if hud and hud[0] == map_id:
@@ -246,11 +276,16 @@ class MapEdgeMixin:
                     cv2.imwrite(str(Path(out_dir) / f"{name}.png"), frame)
 
         t0 = time.monotonic()
+        own_clock = getattr(self, "_edge_t0", None) is None
+        if own_clock:
+            self._edge_t0 = t0
         self._edge_keep_dir, self._edge_kept = out_dir, []
         try:
             return self._probe_map_size_walks(keep, t0)
         finally:
             self._edge_keep_dir = None
+            if own_clock:
+                self._edge_t0 = None
 
     def _probe_map_size_walks(self, keep, t0) -> dict:
         start = self._edge_read()
@@ -266,6 +301,10 @@ class MapEdgeMixin:
             res["error"] = "the HUD did not read at the widest zoom"
             return res
         res["east"] = self._edge_walk(0, map_id)
+        if res["east"]["ended"] == "short legs":
+            # Not the widest readable zoom after all: out again, once.
+            res["rezoom"] = self._edge_widest_readable()[:2]
+            res["east"] = self._edge_walk(0, map_id)
         keep("east_end")
         res["back_on_map"] = self._edge_back_onto(0, map_id)
         if res["back_on_map"]:
@@ -304,7 +343,7 @@ class MapEdgeMixin:
         for c in range(SPREAD_COLUMNS):
             off = 0
             for _leg in range(col):
-                if legs >= SPREAD_LEGS_MAX:
+                if legs >= SPREAD_LEGS_MAX or self._edge_out_of_time():
                     return legs
                 self._edge_leg(*self._edge_leg_for(1, sign))
                 legs += 1
@@ -314,7 +353,7 @@ class MapEdgeMixin:
                     break
             if c + 1 < SPREAD_COLUMNS:
                 for _leg in range(step):
-                    if legs >= SPREAD_LEGS_MAX:
+                    if legs >= SPREAD_LEGS_MAX or self._edge_out_of_time():
                         return legs
                     self._edge_leg(*self._edge_leg_for(0, -1))
                     legs += 1
@@ -329,6 +368,7 @@ class MapEdgeMixin:
         map, a spread walk first, for a fit of its own. Leaves the camera
         zoomed out -- the caller comes back through the city."""
         self._edge_crops = []
+        self._edge_t0 = time.monotonic()
         try:
             res = self._probe_map_size(out_dir)
             map_id = res.get("map_id")
@@ -350,3 +390,4 @@ class MapEdgeMixin:
         finally:
             self._edge_crops = None
             self._edge_keep_dir = None
+            self._edge_t0 = None

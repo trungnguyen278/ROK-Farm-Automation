@@ -157,11 +157,18 @@ def test_disagreeing_axes_are_not_a_size():
 
 
 def test_walks_that_never_reach_an_edge_prove_nothing():
-    """Legs too short for the cap: both walks end short of the edge and
+    """Legs too short to reach the edge: both walks stop short of it and
     both snap to 1200 -- the smallest size above what was read, a guess."""
     res = World(2400, map_id="S20001", per_leg=10)._probe_map_size()
-    assert res["east"]["ended"] == res["north"]["ended"] == "cap"
+    assert res["east"]["ended"] == res["north"]["ended"] == "short legs"
     assert res["east"]["size"] == res["north"]["size"] == 1200
+    assert not res["confident"]
+
+
+def test_a_walk_that_runs_to_its_cap_proves_nothing(monkeypatch):
+    monkeypatch.setattr(map_edge, "LEG_MIN_FRAC", 0.0)
+    res = World(2400, map_id="S20001", per_leg=10)._probe_map_size()
+    assert res["east"]["ended"] == res["north"]["ended"] == "cap"
     assert not res["confident"]
 
 
@@ -185,11 +192,65 @@ def test_it_walks_back_onto_the_map_before_going_north():
     assert all(w.legs.index(leg) < first_north for leg in west)
 
 
-def test_the_widest_readable_zoom_is_one_notch_inside_the_last_read():
+def test_the_widest_readable_zoom_is_the_last_that_reads():
     w = World(1200)
     out, back, hud = w._edge_widest_readable()
-    assert out == READABLE + 1 and back == 1 and hud is not None
+    assert out == READABLE + map_edge.OUT_MISSES and back == map_edge.OUT_MISSES
+    assert hud is not None and w.z == READABLE
+
+
+def test_one_blank_read_does_not_stop_the_zoom_out():
+    """2026-09-24 14:21: a single blank read stopped it 2-3 notches short."""
+    class Blip(World):
+        def _read_map_position(self, frame=None, full=False):
+            if self.z == 6 and not getattr(self, "blipped", False):
+                self.blipped = True
+                return None
+            return super()._read_map_position(frame, full)
+    w = Blip(1200)
+    w._edge_widest_readable()
     assert w.z == READABLE
+
+
+class Zoomed(World):
+    """Legs a third as long below the widest readable zoom, and a first
+    zoom-out that stops three notches short."""
+
+    def _edge_leg(self, dx_frac, dy_frac):
+        full = self.per_leg
+        if self.z < READABLE:
+            self.per_leg = full / 3
+        try:
+            super()._edge_leg(dx_frac, dy_frac)
+        finally:
+            self.per_leg = full
+
+    def _edge_widest_readable(self, max_out=16, max_in=6):
+        if not getattr(self, "stopped_short", False):
+            self.stopped_short = True
+            self.z = READABLE - 3
+            return READABLE - 3, 0, self._read_map_position()
+        return super()._edge_widest_readable(max_out, max_in)
+
+
+def test_short_legs_zoom_out_again_once():
+    res = Zoomed(1200)._probe_map_size()
+    assert res["rezoom"] and res["east"]["ended"] == "left"
+    assert res["size"] == 1200 and res["confident"]
+
+
+def test_the_trip_stops_when_its_time_is_up(monkeypatch):
+    monkeypatch.setattr(map_edge, "EDGE_TRIP_MAX_S", -1.0)
+    w = Filmed(1200)
+    res = w._survey_map()
+    assert res["east"]["ended"] == "time" and not res["confident"]
+    assert w._edge_t0 is None, "the clock is put away with the trip"
+
+
+def test_a_probe_alone_does_not_leave_its_clock_running():
+    w = World(1200)
+    w._probe_map_size()
+    assert getattr(w, "_edge_t0", None) is None
 
 
 def test_a_leg_stays_well_under_the_gap_between_sizes():

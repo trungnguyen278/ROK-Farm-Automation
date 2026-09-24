@@ -59,8 +59,9 @@ def fake_items(monkeypatch, pts, size_px=(24, 12), map_id="S20001"):
 
 
 def test_the_prior_is_taken_where_it_fits(monkeypatch):
+    """A 1440 map drawn in the home box: its view outline 24 x 12 x 1200/1440."""
     pts = points_from(minimap.scaled_prior(1440), grid_tiles(100, 1300))
-    items = fake_items(monkeypatch, pts)
+    items = fake_items(monkeypatch, pts, size_px=(20, 10))
     H, how, err = minimap.calibrate(items, "S20001", 1440)
     assert H is not None and how.startswith("home calibration") and err < 0.01
 
@@ -156,3 +157,12 @@ def test_the_home_survey_gives_ten_provinces_and_the_city_in_the_centre():
     grid = res["grid"]
     ids, counts = np.unique(grid[grid > 0], return_counts=True)
     assert grid[615 // 8, 577 // 8] == ids[np.argmin(counts)]
+
+
+def test_the_prior_is_checked_at_the_outline_size_of_the_map(monkeypatch):
+    """A 2400 map drawn in the home box shows the widest readable view at
+    half the size: 12 x 6, not 24 x 12."""
+    pts = points_from(minimap.scaled_prior(2400), grid_tiles(200, 2200))
+    items = fake_items(monkeypatch, pts, size_px=(12, 6))
+    H, how, _ = minimap.calibrate(items, "S20001", 2400)
+    assert H is not None and how.startswith("home calibration")

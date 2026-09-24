@@ -42,6 +42,8 @@ def crop_of(frame):
 HOME_H = np.array([[0.12068756, 0.07416308, 217.98613591],
                    [-0.00023254, -0.07802386, 100.92274318],
                    [-7.41424e-06, 0.00025557, 1.0]])
+# The view outline there, on a 1200 map; a map drawn in the same box at
+# another size draws the same view smaller or larger by 1200 / size.
 OUTLINE_SIZE = (24, 12)
 OUTLINE_SIZE_TOL = 2
 # The home calibration, scaled to a map's size, is taken when it places the
@@ -92,9 +94,12 @@ def outline(crop):
     white &= keep
     n, _lab, stats, cent = cv2.connectedComponentsWithStats(white, 8)
     best = None
+    # As small as 8 x 3: a 2400 map drawn in the home box would show the
+    # widest readable view at 12 x 6. On the 50 home crops the smaller
+    # bound found only outlines (two more, 8x4 and 11x5, mid zoom), nothing else.
     for k in range(1, n):
         x, y, w, h, a = stats[k]
-        if 12 <= w <= 60 and 4 <= h <= 25 and a >= 20 and a / float(w * h) < 0.6:
+        if 8 <= w <= 60 and 3 <= h <= 25 and a >= 8 and a / float(w * h) < 0.6:
             if best is None or a > best[4]:
                 best = (x, y, w, h, a, cent[k])
     if best is None:
@@ -151,7 +156,9 @@ def scaled_prior(size: int):
 def calibrate(items, map_id, size):
     """(H, how, median px) placing this map's tiles on the minimap, or
     (None, why, None)."""
-    at_home_zoom = outline_points(items, map_id, OUTLINE_SIZE)
+    k = HOME_TILES / float(size)
+    at_home_zoom = outline_points(items, map_id,
+                                  (OUTLINE_SIZE[0] * k, OUTLINE_SIZE[1] * k))
     if len(at_home_zoom) >= 4:
         err = residual(scaled_prior(size), at_home_zoom)
         if err <= PRIOR_OK_PX:
