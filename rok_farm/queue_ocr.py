@@ -16,6 +16,7 @@ import cv2
 
 from rok_farm import PROJECT_ROOT
 from rok_farm.logging_setup import INFO, logger
+from rok_farm.map_memory import read_limit
 from rok_farm.screenshots import save_screenshot
 
 try:
@@ -539,7 +540,8 @@ class MapPositionMixin:
         if not m:
             return None
         map_id, x, y = m.group(1), int(m.group(2)), int(m.group(3))
-        if not (0 <= x < 1200 and 0 <= y < 1200):
+        lim = read_limit(map_id)
+        if not (0 <= x < lim and 0 <= y < lim):
             return None
         book = getattr(self, "mapmem", None)
         expected = (getattr(book, "map_id", None)
@@ -633,12 +635,17 @@ class MapPositionMixin:
             logger.debug("Map position unparsed: %r", text[:40])
             return None
         x, y = int(m.group(2)), int(m.group(3))
-        # The world is 1200 tiles a side. Over 3,433 logged reads the largest
-        # X was 999, and every Y above 1199 was the digit collision described
-        # above -- 1822 for 182, 5544 for 554 -- which still gets through the
-        # merge now and then, and got through two agreeing reads twice in
-        # one survey. A position off the map is a misread, not a place.
-        if not (0 <= x < 1200 and 0 <= y < 1200):
+        # A home kingdom is 1200 tiles a side. Over 3,433 logged reads the
+        # largest X was 999, and every Y above 1199 was the digit collision
+        # described above -- 1822 for 182, 5544 for 554 -- which still gets
+        # through the merge now and then, and got through two agreeing reads
+        # twice in one survey. A position off the map is a misread, not a
+        # place. A KvK map may be larger, so it is read up to the largest map
+        # there is (map_memory.read_limit): reading it at 1200 would throw
+        # away every real position past that, and the misread hold in
+        # _map_sync stays in front of the book either way.
+        lim = read_limit(m.group(1))
+        if not (0 <= x < lim and 0 <= y < lim):
             logger.debug("Map position off the map, a misread: %r -> %d,%d",
                          text[:40], x, y)
             return None

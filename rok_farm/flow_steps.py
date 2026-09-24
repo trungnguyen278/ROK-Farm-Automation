@@ -28,7 +28,8 @@ from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
                              ZOOM_IN_WINDOW_S, ZOOM_POLL_MAX)
 from rok_farm import pan_model
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
-from rok_farm.map_memory import CELL as CELL_TILES, MapMemory
+from rok_farm.map_memory import (CELL as CELL_TILES, HOME_TILES, MAP_SIZES,
+                                 MapMemory, is_home_map)
 from rok_farm.queue_ocr import button_verdict, read_button_text
 from rok_farm.screenshots import save_annotated, save_screenshot
 
@@ -267,6 +268,35 @@ class GemFlowMixin:
     # next one to agree (see _map_sync): a scan step moves 6-29 tiles.
     MISREAD_JUMP_TILES = 60
 
+    def _note_unproven_edge(self) -> None:
+        """Say so, once, when the city sits near an edge the book assumed.
+
+        A KvK map's size is learned from positions read past its edge, and
+        the steering never heads past an edge -- so a city just under 1200
+        on a larger map would never show the book the ground beyond it. The
+        operator knows the KvK's map; this is where they learn it matters.
+        """
+        book, city = self.mapmem, getattr(self, "_city_xy", None)
+        if (book is None or not city or is_home_map(book.map_id)
+                or book.size >= MAP_SIZES[-1]):
+            return
+        key = (book.map_id, book.size, tuple(city))
+        if key == getattr(self, "_edge_noted", None):
+            return
+        self._edge_noted = key
+        room = book.size - 1 - max(city)
+        if room > self.SWEEP_RADIUS_TILES:
+            return
+        print(f"  [{WARN}] Map {book.map_id} is taken as {book.size} tiles a "
+              f"side until a position past that is read; the city is {room} "
+              f"tiles from that edge and the sweep will not look beyond it")
+        logger.warning("Map %s: city %d:%d is %d tiles under the %d edge the "
+                       "book assumes. If the map is larger, stop the farm and "
+                       "write its size (%s) as \"size\" in %s", book.map_id,
+                       city[0], city[1], room, book.size,
+                       " or ".join(str(s) for s in MAP_SIZES if s > book.size),
+                       book.path)
+
     def _map_sync(self, frame, found: bool, force: bool = False,
                   scan_count: int = 0, icons=None):
         """Read the HUD position, open the right book, file what we just saw."""
@@ -326,11 +356,11 @@ class GemFlowMixin:
             # would collect scans of ground that can never be farmed, and the
             # retreat is about to take us out of it anyway.
             #
-            # No wall is written for the crossing any more. The kingdom is
-            # 1200 tiles a side and its edges come from the coordinates
-            # (MapMemory.score / blocked); the operator, 2026-09-23: "bo di vi
-            # chung ta co toa do roi". The retreat that follows still turns
-            # the camera round.
+            # No wall is written for the crossing any more. The map's size is
+            # known (a home kingdom, 1200) or learned (a KvK map, note_extent)
+            # and its edges come from the coordinates (MapMemory.score /
+            # blocked); the operator, 2026-09-23: "bo di vi chung ta co toa
+            # do roi". The retreat that follows still turns the camera round.
             return getattr(self, "_last_map_xy", None)
 
         # One read far from the last is a misread until the next one agrees.
@@ -372,6 +402,8 @@ class GemFlowMixin:
                 logger.info("City is %d:%d (from the map book)",
                             *self._city_xy)
         self.mapmem.note_position(x, y)
+        self.mapmem.note_extent(x, y)
+        self._note_unproven_edge()
         self.mapmem.note_track(x, y)
         # The whole view, but only at icon zoom: the footprint in pan_model
         # was measured there (the operator's condition for the survey), and
@@ -1167,7 +1199,9 @@ class GemFlowMixin:
         if pos is None:
             return True
         x, y = pos[1], pos[2]
-        edge = min(x, y, 1199 - x, 1199 - y)
+        book = getattr(self, "mapmem", None)
+        size = book.size if book is not None and book.map_id == pos[0] else HOME_TILES
+        edge = min(x, y, size - 1 - x, size - 1 - y)
         if edge > self.FOG_EDGE_TILES:
             logger.info("featureless screen at %d,%d, %d tiles inside the map "
                         "-- not the void, carrying on", x, y, edge)

@@ -27,6 +27,7 @@ import cv2
 import numpy as np
 
 from rok_farm import PROJECT_ROOT, pan_model
+from rok_farm.map_memory import HOME_TILES
 
 LOG = PROJECT_ROOT / "logs" / "overnight" / "farm_run.log"
 BOOKS = PROJECT_ROOT / "data" / "map_knowledge"
@@ -307,6 +308,7 @@ def book_map(since: str, until: str | None = None,
                           if len(until) == 10 else ""))
           if until else float("inf"))
     city = tuple(book.get("city") or CITY_DEFAULT)
+    tiles = int(book.get("size") or HOME_TILES)
     track = [p for p in book.get("track", []) if t0 <= p[0] <= t1]
     summary = {"views": len(track)}
     if not track:
@@ -334,7 +336,7 @@ def book_map(since: str, until: str | None = None,
     went = marches(since, until_txt[:16] + ":59", log) if log.exists() else []
 
     def overlay(img):
-        for t in range(0, 1200, 50):
+        for t in range(0, tiles, 50):
             if x0 <= t <= x0 + 2 * radius:
                 x, _ = to_px(t, y0)
                 cv2.line(img, (x, 0), (x, size), (205, 205, 205), 1)
@@ -374,7 +376,7 @@ def book_map(since: str, until: str | None = None,
     gaps = seen = near_gaps = near_total = 0
     for i in range(cx - r, cx + r + 1):
         for j in range(cy - r, cy + r + 1):
-            if i < 0 or j < 0 or i * CELL >= 1200 or j * CELL >= 1200:
+            if i < 0 or j < 0 or i * CELL >= tiles or j * CELL >= tiles:
                 continue
             near = max(abs(i - cx), abs(j - cy)) * CELL <= 80
             near_total += near
@@ -519,6 +521,7 @@ def run_map(run, idx: int, book: dict | None = None,
     """PNG of one run and its summary dict."""
     book = book if book is not None else load_book()
     city = tuple(book.get("city") or CITY_DEFAULT)
+    tiles = int(book.get("size") or HOME_TILES)
     s = run_summary(run, book.get("track", []), city, stale_h)
     radius = max(60, min(200, s["farthest"] + 30))
     size = 2 * radius * px
@@ -535,7 +538,7 @@ def run_map(run, idx: int, book: dict | None = None,
             colour = _NEW[0 if n == 1 else 1]
         cv2.rectangle(img, to_px(i * CELL, j * CELL + CELL),
                       to_px(i * CELL + CELL, j * CELL), colour, -1)
-    for t in range(0, 1200, 25):
+    for t in range(0, tiles, 25):
         if x0 <= t <= x0 + 2 * radius:
             x, _ = to_px(t, y0)
             cv2.line(img, (x, 0), (x, size), (210, 210, 210), 1)

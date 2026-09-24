@@ -18,3 +18,15 @@ def _bot_log_stays_out_of_the_real_one(tmp_path, monkeypatch):
     if bot is not None:
         monkeypatch.setattr(bot, "LOGDIR", tmp_path)
         monkeypatch.setattr(bot, "BOT_LOG", tmp_path / "discord_bot.log")
+
+
+@pytest.fixture(autouse=True)
+def _map_books_stay_out_of_the_real_ones(tmp_path, monkeypatch):
+    """Tests must not write data/map_knowledge.
+
+    A book a test opened without pointing MEM_DIR elsewhere was saved beside
+    the farm's (testmap.json, 2026-09-23 15:33) -- and the book written last
+    is the one reports.active_book(), and so the Discord !map, draws.
+    """
+    import rok_farm.map_memory as mm
+    monkeypatch.setattr(mm, "MEM_DIR", tmp_path / "map_knowledge")

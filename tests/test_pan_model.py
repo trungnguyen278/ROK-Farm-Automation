@@ -90,12 +90,6 @@ def test_a_screen_heading_becomes_the_right_map_heading():
     assert abs(abs(th(math.pi)) - math.pi) < 1e-9
 
 
-def test_a_misread_y_is_not_a_place():
-    assert pm.plausible(577, 615)
-    assert not pm.plausible(577, 5544)
-    assert not pm.plausible(-1, 10)
-
-
 def test_two_halves_make_exactly_one_window():
     """The operator's spec: the window's full width and height, each as two
     half drags -- not one drag that works the pointer at the window's edge."""

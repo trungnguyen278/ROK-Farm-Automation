@@ -37,10 +37,42 @@ CELL = 8
 # Terrain never does.
 REACH_HALFLIFE_H = 18.0
 
-# The kingdom is 1200 tiles a side (X and Y 0-1199; the largest X in 3,433
-# logged reads was 999, the city sits near the middle at 577,615). Its edges
-# are known from the coordinates -- nothing about them needs learning.
-MAP_TILES = 1200
+# A kingdom's own map is 1200 tiles a side (X and Y 0-1199), and its id is a
+# number (#4096). Its edges are known from the coordinates -- nothing about
+# them needs learning. Logged on 4096: X up to 1177 (2026-09-14..16), and
+# over 5,002 accepted steps every Y past 1150 -- 18 of them -- was the digit
+# collision in queue_ocr (196 read as 1965, 524 as 5240).
+HOME_TILES = 1200
+# A KvK map's id is not a number (#S11465, 2026-09-09..18) and its size is
+# not known before it is seen: 1200, 1440 or 2400 by KvK type (researched
+# 2026-09-23 through AI Mode, not checked on a map yet). The HUD is read up to
+# the largest; the book starts at the smallest and steps up one size at a
+# time (note_extent). Too small keeps the sweep off ground past the edge
+# until the camera has read positions there; too large would send it at
+# ground that is not there, over and over.
+MAP_SIZES = (1200, 1440, 2400)
+# Positions read past the book's edge within SIZE_WINDOW_S before it grows.
+# A camera out there reads one every scan (6-29 tiles apart, a few seconds
+# each); what slips past the misread hold in _map_sync comes as an isolated
+# pair at most (twice in one pan survey, 2026-09-23), and spread over days
+# must not add up.
+SIZE_EVIDENCE = 5
+SIZE_WINDOW_S = 600.0
+
+
+def is_home_map(map_id) -> bool:
+    """A kingdom's own map: its id is all digits (#4096; KvK: #S11465)."""
+    return str(map_id).isdigit()
+
+
+def read_limit(map_id) -> int:
+    """No coordinate on this map reaches this: a larger one is a misread.
+
+    A home map is 1200; a KvK map is read up to the largest size there is,
+    so that a map larger than the book believes is never read blind.
+    """
+    return HOME_TILES if is_home_map(map_id) else MAP_SIZES[-1]
+
 
 # Teleport detection compares the CURRENT position against a rolling median of
 # recent ones, not against the single previous reading.
@@ -75,6 +107,9 @@ class MapMemory:
         self.track: list[list] = []
         self._recent: list[tuple[int, int]] = []
         self._far_streak = 0
+        # Tiles a side. Fixed for a home map; learned for any other.
+        self.size = HOME_TILES if is_home_map(self.map_id) else MAP_SIZES[0]
+        self._past_edge: list[tuple[float, int]] = []
         self.load()
 
     # --- persistence ---
@@ -91,6 +126,10 @@ class MapMemory:
             if city:
                 self.city = (int(city[0]), int(city[1]))
             self.unreachable = d.get("unreachable", [])
+            # A KvK map's size as learned -- or as the operator wrote it in
+            # the file with the farm stopped. A home map's is not a question.
+            if not is_home_map(self.map_id) and d.get("size"):
+                self.size = int(d["size"])
             logger.info("MapMemory %s: %d terrain cell(s), %d reach cell(s)",
                         self.map_id, len(self.terrain), len(self.reach))
         except Exception as e:
@@ -104,7 +143,8 @@ class MapMemory:
                 {"terrain": self.terrain, "reach": self.reach,
                  "track": self.track,
                  "city": list(getattr(self, "city", None) or []) or None,
-                 "unreachable": getattr(self, "unreachable", [])},
+                 "unreachable": getattr(self, "unreachable", []),
+                 "size": self.size},
                 indent=1),
                 encoding="utf-8")
         except Exception as e:
@@ -145,6 +185,40 @@ class MapMemory:
         logger.info("Teleport %s -> %s on map %s; reach book cleared",
                     prev, pos, self.map_id)
         self.reach = {}
+        self.save()
+        return True
+
+    # --- the map's size ---
+
+    def note_extent(self, x: int, y: int, now: float | None = None) -> bool:
+        """A position read on this map; True if it made the map larger.
+
+        A home map is HOME_TILES and stays so. Any other map grows one size
+        of MAP_SIZES at a time, once SIZE_EVIDENCE positions within
+        SIZE_WINDOW_S lie past its edge -- to the smallest size that holds
+        the NEAREST of them, so a misread among real reads past 1200 cannot
+        carry the book to 2400 by itself.
+        """
+        if is_home_map(self.map_id) or self.size >= MAP_SIZES[-1]:
+            return False
+        far = max(int(x), int(y))
+        if far < self.size:
+            return False
+        now = time.time() if now is None else now
+        self._past_edge = [(t, v) for t, v in self._past_edge
+                           if now - t <= SIZE_WINDOW_S]
+        self._past_edge.append((now, far))
+        if len(self._past_edge) < SIZE_EVIDENCE:
+            return False
+        nearest = min(v for _t, v in self._past_edge)
+        old = self.size
+        self.size = next((s for s in MAP_SIZES if s > nearest), MAP_SIZES[-1])
+        self._past_edge = []
+        print(f"  [{INFO}] Map {self.map_id} is larger than {old} tiles a side: "
+              f"now {self.size}")
+        logger.info("Map %s grew %d -> %d tiles a side (%d positions past the "
+                    "edge in %.0fs, nearest %d)", self.map_id, old, self.size,
+                    SIZE_EVIDENCE, SIZE_WINDOW_S, nearest)
         self.save()
         return True
 
@@ -268,7 +342,7 @@ class MapMemory:
         for i in range(cx - r, cx + r + 1):
             for j in range(cy - r, cy + r + 1):
                 x, y = i * CELL + CELL // 2, j * CELL + CELL // 2
-                if x < 0 or y < 0 or x >= 1200 or y >= 1200:
+                if x < 0 or y < 0 or x >= self.size or y >= self.size:
                     continue
                 k = f"{i},{j}"
                 if self.terrain.get(k, {}).get("wall", 0) > 0:
@@ -304,7 +378,7 @@ class MapMemory:
             tot = seen = 0
             for i, j in ring:
                 x, y = i * CELL + CELL // 2, j * CELL + CELL // 2
-                if x < 0 or y < 0 or x >= MAP_TILES or y >= MAP_TILES:
+                if x < 0 or y < 0 or x >= self.size or y >= self.size:
                     continue
                 k = f"{i},{j}"
                 if self.terrain.get(k, {}).get("wall", 0) > 0:
@@ -372,7 +446,7 @@ class MapMemory:
         # learning cannot close this. Bounds can.
         #
         # Not a tuned constant: no map has a tile at a negative coordinate.
-        if x < 0 or y < 0 or x >= MAP_TILES or y >= MAP_TILES:
+        if x < 0 or y < 0 or x >= self.size or y >= self.size:
             return -10.0
         if self.is_wall(x, y):
             return -10.0
@@ -469,7 +543,7 @@ class MapMemory:
             d = step * CELL
             cx = int(x + math.cos(heading) * d)
             cy = int(y + math.sin(heading) * d)
-            if (cx < 0 or cy < 0 or cx >= MAP_TILES or cy >= MAP_TILES
+            if (cx < 0 or cy < 0 or cx >= self.size or cy >= self.size
                     or self.is_wall(cx, cy)):
                 return True
         return False
@@ -525,5 +599,7 @@ class MapMemory:
         return total
 
     def stats(self) -> str:
-        return (f"map {self.map_id}: {len(self.terrain)} wall cell(s), "
+        return (f"map {self.map_id} ({self.size} a side"
+                f"{'' if is_home_map(self.map_id) else ', learned'}): "
+                f"{len(self.terrain)} wall cell(s), "
                 f"{len(self.reach)} scanned cell(s)")

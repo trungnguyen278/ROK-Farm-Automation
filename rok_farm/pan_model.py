@@ -44,12 +44,6 @@ KX_SLOPE = 0.00929
 KY_MID = 0.02223
 KY_SLOPE = 0.02480
 
-# The world is 1200 tiles a side. Over 3,433 logged position reads the
-# largest X was 999, and every Y above 1199 was the known misread where the
-# last digit collides with the icon after it ("Y:182" -> "1822").
-MAP_SIZE = 1200
-
-
 def kx(row: float) -> float:
     return KX_MID + KX_SLOPE * (0.5 - row)
 
@@ -155,8 +149,3 @@ def screen_heading(dx_tiles: float, dy_tiles: float, width_px: float,
     rx = (width_px / 2.0 - margin) * KX_MID
     ry = (height_px / 2.0 - margin) * KY_MID
     return math.atan2(-dy_tiles / ry, dx_tiles / rx)
-
-
-def plausible(x: int, y: int) -> bool:
-    """Could this be a real position? Rejects the known Y misread."""
-    return 0 <= x < MAP_SIZE and 0 <= y < MAP_SIZE
