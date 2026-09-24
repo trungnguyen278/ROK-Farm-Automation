@@ -1,19 +1,25 @@
-"""Draw what the map book knows: where the scan has NOT been, and where it
-has been over and over.
+"""Draw where the scan has NOT been, and where it has been over and over.
 
 The operator, 2026-09-23: "phai ve duoc ra thi moi biet cho nao chua den va
 cho nao bi lap" -- it has to be drawn to see which ground was never reached
 and which was covered again and again. Two panels, same frame, drawn the way
 the game shows the map (X to the right, Y UP):
 
-  left   NOT REACHED: book cells inside the sweep radius that no scan has
-         shown in the stale window are red; seen cells green. The camera
-         track, the city (star) and the deposits marched to (x) on top.
-  right  REPEATS: how many times each cell has been in view -- one colour
-         per band (1, 2-3, 4-6, 7-10, 11+). The count is the book's own:
-         every scan adds one to every cell its view showed.
+  left   NOT REACHED: book cells inside the sweep radius that no view showed
+         in the stale window before the end of the period are red; seen
+         cells green. The camera track, the city (star) and the deposits
+         marched to (x) on top.
+  right  REPEATS: how many times each cell was in view during the period --
+         one colour per band (1, 2-3, 4-6, 7-10, 11+).
 
-    .venv\\Scripts\\python tools\\dev\\track_map.py [--since "2026-09-23 14:45"] [--out file.png]
+Everything is rebuilt from the camera track the book keeps (one point per
+position read, each read one view at icon zoom), cut to [--since, --until],
+with each view's footprint from rok_farm.pan_model -- the same footprint the
+farm records. The book's own per-cell counts run from its last reset and
+could not be cut to a period.
+
+    .venv\\Scripts\\python tools\\dev\\track_map.py --since "2026-09-24 01:43"
+        [--until "2026-09-24 07:55"] [--stale-h 2] [--out file.png]
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import time
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -29,12 +35,17 @@ import cv2
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from rok_farm import pan_model  # noqa: E402
+from rok_farm.flow_steps import GemFlowMixin  # noqa: E402
+
 BOOK = ROOT / "data" / "map_knowledge" / "4096.json"
 LOG = ROOT / "logs" / "overnight" / "farm_run.log"
 CELL = 8
 PX = 3                       # pixels per tile
-STALE_H = 6.0
-SWEEP_RADIUS = 150
+WIN_W, WIN_H = 1534, 863
+SWEEP_RADIUS = GemFlowMixin.SWEEP_RADIUS_TILES
 # Longer than any scan step (7-20 tiles) or node-click recentre: a trip
 # through the city. Drawn dotted, not as a pan.
 JUMP_TILES = 40
@@ -48,32 +59,55 @@ BANDS = [(1, 1, (190, 235, 190)), (2, 3, (90, 200, 90)), (4, 6, (60, 215, 235)),
 BG = (238, 238, 238)
 
 
-def views(c) -> int:
-    return int(c.get("empty", 0)) + int(c.get("gem", 0))
+def view_cells(cam) -> list[tuple[int, int]]:
+    """Book cells a view at `cam` shows -- flow_steps._view_cells."""
+    corners = pan_model.view_corners(cam, WIN_W, WIN_H)
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    out = []
+    for i in range(int(min(xs)) // CELL, int(max(xs)) // CELL + 1):
+        for j in range(int(min(ys)) // CELL, int(max(ys)) // CELL + 1):
+            centre = (i * CELL + CELL // 2, j * CELL + CELL // 2)
+            if pan_model.in_view(cam, centre, WIN_W, WIN_H,
+                                 margin=GemFlowMixin.VIEW_MARGIN):
+                out.append((i, j))
+    return out
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", default=datetime.now().strftime("%Y-%m-%d 00:00"))
+    ap.add_argument("--until", default=None,
+                    help="end of the period (default: the last track point)")
+    ap.add_argument("--stale-h", type=float, default=GemFlowMixin.SWEEP_STALE_H,
+                    help="how long a view counts as covering a cell "
+                         "(default: the farm's SWEEP_STALE_H)")
     ap.add_argument("--book", default=str(BOOK))
     ap.add_argument("--out", default=str(ROOT / "screenshots" / "track_map.png"))
-    ap.add_argument("--at", default=None,
-                    help="judge 'seen lately' at this time (default: the last "
-                         "track point)")
     ap.add_argument("--radius", type=int, default=200,
                     help="tiles shown around the city")
     args = ap.parse_args()
 
     book = json.loads(Path(args.book).read_text(encoding="utf-8"))
     since = datetime.strptime(args.since, "%Y-%m-%d %H:%M").timestamp()
+    until = (datetime.strptime(args.until, "%Y-%m-%d %H:%M").timestamp()
+             if args.until else float("inf"))
     city = tuple(book.get("city") or (577, 615))
-    track = [p for p in book.get("track", []) if p[0] >= since]
-    reach = book.get("reach", {})
-    # "Seen lately" is judged at the end of the data, not at the moment the
-    # picture is drawn -- drawn at 22:22, the 16:21 cells had aged past the
-    # window and the same run looked 38 cells worse than at 18:25.
-    now = (datetime.strptime(args.at, "%Y-%m-%d %H:%M").timestamp()
-           if args.at else (track[-1][0] if track else time.time()))
+    track = [p for p in book.get("track", []) if since <= p[0] <= until]
+    if not track:
+        print("no track points in that period")
+        return 1
+    end = track[-1][0]
+    fresh_from = max(since, end - args.stale_h * 3600)
+
+    counts: dict[tuple[int, int], int] = {}
+    fresh: set[tuple[int, int]] = set()
+    for t, x, y in track:
+        for cell in view_cells((x, y)):
+            counts[cell] = counts.get(cell, 0) + 1
+            if t >= fresh_from:
+                fresh.add(cell)
+
     size = 2 * args.radius * PX
     x0, y0 = city[0] - args.radius, city[1] - args.radius
 
@@ -84,15 +118,13 @@ def main() -> int:
         cv2.rectangle(img, to_px(i * CELL, j * CELL + CELL),
                       to_px(i * CELL + CELL, j * CELL), colour, -1)
 
-    def fresh(c):
-        return c and now - c.get("t", 0) < STALE_H * 3600
-
+    until_txt = (datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M"))
     marches = []
     if LOG.exists():
         with LOG.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 m = MARCH.match(line)
-                if m and m.group(1) >= args.since:
+                if m and args.since <= m.group(1)[:16] <= until_txt:
                     marches.append((int(m.group(3)), int(m.group(4))))
 
     def overlay(img):
@@ -139,27 +171,25 @@ def main() -> int:
     cx, cy = city[0] // CELL, city[1] // CELL
     r = SWEEP_RADIUS // CELL
     gaps = seen_n = 0
+    near_gaps = near_total = 0
     for i in range(cx - r, cx + r + 1):
         for j in range(cy - r, cy + r + 1):
             if i < 0 or j < 0 or i * CELL >= 1200 or j * CELL >= 1200:
                 continue
-            if fresh(reach.get(f"{i},{j}")):
+            near = max(abs(i - cx), abs(j - cy)) * CELL <= 80
+            near_total += near
+            if (i, j) in fresh:
                 cell_rect(left, i, j, SEEN)
                 seen_n += 1
             else:
                 cell_rect(left, i, j, NOT_REACHED)
                 gaps += 1
+                near_gaps += near
     overlay(left)
 
     # --- right: repeats --------------------------------------------------------
     right = np.full((size, size, 3), BG, np.uint8)
-    counts = []
-    for k, c in reach.items():
-        if not fresh(c):
-            continue
-        n = views(c)
-        counts.append(n)
-        i, j = (int(v) for v in k.split(","))
+    for (i, j), n in counts.items():
         for lo, hi, colour in BANDS:
             if lo <= n <= hi:
                 cell_rect(right, i, j, colour)
@@ -182,14 +212,17 @@ def main() -> int:
             y += 18
 
     total = gaps + seen_n
-    label(left, [f"NOT REACHED within {SWEEP_RADIUS} tiles (last {STALE_H:.0f}h)",
-                 f"not reached: {gaps} cells ({100 * gaps / max(1, total):.0f}%)",
+    label(left, [f"NOT REACHED within {SWEEP_RADIUS} tiles "
+                 f"(last {args.stale_h:g}h of the period)",
+                 f"not reached: {gaps} cells ({100 * gaps / max(1, total):.0f}%)"
+                 f", within 80 tiles: {near_gaps}/{near_total}",
                  f"seen: {seen_n} cells",
-                 f"track {len(track)} reads since {args.since}, marches {len(marches)}"],
+                 f"{args.since} to {until_txt}: {len(track)} views, "
+                 f"marches {len(marches)}"],
           [None, NOT_REACHED, SEEN, None])
-    band_n = [sum(lo <= n <= hi for n in counts) for lo, hi, _ in BANDS]
-    views_total = sum(counts)
-    label(right, [f"REPEATS: times each cell was in view (last {STALE_H:.0f}h)"]
+    band_n = [sum(lo <= n <= hi for n in counts.values()) for lo, hi, _ in BANDS]
+    views_total = sum(counts.values())
+    label(right, ["REPEATS: times each cell was in view in the period"]
           + [f"{lo}{'' if lo == hi else ('+' if hi > 999 else '-' + str(hi))} times: "
              f"{n} cells" for (lo, hi, _), n in zip(BANDS, band_n)]
           + [f"{views_total} cell-views over {len(counts)} cells = "
@@ -200,10 +233,14 @@ def main() -> int:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), img)
+    far = sorted(max(abs(x - city[0]), abs(y - city[1])) for x, y in marches)
     print(f"{out}")
-    print(f"not reached {gaps}/{total} cells within {SWEEP_RADIUS}; "
-          f"repeats {dict(zip(['1', '2-3', '4-6', '7-10', '11+'], band_n))}; "
-          f"{views_total / max(1, len(counts)):.1f} views per seen cell")
+    print(f"{len(track)} views; not reached {gaps}/{total} within {SWEEP_RADIUS} "
+          f"({near_gaps}/{near_total} within 80); repeats "
+          f"{dict(zip(['1', '2-3', '4-6', '7-10', '11+'], band_n))}; "
+          f"{views_total / max(1, len(counts)):.1f} views per seen cell; "
+          f"marches {len(far)}"
+          + (f", median {far[len(far) // 2]} tiles out, max {far[-1]}" if far else ""))
     return 0
 
 
