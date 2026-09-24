@@ -268,6 +268,46 @@ class GemFlowMixin:
     # next one to agree (see _map_sync): a scan step moves 6-29 tiles.
     MISREAD_JUMP_TILES = 60
 
+    # A failed size probe is tried again after this long: a popup or a lost
+    # frame is worth another go, the same failure every mine is not.
+    SIZE_PROBE_RETRY_S = 6 * 3600.0
+
+    def _maybe_probe_map_size(self, tag: str) -> bool:
+        """Measure a KvK map at its top-right corner, once (map_edge).
+
+        Runs at the start of a mine from the world map, and brings the view
+        back to icon zoom through the city -- the road whose end is known.
+        False only if that road failed, and so the mine cannot go on.
+        """
+        book = getattr(self, "mapmem", None)
+        if (book is None or is_home_map(book.map_id) or book.size_measured
+                or time.time() - book.size_probe_t < self.SIZE_PROBE_RETRY_S):
+            return True
+        book.size_probe_t = time.time()
+        book.save()
+        print(f"  [{INFO}] Map {book.map_id}: measuring its size -- out to "
+              f"its east and north edges")
+        res: dict = {}
+        try:
+            res = self._probe_map_size()
+        except Exception as e:
+            logger.warning("map size probe failed: %s", e)
+        self._toggle_view(f"{tag}: back from the map's edge")
+        self._wait(random.uniform(2.5, 3.5))
+        self._view_is_world = False
+        back = self._step_to_world_map(tag)
+        size = res.get("size")
+        if (res.get("map_id") == book.map_id and res.get("confident") and size
+                and size >= book.size):
+            book.set_measured_size(size)
+        else:
+            logger.warning("Map %s: size probe not taken (%s) -- the size "
+                           "stays %d, learned from positions", book.map_id,
+                           res.get("error") or {k: res.get(k) for k in
+                                                ("map_id", "size", "confident")},
+                           book.size)
+        return back
+
     def _note_unproven_edge(self) -> None:
         """Say so, once, when the city sits near an edge the book assumed.
 
@@ -896,6 +936,9 @@ class GemFlowMixin:
         # Step 1: Get to world map at icon-zoom level
         # If already on world map (from previous mine), skip city detour
         if not self._step_to_world_map(tag):
+            return False
+        # A KvK map's size, read once at its corner; a home kingdom's is known.
+        if not self._maybe_probe_map_size(tag):
             return False
 
         # Step 2+3+4: Wander scan, clicking each icon to verify gem type

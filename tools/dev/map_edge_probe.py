@@ -1,14 +1,16 @@
-"""Read the map's size at its bottom-right corner (rok_farm.map_edge).
+"""Measure the map's size at its edges (rok_farm.map_edge).
 
-The operator, 2026-09-24: "zoom out max roi xac dinh goc duoi ben phai de
-zoom in lay toa do tu do xac dinh tuong doi do lon map". Out to the far view,
-pan until the camera is held at the bottom-right corner, back in until the
-HUD reads: X there is the size - 1. Tried first on the home kingdom, whose
-size is known (1200), before the farm trusts it on a KvK map.
+The operator, 2026-09-24: zoom out, find the map's corner, read the
+coordinates there. The first try (20260924_124014) found the far view held
+inside the kingdom but the world going on past its edge at readable zooms,
+so this walks east and north at the widest readable zoom until the HUD names
+the kingdom next door: the last X and Y read on this map snap to its size.
+Tried on the home kingdom, whose size is known (1200), before the farm
+trusts it on a KvK map.
 
-Output: screenshots/map_edge/<stamp>/ -- far_limit, far_corner, first_read,
-corner_read .png and probe.json (every leg's frame change, every HUD read).
-The view comes back through the city, the one road whose end is known.
+Output: screenshots/map_edge/<stamp>/ -- widest_readable, east_end,
+north_end .png and probe.json (every HUD read of both walks). The view comes
+back through the city, the one road whose end is known.
 
 Needs the farm stopped (it holds the board). Closes the game at the end
 unless --keep-game.

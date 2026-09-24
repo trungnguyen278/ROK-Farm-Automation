@@ -1,23 +1,27 @@
-"""How large is this map: read at its bottom-right corner.
+"""How large is this map: pan to its edges and see where the HUD's map changes.
 
 The operator, 2026-09-24: "zoom out max roi xac dinh goc duoi ben phai de
-zoom in lay toa do tu do xac dinh tuong doi do lon map". Out to the far view
-(it shows no coordinates), pan until the map stops moving east and then
-south -- the camera is held at the corner -- and back in until the HUD
-reads. Screen right is +X and screen down is -Y (pan_survey), so the
-bottom-right corner is X = size - 1, Y = 0: the X read there is the size.
-The sizes that exist are far apart (map_memory.MAP_SIZES: 1200, 1440, 2400),
-so a read some tiles short of the corner still tells them apart.
+zoom in lay toa do tu do xac dinh tuong doi do lon map". Tried live the same
+day (screenshots/map_edge/20260924_124014): the far view is held inside the
+kingdom -- some forty legs past its corner moved nothing, and the frame still
+changed 3-11 a leg, so "the frame stood still" could not even tell -- but at
+the widest zoom where the HUD reads, the world goes on: panning east on 4096
+read X 1065, 1130, 1193 and then #S11001 X:58, the kingdom next door; south
+on S11001, Y 15 and then #4093 Y:1166. So an edge is where the id changes,
+and the last coordinate read on this map, plus one, is within a leg of the
+size -- which snaps to map_memory.MAP_SIZES, 240+ tiles apart.
 
-The zoom follows the pointer: a notch keeps the ground under the pointer
-where it is. _scroll_at_center scrolls at a random point up to a quarter of
-the window off centre, which carries the camera by as much as a couple of
-hundred tiles at the far view. So every notch here is scrolled with the
-pointer on the corner's side of the centre: zooming in then pushes the
-camera into the corner it is held at, not away from it.
+East gives the size from X, north from Y (screen up is +Y): the top-right
+corner, where both are size - 1. (The bottom-right one the operator named
+has Y = 0 and says nothing about the size.) Maps are square, so the two
+must agree -- that is what makes it a measurement.
 
-Not a farm step yet. tools/dev/map_edge_probe.py runs it between mines and
-keeps its frames; it is tried first on the home kingdom, whose size is known.
+The zoom follows the pointer (a notch keeps the ground under the pointer
+where it is) and _scroll_at_center picks a point up to a quarter of the
+window off centre, so the notches here are scrolled near the centre.
+
+tools/dev/map_edge_probe.py runs it between mines and keeps its frames; the
+farm runs it once on a KvK map (flow_steps._maybe_probe_map_size).
 """
 
 from __future__ import annotations
@@ -27,33 +31,34 @@ import time
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from rok_farm.config import ZOOM_OUT_QUIET_DIFF
 from rok_farm.logging_setup import INFO, logger
 from rok_farm.map_memory import MAP_SIZES
 
-# The map did not move: mean abs difference of two frames at 320x180, 0-255.
-# kingdom_survey 2026-09-24, 31 notches of zoom: every notch that zoomed
-# changed the frame by 6.44-29.83; the two past the limit by 0.59 and 0.69.
-EDGE_STILL_DIFF = 1.5
-# A far-view leg: two drags of this fraction of the window each, the pointer
-# kept inside it. At the limit a drag of 0.3 of the width moved the camera
-# 234-277 tiles (calibration, 2026-09-24), so a home kingdom is crossed in
-# three legs and a 2400 map in six; the caps leave room over that.
-FAR_LEG_FRAC = 0.3
-FAR_LEGS_MAX = 8
-# Once the HUD reads, a few shorter legs make sure the camera is still at the
-# corner -- the far view's hold and the near view's may not be the same.
-NEAR_LEG_FRAC = 0.2
-NEAR_LEGS_MAX = 4
-# Where the pointer sits for a notch toward the corner (fractions of the
-# window, before a small jitter): right of and below the centre.
-CORNER_POINTER = (0.68, 0.62)
+# A leg is two drags of this fraction of the window. At the widest readable
+# zoom two drags of 0.2 moved the camera 63-65 tiles (2026-09-24), so 0.3 is
+# ~95 -- and even at the 1.77x an open-loop drag has come out at
+# (pan_survey), under the 240 tiles between two map sizes: the last read on
+# the map is always within one size of its edge.
+EDGE_LEG_FRAC = 0.3
+# 2400 tiles at ~95 a leg is 26 legs.
+EDGE_LEGS_MAX = 30
+# The id OCR misreads about 8% of reads (flow_steps._map_sync): the map is
+# left when this many reads in a row name the same other map.
+LEFT_READS = 2
+# Held where there is nothing beyond: this many legs in a row that gained at
+# most HELD_TILES on the axis walked.
+HELD_LEGS = 2
+HELD_TILES = 2
+# A read further on than this from the last one is a stray digit, not a leg:
+# two legs (one unreadable in between) at the 1.77x drag error are ~340
+# tiles, the digit collision multiplies Y by ten (196 read as 1965).
+MISREAD_TILES = 360
 
 
 class MapEdgeMixin:
-    """Walks the camera to the map's bottom-right corner and reads it."""
+    """Walks the camera to the map's top-right corner, reading the HUD."""
 
     def _edge_frame(self, wait: float = 4.0):
         """The raw client frame, waiting for one: on a still screen the
@@ -65,13 +70,6 @@ class MapEdgeMixin:
             time.sleep(0.1)
         return None
 
-    @staticmethod
-    def _edge_diff(a, b) -> float:
-        if a is None or b is None:
-            return float("inf")
-        return float(np.mean(cv2.absdiff(cv2.resize(a, (320, 180)),
-                                         cv2.resize(b, (320, 180)))))
-
     def _edge_settle(self, cap: float = 5.0) -> None:
         """Until two looks in a row show the map not moving, capped."""
         t0 = time.monotonic()
@@ -81,34 +79,42 @@ class MapEdgeMixin:
             cur = self._settle_patch(frame) if frame is not None else None
             if cur is not None:
                 if prev is not None:
-                    quiet = quiet + 1 if float(np.mean(cv2.absdiff(prev, cur))) < ZOOM_OUT_QUIET_DIFF else 0
+                    moved = float(cv2.absdiff(prev, cur).mean())
+                    quiet = quiet + 1 if moved < ZOOM_OUT_QUIET_DIFF else 0
                     if quiet >= 2:
                         return
                 prev = cur
             time.sleep(random.uniform(0.07, 0.11))
 
-    def _edge_notch(self, direction: int, at=(0.5, 0.5)) -> None:
-        """One notch (-1 out, +1 in) with the pointer near `at`."""
+    def _edge_read(self):
+        return self._read_map_position(self._edge_frame(), full=True)
+
+    def _edge_notch(self, direction: int) -> None:
+        """One notch (-1 out, +1 in), the pointer near the centre."""
         w = self.win
-        fx = at[0] + random.uniform(-0.03, 0.03)
-        fy = at[1] + random.uniform(-0.03, 0.03)
+        fx = 0.5 + random.uniform(-0.04, 0.04)
+        fy = 0.5 + random.uniform(-0.04, 0.04)
         self._moveto(w["left"] + int(w["width"] * fx), w["top"] + int(w["height"] * fy))
         time.sleep(random.uniform(0.12, 0.3))
         self.cmd.send("SCROLL", direction)
         time.sleep(random.uniform(0.35, 0.6))
         self._edge_settle()
 
-    def _edge_out_to_limit(self, max_notches: int = 24) -> int:
-        """Out until two notches in a row leave the frame as it was."""
-        prev, still = self._edge_frame(), 0
-        for n in range(1, max_notches + 1):
+    def _edge_widest_readable(self, max_out: int = 16, max_in: int = 6):
+        """Out until the HUD stops reading, back in until it reads again.
+        (notches out, notches in, the read there)"""
+        out = 0
+        for out in range(1, max_out + 1):
             self._edge_notch(-1)
-            frame = self._edge_frame()
-            still = still + 1 if self._edge_diff(prev, frame) < EDGE_STILL_DIFF else 0
-            prev = frame
-            if still >= 2:
-                return n
-        return max_notches
+            if self._edge_read() is None:
+                break
+        hud, back = None, 0
+        for back in range(1, max_in + 1):
+            self._edge_notch(+1)
+            hud = self._edge_read()
+            if hud:
+                break
+        return out, back, hud
 
     def _edge_leg(self, dx_frac: float, dy_frac: float) -> None:
         """Pan the camera: two drags of the pointer, each dx_frac/dy_frac of
@@ -126,93 +132,112 @@ class MapEdgeMixin:
             time.sleep(random.uniform(0.2, 0.45))
         self._edge_settle()
 
-    def _edge_pin_far(self, dx_frac: float, dy_frac: float) -> tuple[int, bool, list]:
-        """Legs one way until one of them leaves the frame as it was: the
-        camera is held at the edge. (legs, held, the frame change per leg)"""
-        prev, diffs = self._edge_frame(), []
-        for leg in range(1, FAR_LEGS_MAX + 1):
-            self._edge_leg(dx_frac, dy_frac)
-            frame = self._edge_frame()
-            diffs.append(round(self._edge_diff(prev, frame), 2))
-            prev = frame
-            if diffs[-1] < EDGE_STILL_DIFF:
-                return leg, True, diffs
-        return FAR_LEGS_MAX, False, diffs
+    @staticmethod
+    def _edge_leg_for(axis: int, sign: int) -> tuple[float, float]:
+        """(dx_frac, dy_frac) that moves the camera `sign`-wards on `axis`
+        (0 = X, 1 = Y). Screen down is -Y, so +Y is a leg with dy < 0."""
+        if axis == 0:
+            return sign * EDGE_LEG_FRAC, 0.0
+        return 0.0, -sign * EDGE_LEG_FRAC
 
-    def _edge_pin_far_corner(self) -> dict:
-        """South legs until the camera is held at the bottom-right corner.
+    def _edge_walk(self, axis: int, map_id: str) -> dict:
+        """Legs toward +X (axis 0) or +Y (axis 1), a HUD read after each,
+        until the map is left, the camera is held, or the cap.
 
-        Each south leg is judged together with the east legs after it (until
-        those are held): the far calibration moved -164 X on a drag straight
-        up -- perhaps the zoom's pointer rather than the drag, not settled --
-        and a camera already held at the bottom would keep sliding west on
-        every south leg, so the frame alone would never stand still. A south
-        leg plus the east legs after it that bring the frame back to what it
-        was means neither way moves any more.
+        size: the smallest map size above the furthest read on this map;
+        estimate: that read plus the mean leg minus the neighbour's first
+        read -- the edge to the tile, when the neighbour's coordinates start
+        at the shared border as they did on 2026-09-24.
         """
-        steps = []
-        for _step in range(FAR_LEGS_MAX):
-            before = self._edge_frame()
-            self._edge_leg(0.0, FAR_LEG_FRAC)
-            legs, held, _diffs = self._edge_pin_far(FAR_LEG_FRAC, 0.0)
-            diff = round(self._edge_diff(before, self._edge_frame()), 2)
-            steps.append({"east_legs": legs, "east_held": held, "diff": diff})
-            if held and diff < EDGE_STILL_DIFF:
-                return {"held": True, "steps": steps}
-        return {"held": False, "steps": steps}
-
-    def _edge_pin_near(self, axis: int, sign: int) -> tuple[tuple | None, list]:
-        """Legs one way, reading the HUD after each, until the coordinate on
-        `axis` (0 = X, 1 = Y) stops moving `sign`-wards. (last read, reads)"""
-        reads = [self._read_map_position(self._edge_frame(), full=True)]
-        dx, dy = (NEAR_LEG_FRAC, 0.0) if axis == 0 else (0.0, NEAR_LEG_FRAC)
-        for _leg in range(NEAR_LEGS_MAX):
+        dx, dy = self._edge_leg_for(axis, +1)
+        reads = [self._edge_read()]
+        own = [r for r in reads if r and r[0] == map_id]
+        other: list = []
+        still, ended = 0, "cap"
+        for _leg in range(EDGE_LEGS_MAX):
             self._edge_leg(dx, dy)
-            hud = self._read_map_position(self._edge_frame(), full=True)
+            hud = self._edge_read()
             reads.append(hud)
-            before = next((r for r in reversed(reads[:-1]) if r), None)
-            if hud and before and (hud[1 + axis] - before[1 + axis]) * sign <= 2:
-                break
-        return next((r for r in reversed(reads) if r), None), reads
+            if hud is None:
+                continue
+            if hud[0] == map_id:
+                other = []
+                gained = hud[1 + axis] - own[-1][1 + axis] if own else None
+                if gained is not None and gained > MISREAD_TILES:
+                    continue
+                still = still + 1 if gained is not None and gained <= HELD_TILES else 0
+                own.append(hud)
+                if still >= HELD_LEGS:
+                    ended = "held"
+                    break
+            else:
+                other = other + [hud] if not other or other[-1][0] == hud[0] else [hud]
+                if len(other) >= LEFT_READS:
+                    ended = "left"
+                    break
+        res: dict = {"ended": ended, "reads": reads}
+        if not own:
+            return res
+        last = max(r[1 + axis] for r in own)
+        gains = [b[1 + axis] - a[1 + axis] for a, b in zip(own, own[1:])
+                 if b[1 + axis] - a[1 + axis] > HELD_TILES]
+        res.update(last=last, size=next((s for s in MAP_SIZES if s > last), None))
+        if ended == "left" and gains:
+            res["neighbour"] = other[0][0]
+            res["estimate"] = round(last + sum(gains) / len(gains) - other[0][1 + axis])
+        return res
+
+    def _edge_back_onto(self, axis: int, map_id: str, max_legs: int = 5) -> bool:
+        """Legs back the way a walk came until the HUD reads this map again."""
+        dx, dy = self._edge_leg_for(axis, -1)
+        for _leg in range(max_legs):
+            self._edge_leg(dx, dy)
+            hud = self._edge_read()
+            if hud and hud[0] == map_id:
+                return True
+        return False
 
     def _probe_map_size(self, out_dir: Path | None = None) -> dict:
-        """Walk to the bottom-right corner and read it. From the world map at
-        any zoom; leaves the camera at the corner, zoomed in just enough for
-        the HUD to read -- the caller brings the view back."""
-        def keep(name, frame):
-            if out_dir is not None and frame is not None:
-                cv2.imwrite(str(Path(out_dir) / f"{name}.png"), frame)
+        """Walk to the top-right corner, reading the HUD. From the world map
+        at any zoom; leaves the camera wherever the walk ended, zoomed out
+        -- the caller brings the view back (through the city)."""
+        def keep(name):
+            if out_dir is not None:
+                frame = self._edge_frame()
+                if frame is not None:
+                    cv2.imwrite(str(Path(out_dir) / f"{name}.png"), frame)
 
-        res: dict = {"start": self._read_map_position(self._edge_frame(), full=True)}
         t0 = time.monotonic()
-        res["notches_out"] = self._edge_out_to_limit()
-        keep("far_limit", self._edge_frame())
-        legs, held, diffs = self._edge_pin_far(FAR_LEG_FRAC, 0.0)
-        res["east"] = {"legs": legs, "held": held, "diffs": diffs}
-        res["south"] = self._edge_pin_far_corner()
-        keep("far_corner", self._edge_frame())
-        hud, notches = None, 0
-        for notches in range(1, 25):
-            self._edge_notch(+1, at=CORNER_POINTER)
-            hud = self._read_map_position(self._edge_frame(), full=True)
-            if hud:
-                break
-        res["notches_in"], res["first_read"] = notches, hud
-        keep("first_read", self._edge_frame())
-        if hud is None:
-            res["error"] = "the HUD never read on the way back in"
+        start = self._edge_read()
+        book = getattr(self, "mapmem", None)
+        out, back, hud = self._edge_widest_readable()
+        res: dict = {"start": start, "notches_out": out, "notches_in": back,
+                     "first_read": hud}
+        keep("widest_readable")
+        map_id = ((book.map_id if book is not None else None)
+                  or (start[0] if start else None) or (hud[0] if hud else None))
+        res["map_id"] = map_id
+        if hud is None or map_id is None:
+            res["error"] = "the HUD did not read at the widest zoom"
             return res
-        east, res["near_east"] = self._edge_pin_near(0, +1)
-        south, res["near_south"] = self._edge_pin_near(1, -1)
-        last = south or east or hud
-        keep("corner_read", self._edge_frame())
-        _mid, x, y = last
-        res["corner"] = [x, y]
-        res["map_id"] = last[0]
-        res["size"] = next((s for s in MAP_SIZES if s > x), None)
-        res["short_of_edge"] = None if res["size"] is None else res["size"] - 1 - x
+        res["east"] = self._edge_walk(0, map_id)
+        keep("east_end")
+        res["back_on_map"] = self._edge_back_onto(0, map_id)
+        if res["back_on_map"]:
+            res["north"] = self._edge_walk(1, map_id)
+            keep("north_end")
+        sx = res["east"].get("size")
+        sy = res.get("north", {}).get("size")
+        ends_ok = all(res.get(k, {}).get("ended") in ("left", "held")
+                      for k in ("east", "north"))
+        res["size"] = sx if sx is not None and sx == sy else None
+        res["confident"] = res["size"] is not None and ends_ok
         res["seconds"] = round(time.monotonic() - t0, 1)
-        print(f"  [{INFO}] map {last[0]}: bottom-right corner reads {x},{y} -> "
-              f"{res['size']} tiles a side ({res['short_of_edge']} short of the edge)")
+        print(f"  [{INFO}] map {map_id}: east edge after X "
+              f"{res['east'].get('last')} ({res['east']['ended']}), north edge "
+              f"after Y {res.get('north', {}).get('last')} "
+              f"({res.get('north', {}).get('ended')}) -> "
+              f"{res['size'] or 'no agreed size'}"
+              f"{'' if res['confident'] else ' (not confident)'}")
         logger.info("Map size probe: %s", res)
         return res

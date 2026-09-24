@@ -110,6 +110,10 @@ class MapMemory:
         # Tiles a side. Fixed for a home map; learned for any other.
         self.size = HOME_TILES if is_home_map(self.map_id) else MAP_SIZES[0]
         self._past_edge: list[tuple[float, int]] = []
+        # Read at the map's corner (map_edge) -- then it is not a guess any
+        # more -- and when that was last tried.
+        self.size_measured = False
+        self.size_probe_t = 0.0
         self.load()
 
     # --- persistence ---
@@ -128,8 +132,11 @@ class MapMemory:
             self.unreachable = d.get("unreachable", [])
             # A KvK map's size as learned -- or as the operator wrote it in
             # the file with the farm stopped. A home map's is not a question.
-            if not is_home_map(self.map_id) and d.get("size"):
-                self.size = int(d["size"])
+            if not is_home_map(self.map_id):
+                if d.get("size"):
+                    self.size = int(d["size"])
+                self.size_measured = bool(d.get("size_measured"))
+                self.size_probe_t = float(d.get("size_probe_t") or 0.0)
             logger.info("MapMemory %s: %d terrain cell(s), %d reach cell(s)",
                         self.map_id, len(self.terrain), len(self.reach))
         except Exception as e:
@@ -144,7 +151,8 @@ class MapMemory:
                  "track": self.track,
                  "city": list(getattr(self, "city", None) or []) or None,
                  "unreachable": getattr(self, "unreachable", []),
-                 "size": self.size},
+                 "size": self.size, "size_measured": self.size_measured,
+                 "size_probe_t": self.size_probe_t},
                 indent=1),
                 encoding="utf-8")
         except Exception as e:
@@ -189,6 +197,17 @@ class MapMemory:
         return True
 
     # --- the map's size ---
+
+    def set_measured_size(self, size: int) -> None:
+        """The size read at the map's corner (map_edge). Positions past it
+        can still grow it (note_extent): a read is evidence too."""
+        old = self.size
+        self.size, self.size_measured = int(size), True
+        print(f"  [{INFO}] Map {self.map_id} measured at its corner: "
+              f"{self.size} tiles a side")
+        logger.info("Map %s measured %d tiles a side (was %d)", self.map_id,
+                    self.size, old)
+        self.save()
 
     def note_extent(self, x: int, y: int, now: float | None = None) -> bool:
         """A position read on this map; True if it made the map larger.
