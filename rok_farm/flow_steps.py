@@ -511,12 +511,57 @@ class GemFlowMixin:
     # re-measured in daylight with the same tool.
     SWEEP_STALE_H = 2.0
     # Weights: a distance ring half as likely every 25 tiles further from the
-    # city; within a ring, a cell half as likely every 80 tiles further from
-    # the camera. With a few gaps near the city and hundreds far out, 25 puts
-    # about five draws in six near (tests/test_sweep.py); 40 managed under two
-    # in three.
+    # city; within a ring, a cell half as likely every SWEEP_CAM_HALF tiles
+    # further from the camera, and less likely the further it lies behind
+    # the way the camera is heading (SWEEP_BEHIND_FLOOR at dead astern). With
+    # a few gaps near the city and hundreds far out, 25 puts about five draws
+    # in six near (tests/test_sweep.py); 40 managed under two in three.
+    #
+    # The camera terms keep one run from crossing its own path. The operator,
+    # 2026-09-24, on the run drawn from 01:42: the black line cuts across
+    # itself again and again (tools/dev/run_map.py) -- 16 crossings in 80
+    # views, 30% of its views on cells it had already shown. At half every
+    # 80 tiles a new target was as likely on the far side of the city as
+    # beside the camera. Simulated over 5 x 60 runs out of the city with the
+    # real steering and book (2h stale window):
+    #
+    #                        crossings    re-viewed    new cells   new ground
+    #                        /10 views    in the run   per scan    from city
+    #   half 80              0.56          8.7%        0.79         60 tiles
+    #   half 30              0.44          6.9%        0.94         61
+    #   half 30 + ahead      0.38          6.3%        0.97         62
+    #
+    # Fewer redraws (10 scans) or no U-turns in the wander's noise changed
+    # nothing further (0.37, 0.38), so the noise stays as it is.
+    #
+    # But the table above ends every mine at random. Where a mine ends at the
+    # first gem seen -- gems placed by the measured return curve
+    # (tools/dev/gem_return.py: 6.2% on unseen ground, less on ground seen in
+    # the last two hours) -- 20 sessions of 8 hours each, and gems an hour
+    # from the measured march time (119 deploys since 2026-09-23: 6.2 s a
+    # tile each way, ~10 gems a deposit):
+    #
+    #                                   scans   march    crossings  gems
+    #                                   a mine  median   /10 views  an hour
+    #   half 80 (the old draw)          9.2     51.0     0.82       100%
+    #   ring by distance, cell by path  8.5     52.9     0.60       ~98%
+    #   the path weighing rings too     7.7     55.6     0.46       ~95%
+    #   ... and one way round the city  7.1     55       0.37
+    #
+    # So every step tidier marches further: the tidy paths stay out on the
+    # ring they are on instead of going back to the holes by the city, and a
+    # tile further costs 12 s of the army's time against 4.5 s a scan saved.
+    # The second row is taken: most of the tidying, about none of the gems.
+    #
+    # "One way round" drew a turning direction per run and made a spiral. The
+    # operator, 2026-09-24: a spiral is the prettiest, but set in advance it
+    # is a fixed pattern; worked out afresh every time from near the camera
+    # and near the city it is more random. And weighing each cell by how much
+    # unseen ground surrounds it ("chua di qua") changed nothing measurable
+    # (8.5 scans, 52.8 tiles, 0.60) -- a target is unseen ground already.
     SWEEP_CITY_HALF = 25.0
-    SWEEP_CAM_HALF = 80.0
+    SWEEP_CAM_HALF = 30.0
+    SWEEP_BEHIND_FLOOR = 0.1
     # How hard a scan leans toward the target, drawn fresh every scan: that
     # fraction of the angle between the heading and the target is turned.
     #
@@ -578,8 +623,21 @@ class GemFlowMixin:
         book.band = band
         return band
 
-    def _sweep_target(self):
-        """A gap near the city to lean toward, or None."""
+    def _start_sweep_run(self):
+        """A run out of the city begins: its target is drawn afresh.
+
+        The last run's target could lie anywhere -- often across the city
+        from where this one begins -- and was kept for up to
+        SWEEP_REDRAW_SCANS scans more.
+        """
+        self._sweep_tgt = None
+
+    def _sweep_target(self, heading: float | None = None):
+        """A gap near the city to lean toward, or None.
+
+        `heading` is the scan's screen heading; a new target is drawn toward
+        the way it points (see SWEEP_BEHIND_FLOOR).
+        """
         book = self.mapmem
         city = getattr(self, "_city_xy", None)
         cam = getattr(self, "_last_map_xy", None)
@@ -602,12 +660,35 @@ class GemFlowMixin:
         if not gaps:
             self._sweep_tgt = None
             return None
+        ahead = None
+        if heading is not None:
+            ahead = pan_model.tile_heading(heading, self.win["width"],
+                                           self.win["height"])
+        def path_weight(x, y):
+            """How well a cell continues the path: near the camera, and
+            ahead of it rather than behind."""
+            w = 0.5 ** (max(abs(x - cam[0]), abs(y - cam[1]))
+                        / self.SWEEP_CAM_HALF)
+            if ahead is not None and (x, y) != tuple(cam):
+                off = math.atan2(y - cam[1], x - cam[0]) - ahead
+                w *= max(self.SWEEP_BEHIND_FLOOR, (1.0 + math.cos(off)) / 2.0)
+            return w
+
         # Two draws: first HOW FAR from the city, then WHERE at that distance.
         # Weighting single cells let the far ground win by sheer numbers --
         # the ring at 130 tiles holds sixteen times the cells of the ring at 8
         # -- and the first live target, 2026-09-23 15:50, was 133 tiles out
         # with gaps next to the city. A ring's weight does not grow with its
         # size, so "near first" means near first.
+        #
+        # The ring is drawn on distance from the city alone; only the cell
+        # inside it weighs the path. Letting the path weigh the ring too (its
+        # best cell's worth) was tidier still -- 0.46 crossings per 10 views
+        # against 0.60 -- but it kept the camera out on the ring it was on
+        # instead of going back in to the holes by the city, and marched 9%
+        # further (55.6 +-1.2 tiles against 51.0 +-0.7, 20 sessions each). At
+        # 6.2 s a tile each way that is ~5% fewer gems an hour, more than the
+        # fewer scans give back. See the table above SWEEP_CITY_HALF.
         rings: dict[int, list] = {}
         for g in gaps:
             rings.setdefault(g[2] // CELL_TILES, []).append(g)
@@ -616,9 +697,8 @@ class GemFlowMixin:
             ring_ids, weights=[0.5 ** (r * CELL_TILES / self.SWEEP_CITY_HALF)
                                for r in ring_ids])[0]
         pool = rings[ring]
-        weights = [0.5 ** (max(abs(x - cam[0]), abs(y - cam[1]))
-                           / self.SWEEP_CAM_HALF) for x, y, _d in pool]
-        x, y, d = random.choices(pool, weights=weights)[0]
+        x, y, d = random.choices(pool, weights=[path_weight(gx, gy)
+                                                for gx, gy, _gd in pool])[0]
         self._sweep_tgt, self._sweep_age = (x, y), 0
         logger.debug("sweep: target %d,%d -- %d tiles from the city, %d from "
                      "the camera, one of %d gap cell(s) within %d", x, y, d,
@@ -628,7 +708,7 @@ class GemFlowMixin:
 
     def _lean_to_sweep(self, heading: float) -> float:
         """Lean a screen heading toward the sweep target, by a random amount."""
-        tgt = self._sweep_target()
+        tgt = self._sweep_target(heading)
         cam = getattr(self, "_last_map_xy", None)
         # Read by _steer_heading: while there is a target, it alone steers --
         # only a wall or the map edge may turn the scan off it.
@@ -905,6 +985,7 @@ class GemFlowMixin:
             # has moved it -- the one moment the city's position is on
             # screen for the price of a read.
             city_read = self._learn_city(self._grab())
+            self._start_sweep_run()
 
         # On the world map. If already at icon-zoom with gems, scan; else zoom.
         frame = self._grab()
