@@ -91,16 +91,40 @@ def test_too_few_outlines_are_not_a_calibration(monkeypatch):
     assert H is None and "needed" in how
 
 
-@pytest.mark.parametrize("shift_px,taken", [(0.6, True), (1.5, False)])
-def test_the_prior_is_checked_at_the_zoom_the_walks_ran(monkeypatch, shift_px, taken):
-    """Where the camera point sits in the outline moves with the zoom: 0.20
-    px off at the survey's zoom, 0.70 one notch wider (14:50). Within
-    PRIOR_OK_PX it is still the home calibration; beyond, it is not."""
-    pts = [(x, y, px + shift_px, py) for x, y, px, py in
+@pytest.mark.parametrize("dx,dy", [(0.0, -0.95), (1.5, -2.0)])
+def test_a_notch_of_zoom_is_a_shift_the_prior_takes(monkeypatch, dx, dy):
+    """Where the camera point sits in the outline moves with the zoom -- by
+    (-0.08, -0.95) px a notch wider on the 14:50 trip. A shift is measured
+    and taken, not refused."""
+    pts = [(x, y, px + dx, py + dy) for x, y, px, py in
            points_from(minimap.HOME_H, grid_tiles(100, 1100))]
     items = fake_items(monkeypatch, pts, size_px=(30, 15), map_id="4096")
-    _H, how, _ = minimap.calibrate(items, "4096", 1200)
-    assert how.startswith("home calibration") == taken, how
+    H, how, err = minimap.calibrate(items, "4096", 1200)
+    assert how.startswith("home calibration") and err < 0.01, how
+    assert f"{dx:+.2f},{dy:+.2f}" in how
+    # the provinces keep the minimap's own geometry: the prior, not shifted
+    assert np.allclose(H, minimap.scaled_prior(1200))
+
+
+def test_a_wrong_size_is_not_a_shift(monkeypatch):
+    """A map drawn at 1200's scale though called 1440: the miss grows
+    across the map, no shift takes it away -- a fit of its own instead."""
+    pts = points_from(minimap.HOME_H, grid_tiles(150, 1250))
+    items = fake_items(monkeypatch, pts, map_id="S20001")
+    _H, how, _ = minimap.calibrate(items, "S20001", 1440)
+    assert not how.startswith("home calibration"), how
+
+
+def test_outlines_cut_by_an_edge_do_not_count(monkeypatch):
+    """Near an edge the map's edge cuts the view outline and its centroid
+    moves inward (4-5 px at the east edge, 14:50): such outlines, however
+    many, must not decide the calibration."""
+    good = points_from(minimap.HOME_H, grid_tiles(300, 900, n=3))
+    cut = [(x, y, px - 4.5, py) for x, y, px, py in
+           points_from(minimap.HOME_H, [(1150, y) for y in range(200, 1000, 50)])]
+    items = fake_items(monkeypatch, good + cut, map_id="4096")
+    H, how, err = minimap.calibrate(items, "4096", 1200)
+    assert how.startswith("home calibration") and err < 0.01, how
 
 
 def test_the_tile_grid_reads_the_province_under_each_cell():
@@ -213,9 +237,28 @@ def test_day_and_night_give_the_same_ten_provinces():
     def items(folder, key):
         meta = json.loads((folder / key).read_text(encoding="utf-8"))
         rows = meta.get("reads") or meta.get("frames")
-        return [(cv2.imread(str(folder / n)), tuple(h)) for n, h in rows if h]
+        return [(cv2.imread(str(folder / r[0])), tuple(r[1])) for r in rows if r[1]]
     day = minimap.build(items(SURVEY, "survey.json"), "4096", 1200, city=(577, 615))
     night = minimap.build(items(NIGHT, "probe.json"), "4096", 1200, city=(577, 615))
     assert day["provinces"] == night["provinces"] == 10
     assert night["how"].startswith("home calibration"), night["how"]
     assert minimap.agreement(day["grid"], night["grid"]) > 0.98
+
+
+BACKUP = ROOT / "data" / "map_knowledge" / "backup_20260924" / "4096_provinces.png"
+
+
+@pytest.mark.skipif(not (NIGHT.exists() and BACKUP.exists()),
+                    reason="the 14:50 trip and the saved split are not on this machine")
+def test_the_first_build_of_the_14_50_trip_needs_no_spread_walk():
+    """The walks' crops alone (the zoom's left out), a notch wider than the
+    survey and by night: the shifted prior takes them, 10 provinces."""
+    import json
+    meta = json.loads((NIGHT / "probe.json").read_text(encoding="utf-8"))
+    zoom = 1 + meta["notches_out"] + meta["notches_in"]
+    items = [(cv2.imread(str(NIGHT / n)), tuple(h)) for n, h in meta["frames"][zoom:30] if h]
+    res = minimap.build(items, "4096", 1200, city=(577, 615))
+    assert res.get("provinces") == 10, res.get("error")
+    assert res["how"].startswith("home calibration")
+    saved = cv2.imread(str(BACKUP), cv2.IMREAD_UNCHANGED)
+    assert minimap.agreement(res["grid"], saved) > 0.95

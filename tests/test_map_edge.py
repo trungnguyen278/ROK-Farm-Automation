@@ -117,7 +117,7 @@ def test_fog_past_an_edge_is_an_edge():
 def test_a_blank_read_or_two_on_the_map_is_not_the_fog():
     """The full read fails now and then on a readable HUD: two in a row
     (two legs through X 800-990) must not end the walk there."""
-    w = World(1200, blank_band=(800, 990))
+    w = World(1200, blank_band=(760, 870))
     res = w._probe_map_size()
     assert res["east"]["ended"] == "left" and res["east"]["last"] > 1100
     assert res["size"] == 1200 and res["confident"]
@@ -184,6 +184,10 @@ def test_it_walks_back_onto_the_map_before_going_north():
     w = World(1200)
     res = w._probe_map_size()
     assert res["back_on_map"]
+    # and two legs further in: along the east edge every view is cut by it
+    # (14:50, the north walk at X 1135 gave no outline the calibration could use)
+    first_north = res["north"]["reads"][0]
+    assert first_north[1] <= 1199 - 2 * 90, first_north
     east = [leg for leg in w.legs if leg[0] > 0]
     west = [leg for leg in w.legs if leg[0] < 0]
     north = [leg for leg in w.legs if leg[1] < 0]
@@ -273,9 +277,10 @@ def test_the_dev_tool_keeps_a_minimap_crop_beside_every_read(tmp_path):
             return np.zeros((863, 1534, 3), np.uint8)
 
     res = Filmed(1200)._probe_map_size(tmp_path)
-    names = [n for n, _hud in res["frames"]]
+    names = [row[0] for row in res["frames"]]
     assert names and all((tmp_path / n).exists() for n in names)
-    assert any(hud and hud[0] == "4096" for _n, hud in res["frames"])
+    assert any(row[1] and row[1][0] == "4096" for row in res["frames"])
+    assert {row[2] for row in res["frames"]} == {"zoom", "walk"}
     import cv2
     assert cv2.imread(str(tmp_path / names[0])).shape[:2] == (863 // 4, 1534 - 1534 * 3 // 4)
     farm = Filmed(1200)
@@ -363,3 +368,17 @@ def test_a_known_size_splits_the_provinces_whatever_the_walks_made_of_it(monkeyp
     res = Filmed(1200, per_leg=10)._survey_map(known_size=1200)
     assert not res["confident"]
     assert calls and calls[0][2] == 1200 and res["provinces"] is GRID
+
+
+def test_the_zoom_reads_are_left_out_of_the_build(monkeypatch, tmp_path):
+    """Each notch of the zoom is a zoom of its own: 15:30, the farm's own
+    survey, those reads outnumbered the walks' and the calibration came up
+    one outline short -- a spread walk ran out the trip's time."""
+    calls = fake_build(monkeypatch, [GRID])
+    w = Filmed(1200)
+    res = w._survey_map(out_dir=tmp_path)
+    walk = [row for row in w._edge_kept if row[2] == "walk"]
+    zoom = [row for row in w._edge_kept if row[2] == "zoom"]
+    assert zoom and walk
+    assert calls[0][0] == len(walk), (calls[0][0], len(walk), len(zoom))
+    assert res["provinces"] is GRID

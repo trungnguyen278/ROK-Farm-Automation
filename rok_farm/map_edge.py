@@ -79,6 +79,10 @@ EDGE_TRIP_MAX_S = 480.0
 SPREAD_COLUMNS = 3
 SPREAD_COLUMN_FRAC = 0.7
 SPREAD_LEGS_MAX = 60
+# Legs further west once back on the map, before the north walk: along the
+# east edge every view is cut by it and places the minimap badly (14:50: the
+# north walk at X 1135 gave no usable outline); two legs in, it gives some.
+BACK_EXTRA_LEGS = 2
 # A read further on than this from the last one is a stray digit, not a leg:
 # two legs (one unreadable in between) at the 1.77x drag error are ~340
 # tiles, the digit collision multiplies Y by ten (196 read as 1965).
@@ -123,14 +127,20 @@ class MapEdgeMixin:
         frame = self._edge_frame()
         hud = self._read_map_position(frame, full=True)
         if frame is not None:
+            phase = getattr(self, "_edge_phase", "walk")
+            # The walks' reads only: each notch of the zoom is a zoom of its
+            # own, and where the camera point sits in the view outline moves
+            # with it. 2026-09-24 15:30, the farm's own survey: the zoom's
+            # reads outnumbered the walks', the calibration kept 11 outlines
+            # of the 12 it needs, and a spread walk ran out the trip's time.
             crops = getattr(self, "_edge_crops", None)
-            if crops is not None:
+            if crops is not None and phase == "walk":
                 crops.append((minimap.crop_of(frame).copy(), hud))
             keep = getattr(self, "_edge_keep_dir", None)
             if keep is not None:
                 name = f"read_{len(self._edge_kept):03d}.png"
                 cv2.imwrite(str(Path(keep) / name), minimap.crop_of(frame))
-                self._edge_kept.append([name, list(hud) if hud else None])
+                self._edge_kept.append([name, list(hud) if hud else None, phase])
         return hud
 
     def _edge_notch(self, direction: int) -> None:
@@ -147,19 +157,23 @@ class MapEdgeMixin:
     def _edge_widest_readable(self, max_out: int = 16, max_in: int = 6):
         """Out until the HUD has stopped reading (OUT_MISSES blank reads in a
         row), back in until it reads again. (notches out, notches in, read)"""
-        out, misses = 0, 0
-        for out in range(1, max_out + 1):
-            self._edge_notch(-1)
-            misses = misses + 1 if self._edge_read() is None else 0
-            if misses >= OUT_MISSES:
-                break
-        hud, back = None, 0
-        for back in range(1, max_in + 1):
-            self._edge_notch(+1)
-            hud = self._edge_read()
-            if hud:
-                break
-        return out, back, hud
+        self._edge_phase = "zoom"
+        try:
+            out, misses = 0, 0
+            for out in range(1, max_out + 1):
+                self._edge_notch(-1)
+                misses = misses + 1 if self._edge_read() is None else 0
+                if misses >= OUT_MISSES:
+                    break
+            hud, back = None, 0
+            for back in range(1, max_in + 1):
+                self._edge_notch(+1)
+                hud = self._edge_read()
+                if hud:
+                    break
+            return out, back, hud
+        finally:
+            self._edge_phase = "walk"
 
     def _edge_leg(self, dx_frac: float, dy_frac: float) -> None:
         """Pan the camera: two drags of the pointer, each dx_frac/dy_frac of
@@ -308,6 +322,11 @@ class MapEdgeMixin:
         keep("east_end")
         res["back_on_map"] = self._edge_back_onto(0, map_id)
         if res["back_on_map"]:
+            for _leg in range(BACK_EXTRA_LEGS):
+                if self._edge_out_of_time():
+                    break
+                self._edge_leg(*self._edge_leg_for(0, -1))
+                self._edge_read()
             res["north"] = self._edge_walk(1, map_id)
             keep("north_end")
         sx = res["east"].get("size")
@@ -386,6 +405,8 @@ class MapEdgeMixin:
                 return res
             prov = minimap.build(self._edge_crops, map_id, size, city)
             if prov.get("stage") in ("crops", "calibrate"):
+                logger.info("map %s: provinces from the walks alone failed (%s) "
+                            "-- a spread walk", map_id, prov.get("error"))
                 if out_dir is not None:
                     self._edge_keep_dir = out_dir       # the dev tool keeps these too
                 res["spread_legs"] = self._edge_spread(map_id, size)

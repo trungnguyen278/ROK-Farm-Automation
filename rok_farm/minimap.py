@@ -45,12 +45,21 @@ HOME_H = np.array([[0.12068756, 0.07416308, 217.98613591],
 # Outlines at one zoom only: the outline's size is the zoom, and where the
 # camera point sits inside it moves with the zoom.
 OUTLINE_SIZE_TOL = 2
-# The home calibration, scaled to a map's size, is taken when it places the
-# map's own outlines this well (median), at whatever zoom the walks ran:
-# 0.20 px at the survey's zoom (legs of 96 tiles), 0.70 one notch wider
-# (legs of 125, 2026-09-24 14:50); wrong by one map size (1440 read as
-# 1200) it misses by ~17 px at X 1000.
+# The home calibration, scaled to a map's size and shifted by its median
+# miss, is taken when it then places the map's own outlines this well
+# (median). Only outlines half a view or more from every edge count: near an
+# edge the map's edge cuts the outline and its centroid moves inward (up to
+# 4-5 px at the east and south edges, 14:50). Away from the edges a notch of
+# zoom only moves the camera point inside the outline: at the survey's zoom
+# (legs of 96 tiles) the prior misses by 0.19 px unshifted; a notch wider
+# (legs of 125, 14:50) by 0.66 px, 0.32 once shifted (-0.01, -0.62) -- 18
+# points. Wrong by one map size (1440 read as 1200) no shift saves it: ~17
+# px at X 1000, growing across the map.
 PRIOR_OK_PX = 1.0
+PRIOR_MIN_POINTS = 4
+# The prior's pixels a tile (its affine part), for how far a view reaches.
+PRIOR_PX_PER_TILE = (0.106, 0.076)
+EDGE_PAD_TILES = 10
 # Else a fit of the map's own, from at least this many outlines, placing
 # them at least this well (median) -- and only from outlines spread over
 # the map: fitted on the north-east quarter alone, the home kingdom's far
@@ -87,19 +96,37 @@ def land_box(crop):
     return tuple(int(t) for t in st[k, :4])
 
 
+# How far outside the map's square (through HOME_H) the view outline may
+# still be looked for: a view at an edge reaches past it.
+OUTLINE_BOX_PAD = 20
+
+
+def minimap_box(shape):
+    """(x0, y0, x1, y1) of the crop the view outline is looked for in: the
+    map's square through HOME_H -- the same box for a map of any size drawn
+    in it (scaled_prior) -- and OUTLINE_BOX_PAD round it. Not the dark land:
+    over the night theme that ran down to the troop panel's white "5/5",
+    taken for an outline (2026-09-24 14:50)."""
+    corners = np.float32([[[0, 0], [HOME_TILES, 0], [HOME_TILES, HOME_TILES],
+                           [0, HOME_TILES]]])
+    quad = cv2.perspectiveTransform(corners, HOME_H)[0]
+    h, w = shape[:2]
+    x0 = max(0, int(quad[:, 0].min()) - OUTLINE_BOX_PAD)
+    y0 = max(0, int(quad[:, 1].min()) - OUTLINE_BOX_PAD)
+    x1 = min(w, int(np.ceil(quad[:, 0].max())) + OUTLINE_BOX_PAD)
+    y1 = min(h, int(np.ceil(quad[:, 1].max())) + OUTLINE_BOX_PAD)
+    return x0, y0, x1, y1
+
+
 def outline(crop):
-    """The view outline: the largest thin near-white blob within reach of
-    the minimap's kingdom -- the crop also holds white UI text ("4/5").
+    """The view outline: the largest thin near-white blob in the minimap's
+    box -- the crop also holds white UI text ("4/5").
     (cx, cy, w, h) in crop pixels, or None."""
-    box = land_box(crop)
-    if box is None:
-        return None
-    bx, by, bw, bh = box
-    m = 15
+    x0, y0, x1, y1 = minimap_box(crop.shape)
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     white = ((hsv[..., 1] < 35) & (hsv[..., 2] > 225)).astype(np.uint8)
     keep = np.zeros_like(white)
-    keep[max(0, by - m):by + bh + m, max(0, bx - m):bx + bw + m] = 1
+    keep[y0:y1, x0:x1] = 1
     white &= keep
     n, _lab, stats, cent = cv2.connectedComponentsWithStats(white, 8)
     best = None
@@ -117,10 +144,8 @@ def outline(crop):
     return float(c[0]), float(c[1]), int(w), int(h)
 
 
-def outline_points(items, map_id, size_px=None):
-    """[(x, y, px, py)]: the outline beside each read on `map_id`, at one
-    zoom -- `size_px`, or the median outline size of these crops. Where the
-    camera point sits inside the outline changes with the zoom."""
+def outline_hits(items, map_id):
+    """[(x, y, px, py, w, h)]: the outline beside each read on `map_id`."""
     found = []
     for crop, hud in items:
         if not hud or hud[0] != map_id:
@@ -128,10 +153,39 @@ def outline_points(items, map_id, size_px=None):
         o = outline(crop)
         if o is not None:
             found.append((hud[1], hud[2], o[0], o[1], o[2], o[3]))
+    return found
+
+
+def away_from_edges(hits, size):
+    """The hits whose view does not reach the map's edge: half the
+    outline's width and height in tiles, and a margin, from every edge."""
+    k = HOME_TILES / float(size)
+    sx, sy = PRIOR_PX_PER_TILE[0] * k, PRIOR_PX_PER_TILE[1] * k
+    keep = []
+    for x, y, px, py, w, h in hits:
+        mx = w / 2.0 / sx + EDGE_PAD_TILES
+        my = h / 2.0 / sy + EDGE_PAD_TILES
+        if mx <= x <= size - 1 - mx and my <= y <= size - 1 - my:
+            keep.append((x, y, px, py, w, h))
+    return keep
+
+
+def outline_points(items, map_id, size_px=None):
+    """[(x, y, px, py)]: the outline beside each read on `map_id`. The farm
+    hands in crops from one zoom (the walks'), all of them count -- the
+    outline is drawn smaller toward the minimap's far side (31 x 15 by the
+    city, 25 x 14 near the north edge, 14:50). `size_px` keeps only the
+    outlines within OUTLINE_SIZE_TOL of that size, "mode" of the commonest
+    size -- for folders that mix the zoom's reads in (the dev tools')."""
+    found = outline_hits(items, map_id)
     if not found:
         return []
     if size_px is None:
-        size_px = (np.median([f[4] for f in found]), np.median([f[5] for f in found]))
+        return [f[:4] for f in found]
+    if size_px == "mode":
+        sizes, counts = np.unique(np.array([f[4:6] for f in found]), axis=0,
+                                  return_counts=True)
+        size_px = tuple(sizes[int(np.argmax(counts))])
     return [f[:4] for f in found
             if abs(f[4] - size_px[0]) <= OUTLINE_SIZE_TOL
             and abs(f[5] - size_px[1]) <= OUTLINE_SIZE_TOL]
@@ -162,14 +216,28 @@ def scaled_prior(size: int):
     return HOME_H @ np.diag([k, k, 1.0])
 
 
+def shifted(H, dx, dy):
+    """H, then a shift of (dx, dy) pixels."""
+    return np.array([[1.0, 0.0, dx], [0.0, 1.0, dy], [0.0, 0.0, 1.0]]) @ np.asarray(H, np.float64)
+
+
 def calibrate(items, map_id, size):
     """(H, how, median px) placing this map's tiles on the minimap, or
     (None, why, None)."""
-    pts = outline_points(items, map_id)
-    if len(pts) >= 4:
-        err = residual(scaled_prior(size), pts)
+    pts = [p[:4] for p in away_from_edges(outline_hits(items, map_id), size)]
+    if len(pts) >= PRIOR_MIN_POINTS:
+        H0 = scaled_prior(size)
+        src = np.float32([[p[0], p[1]] for p in pts])
+        dst = np.float32([[p[2], p[3]] for p in pts])
+        dx, dy = np.median(dst - cv2.perspectiveTransform(src[None], H0)[0], axis=0)
+        err = residual(shifted(H0, float(dx), float(dy)), pts)
         if err <= PRIOR_OK_PX:
-            return scaled_prior(size), f"home calibration scaled to {size}", err
+            # The shift is the walks' zoom moving the camera point inside
+            # the outline; the minimap itself does not move with the zoom.
+            # So the provinces are placed with the prior as it is -- the
+            # same geometry every trip, at whatever zoom it ran.
+            return (H0, f"home calibration scaled to {size} (the walks' zoom "
+                        f"off by {dx:+.2f},{dy:+.2f} px)", err)
     if len(pts) < FIT_MIN_POINTS:
         return None, f"{len(pts)} outlines, {FIT_MIN_POINTS} needed for a fit", None
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]

@@ -56,13 +56,25 @@ def load(folders):
                 break
         if meta is None:
             continue
-        for name, hud in meta.get("reads") or meta.get("frames") or []:
-            if not hud:
+        for row in meta.get("reads") or meta.get("frames") or []:
+            name, hud = row[0], row[1]
+            # A read taken while the zoom was changing, where the folder says
+            # so (the farm's trip leaves those out of its calibration too).
+            if not hud or (len(row) > 2 and row[2] == "zoom"):
                 continue
             crop = cv2.imread(str(folder / name))
             if crop is not None:
                 out.append((crop, tuple(hud)))
     return out
+
+
+def one_zoom(items, map_id):
+    """The reads whose outline is the commonest size (+-OUTLINE_SIZE_TOL),
+    and the reads without one: an older folder does not say which reads were
+    taken while the zoom changed."""
+    keep = {(p[0], p[1]) for p in minimap.outline_points(items, map_id, "mode")}
+    return [(c, h) for c, h in items
+            if (h[1], h[2]) in keep or minimap.outline(c) is None]
 
 
 def draw_grid(grid, city=None, cell=8, scale=2):
@@ -110,7 +122,7 @@ def main() -> int:
         size = args.size or (HOME_TILES if is_home_map(map_id) else None)
         city = (tuple(int(v) for v in args.city.split(","))
                 if args.city and map_id == order[0] else None)
-        items = [(c, h) for c, h in reads if h[0] == map_id]
+        items = one_zoom([(c, h) for c, h in reads if h[0] == map_id], map_id)
         pts = minimap.outline_points(items, map_id)
         print(f"map {map_id}: {len(items)} read(s), {len(pts)} outline(s) at one zoom")
         if size is None:
