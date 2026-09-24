@@ -262,3 +262,24 @@ def test_the_first_build_of_the_14_50_trip_needs_no_spread_walk():
     assert res["how"].startswith("home calibration")
     saved = cv2.imread(str(BACKUP), cv2.IMREAD_UNCHANGED)
     assert minimap.agreement(res["grid"], saved) > 0.95
+
+
+def test_an_outline_that_stays_on_one_spot_is_not_a_province_line():
+    """3560, 2026-09-24 21:31: the city 86 tiles from the east edge, so half
+    the survey's crops had the view outline on one minimap row; the plain
+    median kept its edge as a line and cut a province in two (11, not 10)."""
+    base = night_minimap()
+    spots = [(1000, 300)] * 7 + [(250, 200), (400, 350), (850, 900), (1000, 1050),
+                                 (300, 950)]
+    crops = []
+    for x, y in spots:
+        c = base.copy()
+        cx, cy = cv2.perspectiveTransform(np.float32([[[x, y]]]), minimap.HOME_H)[0, 0]
+        cv2.rectangle(c, (int(cx) - 12, int(cy) - 6), (int(cx) + 12, int(cy) + 6),
+                      (255, 255, 255), 1)
+        crops.append(c)
+    plain = np.median(np.stack(crops), axis=0).astype(np.uint8)
+    assert minimap.segment(plain, minimap.HOME_H, 1200)[0].max() > 4, (
+        "the fake no longer reproduces the extra province")
+    labels, _ = minimap.segment(minimap.median_minimap(crops), minimap.HOME_H, 1200)
+    assert labels.max() == 4

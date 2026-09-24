@@ -26,6 +26,7 @@ from rok_farm.config import (DELAY_AFTER_ESCAPE, DELAY_DRAG_SETTLE,
                              MARCH_BTN_MAX_OFFSET, MARCH_BTN_PCT,
                              NEW_TROOP_BTN_PCT, TOGGLE_BTN_PCT,
                              ZOOM_IN_WINDOW_S, ZOOM_POLL_MAX)
+from rok_farm import PROJECT_ROOT
 from rok_farm import pan_model
 from rok_farm.logging_setup import FAIL, INFO, PASS, WARN, logger
 from rok_farm import minimap
@@ -269,6 +270,45 @@ class GemFlowMixin:
     # next one to agree (see _map_sync): a scan step moves 6-29 tiles.
     MISREAD_JUMP_TILES = 60
 
+    # Where the farm's own survey keeps its frames and probe.json, in the dev
+    # tool's shape (tools/dev/map_edge_probe.py) so the replays read them.
+    # The 3560 survey (2026-09-24 21:31) kept its crops in memory only, came
+    # out with 11 provinces where the map has 10, and left nothing to show why.
+    SURVEY_KEEP_ROOT = PROJECT_ROOT / "screenshots" / "map_edge"
+
+    def _survey_keep_dir(self, map_id):
+        """A folder for this survey's frames, or None (screenshots off)."""
+        from rok_farm import config as cfg
+        if not cfg.SAVE_SCREENSHOTS:
+            return None
+        d = self.SURVEY_KEEP_ROOT / f"{time.strftime('%Y%m%d_%H%M%S')}_{map_id}"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+        return d
+
+    def _keep_survey_record(self, keep_dir, res) -> None:
+        """probe.json (and provinces.png) beside the survey's kept frames."""
+        if keep_dir is None:
+            return
+        import json
+        try:
+            rec = {k: v for k, v in res.items() if k != "provinces"}
+            rec["frames"] = list(getattr(self, "_edge_kept", None) or rec.get("frames") or [])
+            prov = dict(res.get("provinces") or {})
+            grid = prov.pop("grid", None)
+            if grid is not None:
+                import cv2
+                import numpy as np
+                cv2.imwrite(str(keep_dir / "provinces.png"), np.asarray(grid, np.uint8))
+            rec["provinces"] = prov
+            rec["when"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            (keep_dir / "probe.json").write_text(json.dumps(rec, indent=1, default=str),
+                                                 encoding="utf-8")
+        except Exception as e:
+            logger.debug("survey record not written: %s", e)
+
     # A failed map survey is tried again after this long -- a popup or a
     # lost frame is worth another go, the same failure every mine is not --
     # and at most this many times a map.
@@ -301,11 +341,14 @@ class GemFlowMixin:
         logger.info("Map %s: no saved %s -- surveying", book.map_id,
                     " or ".join(missing))
         res: dict = {}
+        keep_dir = self._survey_keep_dir(book.map_id)
         try:
             res = self._survey_map(city=getattr(self, "_city_xy", None),
+                                   out_dir=keep_dir,
                                    known_size=book.size if book.size_known else None)
         except Exception as e:
             logger.warning("map survey failed: %s", e)
+        self._keep_survey_record(keep_dir, res)
         self._toggle_view(f"{tag}: back from the map's edge")
         self._wait(random.uniform(2.5, 3.5))
         self._view_is_world = False
@@ -2406,6 +2449,53 @@ class GemFlowMixin:
                        site[2], moved, pos[1], pos[2], city[0], city[1])
         return True
 
+    def _march_was_blocked(self, tag: str) -> bool:
+        """After the March click: did the game refuse the road?
+
+        A march whose road runs through a pass the alliance does not hold is
+        not sent. The game says so -- "Duong toi diem den bi chan, truoc tien
+        hay chiem Deo ..." -- and carries the camera to that pass, AFTER the
+        deploy panel opened and March was pressed, so _note_if_unreachable
+        (at the Gather click) never saw it. 2026-09-24, the operator's second
+        account (3560, city 1113:548): five marches went that way and all
+        five were counted as sent. Their after-march frames have the camera
+        on the pass at 1126:554, 26-47 tiles from the deposit; the marches
+        that went left it on the deposit itself. The message is gone within a
+        couple of seconds (readable on two of the five frames), so the camera
+        is the sign, and the queue badge -- read only when the camera moved --
+        has the last word.
+        """
+        site = getattr(self, "_pending_site", None)
+        if not site:
+            return False
+        frame = self._grab()
+        pos = self._read_map_position(frame) if frame is not None else None
+        if pos is None or pos[0] != site[0]:
+            return False
+        moved = max(abs(pos[1] - site[1]), abs(pos[2] - site[2]))
+        if moved < self.PASS_PAN_MIN_TILES:
+            return False
+        fired = self._verify_march_fired()
+        logger.info("after March: camera carried %d tile(s) from the deposit "
+                    "%d:%d to %d:%d; the queue says %s", moved, site[1], site[2],
+                    pos[1], pos[2], {True: "it went", False: "it did not go",
+                                     None: "nothing"}[fired])
+        if fired:
+            return False
+        save_screenshot(frame, f"{tag}_MARCH_BLOCKED")
+        city = getattr(self, "_city_xy", None)
+        book = getattr(self, "mapmem", None)
+        if book is not None and city:
+            book.record_unreachable((site[1], site[2]), city, (pos[1], pos[2]))
+        self._remember_tried((site[1], site[2]), "behind a pass we do not hold")
+        print(f"  [{WARN}] March to {site[1]}:{site[2]} blocked -- the game showed "
+              f"the pass at {pos[1]}:{pos[2]}; not counted, and the ground behind "
+              f"it is left alone")
+        logger.warning("march to %d:%d blocked by the pass at %d:%d -- not sent",
+                       site[1], site[2], pos[1], pos[2])
+        self._record(f"{tag}_march", False, "road blocked by a pass")
+        return True
+
     def _step_click_march(self, tag: str) -> bool:
         print(f"\n--- [{tag}] Step 6: Troop + March ---\n")
 
@@ -2506,11 +2596,15 @@ class GemFlowMixin:
             print(f"  [{INFO}] March (Hanh quan) at fixed pct{MARCH_BTN_PCT}")
             self._click_pct(*MARCH_BTN_PCT, jitter_px=6)
 
-        # Let the march animation settle. NOTE: the game moves the camera to the
-        # marching troop by itself here, so a post-march frame showing somewhere
-        # other than where we were scanning is the game doing that, NOT a bug --
-        # do not read camera jumps in these screenshots as a fault.
+        # Let the march animation settle. The camera may move here: an older
+        # note put it on the marching troop, and a refused march puts it on
+        # the pass in the way (2026-09-24, 3560) -- which is what the check
+        # below tells apart, with the queue badge deciding.
         self._wait(random.uniform(1.5, 2.5))
+        if self._march_was_blocked(tag):
+            # Out of the pass's close-up and on, as after a dud icon.
+            self._return_to_icon_zoom()
+            return False
 
         print(f"  [{PASS}] March sent (fixed Quan moi + Hanh quan)")
         # One march, one "Bao cao thu gom" in the mailbox when it comes home.

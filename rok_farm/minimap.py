@@ -122,13 +122,19 @@ def outline(crop):
     """The view outline: the largest thin near-white blob in the minimap's
     box -- the crop also holds white UI text ("4/5").
     (cx, cy, w, h) in crop pixels, or None."""
+    found = _outline_blob(crop)
+    return None if found is None else found[1]
+
+
+def _outline_blob(crop):
+    """(pixel mask, (cx, cy, w, h)) of the view outline, or None."""
     x0, y0, x1, y1 = minimap_box(crop.shape)
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     white = ((hsv[..., 1] < 35) & (hsv[..., 2] > 225)).astype(np.uint8)
     keep = np.zeros_like(white)
     keep[y0:y1, x0:x1] = 1
     white &= keep
-    n, _lab, stats, cent = cv2.connectedComponentsWithStats(white, 8)
+    n, lab, stats, cent = cv2.connectedComponentsWithStats(white, 8)
     best = None
     # As small as 8 x 3: a 2400 map drawn in the home box would show the
     # widest readable view at 12 x 6. On the 50 home crops the smaller
@@ -137,11 +143,46 @@ def outline(crop):
         x, y, w, h, a = stats[k]
         if 8 <= w <= 60 and 3 <= h <= 25 and a >= 8 and a / float(w * h) < 0.6:
             if best is None or a > best[4]:
-                best = (x, y, w, h, a, cent[k])
+                best = (x, y, w, h, a, cent[k], k)
     if best is None:
         return None
-    x, y, w, h, _a, c = best
-    return float(c[0]), float(c[1]), int(w), int(h)
+    x, y, w, h, _a, c, k = best
+    return lab == k, (float(c[0]), float(c[1]), int(w), int(h))
+
+
+# How far round the outline's own white pixels a crop is left out of the
+# median: its anti-aliased rim is lighter than the land without being white,
+# and LINE_TOPHAT_MIN takes a line at 3 grey levels.
+OUTLINE_MASK_PX = 2
+
+
+def median_minimap(crops):
+    """The median of the crops, each one's view outline left out of it.
+
+    The outline moves with the camera, so a plain median drops it -- unless
+    the camera kept one latitude for half the crops. On 3560 (2026-09-24
+    21:31) the city sat 86 tiles from the east edge: the east walk was one
+    read, and with the walk back and the legs in, half of the 12 crops had
+    the outline's bottom edge on one minimap row. The median kept it as a
+    line and cut a province in two -- 11 provinces, where the farm's own 40
+    frames give the standard 10 (0.969 of cells alike).
+    """
+    import warnings
+
+    stack = np.stack([np.asarray(c, np.float32) for c in crops])
+    plain = np.median(stack, axis=0)
+    k = 2 * OUTLINE_MASK_PX + 1
+    for i, c in enumerate(crops):
+        found = _outline_blob(np.asarray(c, np.uint8))
+        if found is not None:
+            gone = cv2.dilate(found[0].astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+            stack[i][gone] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        med = np.nanmedian(stack, axis=0)
+    # Under the outline in every crop: nothing else saw it, take what there is.
+    med = np.where(np.isnan(med), plain, med)
+    return np.clip(np.round(med), 0, 255).astype(np.uint8)
 
 
 def outline_hits(items, map_id):
@@ -350,7 +391,7 @@ def build(items, map_id, size, city=None) -> dict:
     H, how, err = calibrate(on_map, map_id, size)
     if H is None:
         return {"error": how, "stage": "calibrate"}
-    median = np.median(np.stack([c for c, _h in on_map]), axis=0).astype(np.uint8)
+    median = median_minimap([c for c, _h in on_map])
     labels, _lines = segment(median, H, size)
     grid = tile_grid(labels, H, size)
     n = int(grid.max())

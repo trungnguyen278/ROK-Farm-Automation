@@ -210,3 +210,28 @@ def test_zones_deleted_after_a_survey_are_surveyed_again_at_once(tmp_path, monke
     f._maybe_probe_map_size("m2")
     assert f.surveys == 2 and home.has_provinces()
 
+
+def test_the_survey_keeps_its_record_beside_its_frames(book, monkeypatch, tmp_path):
+    """The 3560 survey kept nothing. Its probe.json now lands where the
+    replays read it (the dev tool's shape), the grid beside it."""
+    import json
+    from rok_farm import config
+    monkeypatch.setattr(config, "SAVE_SCREENSHOTS", True)
+    f = Flow(book, measured(1440))
+    f._edge_kept = [["read_000.png", [KVK, 10, 10], "walk"]]
+    assert f._maybe_probe_map_size("m1")
+    kept = list((tmp_path / "map_edge").glob(f"*_{KVK}/probe.json"))
+    assert len(kept) == 1
+    rec = json.loads(kept[0].read_text(encoding="utf-8"))
+    assert rec["map_id"] == KVK and rec["size"] == 1440
+    assert rec["frames"] == [["read_000.png", [KVK, 10, 10], "walk"]]
+    assert rec["provinces"]["provinces"] == 2 and "grid" not in rec["provinces"]
+    assert (kept[0].parent / "provinces.png").exists()
+    assert book.has_provinces(), "keeping the record took the grid from the book"
+
+
+def test_no_screenshots_no_survey_folder(book, monkeypatch, tmp_path):
+    from rok_farm import config
+    monkeypatch.setattr(config, "SAVE_SCREENSHOTS", False)
+    Flow(book, measured(1440))._maybe_probe_map_size("m1")
+    assert not (tmp_path / "map_edge").exists()

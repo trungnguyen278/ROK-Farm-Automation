@@ -33,6 +33,14 @@ def _map_books_stay_out_of_the_real_ones(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _survey_frames_stay_out_of_the_real_ones(tmp_path, monkeypatch):
+    """Tests must not write screenshots/map_edge: the farm's survey keeps its
+    frames there, and a test's folder would sit among the real ones."""
+    from rok_farm.flow_steps import GemFlowMixin
+    monkeypatch.setattr(GemFlowMixin, "SURVEY_KEEP_ROOT", tmp_path / "map_edge")
+
+
+@pytest.fixture(autouse=True)
 def _ap_switch_stays_out_of_the_real_one(tmp_path, monkeypatch):
     """Tests must not read or flip the live AP burn switch.
 

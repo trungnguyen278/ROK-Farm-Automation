@@ -32,7 +32,12 @@ def test_nothing_returns_from_the_march_step_with_the_panel_open():
     """
     start = FLOW.index("def _step_click_march")
     body = FLOW[start:FLOW.index("\n    def ", start + 10)]
-    after_panel = body[body.index("_wait_for_troop_panel"):]
+    # Up to the March click, which closes the panel whether the march went or
+    # the game refused the road: all five refused marches on 3560 (2026-09-24)
+    # left the map in view with the pass on it and no panel. A return after
+    # the click leaves nothing covering the game.
+    after_panel = body[body.index("_wait_for_troop_panel"):
+                       body.index("self._click_pct(*MARCH_BTN_PCT")]
     code = "\n".join(ln for ln in after_panel.splitlines()
                      if not ln.strip().startswith("#"))
     # The one return False right there is the panel NOT opening, which leaves
