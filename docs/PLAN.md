@@ -142,6 +142,7 @@ Note: `tools/dev/` holds occasional-use debug scripts only. `locate_ui.py` was d
 
 | Date | Blocker | Note |
 |---|---|---|
+| 2026-09-24 | Anti-cheat: warning + SPEED RESTRICTION (10 h left at ~18:00 local); farm, watchdog and every survey script stopped | Judges UTC 09-23 (local 09-23 07:00 -> 09-24 07:00): 17.1 h online, 100 marches -- the heaviest day on record, mostly my overnight run (00:45-07:55) past the 08:00-23:00 ceiling. The restriction explains the five marches of 15:39-15:52 still out 2 h later (no gem after 15:52) and the watchdog's two "no mine in 50 min" relaunches. Do not farm under it; resume only on the operator's word, inside 08:00-23:00 |
 | 2026-08-14 | Unattended restart may need an admin terminal | While the game runs, `launcher.exe` is not running (observed). If it does not reappear on game exit, relaunching it raises a UAC prompt that nobody is there to accept -- run the bot elevated for overnight sessions |
 
 Resolved: the `.venv` blocker from 2026-06-14 is gone -- `.venv\Scripts\python`
