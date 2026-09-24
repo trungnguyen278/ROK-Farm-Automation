@@ -494,10 +494,22 @@ class GemFlowMixin:
     # 150 tiles: the march table above -- past 100 a march takes about twice
     # as long as within 60, so a gap out there is not worth turning back for.
     SWEEP_RADIUS_TILES = 150
-    # A cell shown this recently counts as covered. Gathered deposits respawn
-    # over hours; this is a starting value, not a measurement, and every
-    # target logs how many gaps it was chosen from so it can be judged.
-    SWEEP_STALE_H = 6.0
+    # A cell shown this recently counts as covered.
+    #
+    # Measured 2026-09-24 01:30-07:55 by tools/dev/gem_return.py, 634 views at
+    # icon zoom: of the cells empty at one visit, the share showing a new gem
+    # at the next, by the time between --
+    #
+    #     2-10 min   1.5%  (5/327)       60-120 min   6.8%  (16/235)
+    #     10-30 min  3.1% (14/451)      120-240 min   9.9%  (15/151)
+    #     30-60 min  4.7% (15/320)
+    #
+    # against 6.2% (33/533) on a cell's first visit in that window. Ground is
+    # as good as unseen again after one to two hours. The starting value was
+    # 6h, which kept the sweep off near ground looked at 2-6 hours earlier and
+    # sent it further out, where marches run longer. One night's data: to be
+    # re-measured in daylight with the same tool.
+    SWEEP_STALE_H = 2.0
     # Weights: a distance ring half as likely every 25 tiles further from the
     # city; within a ring, a cell half as likely every 80 tiles further from
     # the camera. With a few gaps near the city and hundreds far out, 25 puts

@@ -1,8 +1,8 @@
 """How soon do gems come back to ground already looked at?
 
-SWEEP_STALE_H (rok_farm/flow_steps.py) says ground seen within 6 hours is
-not worth sweeping again. That is a starting value. This measures it from
-the farm log's "view: cam X,Y gems ..." lines (one per scan at icon zoom,
+SWEEP_STALE_H (rok_farm/flow_steps.py) says how long ground seen once is
+not worth sweeping again -- 6 hours as a starting value, 2 since this tool
+measured one night on 2026-09-24. It measures it from the farm log's "view: cam X,Y gems ..." lines (one per scan at icon zoom,
 since 2026-09-24 01:30): every book cell on screen in a view, whether a gem
 stood in it, and when. For each cell seen twice, the pair of visits says
 whether a gem appeared, stayed or went in between.
