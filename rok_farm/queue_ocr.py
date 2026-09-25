@@ -131,6 +131,24 @@ POS_ROI = (0.02, 0.000, 0.26, 0.035)
 _POS_RE = re.compile(r"#\s*([A-Za-z]{0,2}\d{3,6})\D{0,3}X[:\s]*(\d{1,4})"
                      r"\D{0,3}Y[:\s]*(\d{1,4})", re.IGNORECASE)
 
+
+def pos_without_hash(text, expected):
+    """(map id, x, y) from a HUD read that lost its '#', or None.
+
+    Zoomed in, the power figure runs into the badge and the OCR can drop the
+    '#' between them: '3.975.1283560X:1114Y:557Q' (2026-09-25 08:30:44, the
+    read right after a refused march -- the one that had to parse). Taken
+    only when the text before X ends in the map id already in use: without
+    the '#', nothing else tells the id from the power's last digits.
+    """
+    if not expected or not text:
+        return None
+    m = re.search(re.escape(str(expected)) + r"\D{0,3}X[:\s]*(\d{1,4})\D{0,3}"
+                  r"Y[:\s]*(\d{1,4})", text, re.IGNORECASE)
+    if not m:
+        return None
+    return str(expected), int(m.group(1)), int(m.group(2))
+
 # --- Zoom gauge: WHERE the coordinate badge sits inside its own crop -------
 # The farm had no way to tell icon zoom from a closer view, and guessed from
 # "did the detector see a gem", which cannot tell barren ground apart from the
@@ -536,16 +554,20 @@ class MapPositionMixin:
         if at >= 0:
             lead = re.sub(r"[^0-9A-Za-z]", "", text[:at])
             self._pos_zoom_hint = "close" if len(lead) >= 3 else "icon"
-        m = _POS_RE.search(text)
-        if not m:
-            return None
-        map_id, x, y = m.group(1), int(m.group(2)), int(m.group(3))
-        lim = read_limit(map_id)
-        if not (0 <= x < lim and 0 <= y < lim):
-            return None
         book = getattr(self, "mapmem", None)
         expected = (getattr(book, "map_id", None)
                     or getattr(self, "_home_map_id", None))
+        m = _POS_RE.search(text)
+        if m:
+            map_id, x, y = m.group(1), int(m.group(2)), int(m.group(3))
+        else:
+            got = pos_without_hash(text, expected)
+            if got is None:
+                return None
+            map_id, x, y = got
+        lim = read_limit(map_id)
+        if not (0 <= x < lim and 0 <= y < lim):
+            return None
         if expected is None or map_id != expected:
             return None
         self._last_pos_text = text[:80]
@@ -632,6 +654,17 @@ class MapPositionMixin:
             badge_left_frac(boxes, roi.shape[1]))
         self._pos_zoom_hint = self._last_zoom_gauge
         if not m:
+            book = getattr(self, "mapmem", None)
+            expected = (getattr(book, "map_id", None)
+                        or getattr(self, "_home_map_id", None))
+            got = (pos_without_hash(merge_boxes(boxes), expected)
+                   or pos_without_hash(text, expected))
+            if got is not None:
+                lim = read_limit(got[0])
+                if 0 <= got[1] < lim and 0 <= got[2] < lim:
+                    logger.debug("Map position read without its '#': %r -> %s",
+                                 text[:40], got)
+                    return got
             logger.debug("Map position unparsed: %r", text[:40])
             return None
         x, y = int(m.group(2)), int(m.group(3))
