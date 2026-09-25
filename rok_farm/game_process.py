@@ -201,10 +201,17 @@ def grab_rect(rect: dict):
 
 
 def taskkill(image_name: str) -> bool:
+    """Force-kill by image name. True only when taskkill says it did: a
+    refused kill ("Access is denied" -- a client run as administrator) used
+    to come back True, and !stop reported a game killed that was still up."""
     try:
-        subprocess.run(["taskkill", "/IM", image_name, "/F"],
-                       capture_output=True, timeout=15,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        r = subprocess.run(["taskkill", "/IM", image_name, "/F"],
+                           capture_output=True, text=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode != 0:
+            logger.warning("taskkill %s refused (rc %s): %s", image_name,
+                           r.returncode, (r.stderr or r.stdout or "").strip()[:200])
+            return False
         return True
     except Exception as e:
         logger.warning("taskkill %s failed: %s", image_name, e)

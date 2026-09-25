@@ -228,9 +228,27 @@ def _quit_game_gracefully(cmd):
             hwnd = h
 
     win32gui.EnumWindows(cb, None)
-    if hwnd is None or not focus_window(hwnd):
+    focused = hwnd is not None and focus_window(hwnd)
+    if hwnd is not None and not focused:
+        # The farm's way in (_ensure_game_focused): ALT+TAB on the board, real
+        # keys. Windows refuses a detached process the foreground, and on
+        # 2026-09-24 18:01 !stop fell through to a kill that left the game
+        # running -- the operator: "!stop nhung game khong tat chi tat farm".
+        for _ in range(2):
+            cmd.send("COMBO", "ALT", "TAB", random.randint(50, 120))
+            time.sleep(random.uniform(1.0, 1.8))
+            if win32gui.GetForegroundWindow() == hwnd:
+                focused = True
+                break
+    if not focused:
         taskkill("MASS.exe")
-        return "Game: could not focus it, so ALT+F4 would hit the wrong window -- killed instead."
+        time.sleep(2.0)
+        if game_proc() is None:
+            return ("Game: could not bring it to the front, so ALT+F4 would hit "
+                    "the wrong window -- killed instead.")
+        return ("Game is STILL RUNNING: it would not come to the front and the "
+                "kill was refused (a client run as administrator?) -- close it "
+                "by hand.")
 
     time.sleep(random.uniform(0.5, 1.2))
     t0 = time.time()
@@ -247,6 +265,9 @@ def _quit_game_gracefully(cmd):
             return f"Game closed (ALT+F4, {time.time() - t0:.1f}s)."
     taskkill("MASS.exe")
     time.sleep(3.0)
+    if game_proc() is not None:
+        return (f"Game did not close in {QUIT_TIMEOUT:.0f}s and the kill was "
+                f"refused -- it is STILL RUNNING, close it by hand.")
     return f"Game did not close in {QUIT_TIMEOUT:.0f}s -- killed."
 
 
