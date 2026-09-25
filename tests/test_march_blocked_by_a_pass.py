@@ -95,3 +95,24 @@ def test_the_march_step_asks_after_the_click_and_before_counting():
     check = src.index("self._march_was_blocked(tag)")
     counted = src.index("self._log_deploy_panel(tag)")
     assert click < check < counted, "a refused march would be counted as sent"
+
+
+def test_a_deposit_eight_tiles_from_its_pass_is_still_caught():
+    """1138:564 by the pass at 1131:556: the camera moved 8 tiles."""
+    f = Flow(("3560", 1131, 556), fired=False)
+    f._pending_site = ("3560", 1138, 564)
+    assert f._march_was_blocked("m9")
+
+
+def test_a_read_a_tile_off_is_not_a_move():
+    f = Flow(("3560", 1084, 601), fired=False)
+    assert not f._march_was_blocked("m10")
+    assert f.queue_reads == 0
+
+
+
+def test_the_deposit_itself_is_checked_before_gather():
+    """The icon check works on a tile estimated from the scan; the deposit's
+    own tile, read with the popup open, is checked before the march is set."""
+    src = inspect.getsource(GemFlowMixin._step_click_gather)
+    assert src.index("unreachable_at(site[1], site[2]") < src.index("self._pending_site = site")

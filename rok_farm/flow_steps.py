@@ -2368,6 +2368,24 @@ class GemFlowMixin:
                         self._back_out_of_popup()
                         self._record(f"{tag}_gather", False, "duplicate deposit")
                         return False
+                    # The icon was checked against closed ground on a tile
+                    # estimated from the scan; this is the deposit's own.
+                    # 3560, 2026-09-25 11:08-12:07: five refused marches got
+                    # past the icon check, 1074:572 among them, in the middle
+                    # of the closed zone.
+                    book = getattr(self, "mapmem", None)
+                    city = getattr(self, "_city_xy", None)
+                    if (book is not None and city and site[0] == book.map_id
+                            and book.unreachable_at(site[1], site[2], city)):
+                        print(f"  [{WARN}] Deposit {site[1]}:{site[2]} is in "
+                              f"ground we cannot march to -- backing out")
+                        logger.info("deposit %d:%d in closed ground -- not "
+                                    "gathering", site[1], site[2])
+                        self._remember_tried((site[1], site[2]),
+                                             "in ground we cannot march to")
+                        self._back_out_of_popup()
+                        self._record(f"{tag}_gather", False, "closed ground")
+                        return False
                     self._pending_site = site
                     if dist is not None:
                         # Feeds the tolerance decision with real numbers instead
@@ -2440,6 +2458,13 @@ class GemFlowMixin:
     # logs how far the camera went, so the number can be set on data.
     PASS_PAN_MIN_TILES = 12
 
+    # After March the camera stays on a deposit the march went to -- on the
+    # deposit itself in every frame of 3560's marches that went -- so any
+    # move worth reading is asked of the queue. 12 tiles let a refusal
+    # through when the deposit sat 8 tiles from its pass (1138:564 by the
+    # pass at 1131:556, 2026-09-25 11:05, counted as gone).
+    AFTER_MARCH_MOVED_TILES = 3
+
     def _note_if_unreachable(self, tag: str) -> bool:
         """After a Gather click that opened no panel: did the game carry the
         camera off to a pass? If so, the deposit is out of reach from here."""
@@ -2497,7 +2522,7 @@ class GemFlowMixin:
         if pos is None or pos[0] != site[0]:
             return False
         moved = max(abs(pos[1] - site[1]), abs(pos[2] - site[2]))
-        if moved < self.PASS_PAN_MIN_TILES:
+        if moved < self.AFTER_MARCH_MOVED_TILES:
             return False
         fired = self._verify_march_fired()
         logger.info("after March: camera carried %d tile(s) from the deposit "
