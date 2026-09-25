@@ -344,13 +344,47 @@ def closed_cells(mem, city, x0, y0, span) -> set:
 
 
 def city_label(mem, city) -> str | None:
-    """The city's province by its marches, and the grid's when that differs."""
+    """The city's province by its marches, and the minimap's when that differs."""
     if mem is None or not city:
         return None
     own, line = mem.own_province(city), mem.province_of(*city)
     if not own:
         return None
-    return f"city: P{own}" + (f" (the line says P{line})" if line and line != own else "")
+    return f"city: P{own}" + (f" (minimap said P{line})" if line and line != own else "")
+
+
+def display_grid(grid, mem, city, x0, y0, span):
+    """The province grid as the farm reads it, for drawing.
+
+    The minimap draws a line to a pixel (9-13 tiles); beside a pass that is
+    the wrong side for a city 6 tiles off it. The operator on !map (3560,
+    2026-09-25): the purple line still put the city in the zone above. Where
+    marches that went and were refused decide (MapMemory._local_evidence), a
+    cell the grid gives a closed province but marches went across is drawn
+    in the city's; a cell the grid gives the city's but marches were refused
+    across, in the province of the nearest refusal. Elsewhere the grid."""
+    if grid is None or mem is None or not city:
+        return grid
+    own = mem.own_province(city)
+    refused = mem._unreach_points(city)
+    if not own or not refused:
+        return grid
+    closed = {mem.province_of(px, py) for px, py in refused} - {own, None}
+    out = grid.copy()
+    i0, j0, i1, j1 = _cells_in(grid, x0, y0, span)
+    for j in range(j0, j1 + 1):
+        for i in range(i0, i1 + 1):
+            x, y = i * CELL + CELL // 2, j * CELL + CELL // 2
+            verdict = mem._local_evidence(x, y, city)
+            k = int(grid[j, i])
+            if verdict is False and k in closed:
+                out[j, i] = own
+            elif verdict is True and k == own:
+                px, py = min(refused, key=lambda p: (p[0] - x) ** 2 + (p[1] - y) ** 2)
+                other = mem.province_of(px, py)
+                if other and other != own:
+                    out[j, i] = other
+    return out
 
 
 def reach_overlay(img, mem, city, to_px, x0, y0, span) -> None:
@@ -468,10 +502,11 @@ def book_map(since: str, until: str | None = None,
 
     provinces = province_grid(book)
     mem = reach_book(book, provinces)
+    shown = display_grid(provinces, mem, city, x0, y0, 2 * radius)
 
     def overlay(img):
-        if provinces is not None:
-            province_borders(img, provinces, to_px, x0, y0, 2 * radius)
+        if shown is not None:
+            province_borders(img, shown, to_px, x0, y0, 2 * radius)
         reach_overlay(img, mem, city, to_px, x0, y0, 2 * radius)
         for t in range(0, tiles, 50):
             if x0 <= t <= x0 + 2 * radius:
@@ -508,8 +543,8 @@ def book_map(since: str, until: str | None = None,
         cv2.drawMarker(img, to_px(*city), (0, 0, 160), cv2.MARKER_STAR, 20, 2)
 
     left = np.full((size, size, 3), _MAP_BG, np.uint8)
-    if provinces is not None:
-        tint_provinces(left, provinces, to_px, x0, y0, 2 * radius)
+    if shown is not None:
+        tint_provinces(left, shown, to_px, x0, y0, 2 * radius)
     cx, cy = city[0] // CELL, city[1] // CELL
     r = SWEEP_RADIUS // CELL
     gaps = seen = near_gaps = near_total = 0
@@ -528,8 +563,8 @@ def book_map(since: str, until: str | None = None,
                 near_gaps += near
     overlay(left)
     right = np.full((size, size, 3), _MAP_BG, np.uint8)
-    if provinces is not None:
-        tint_provinces(right, provinces, to_px, x0, y0, 2 * radius)
+    if shown is not None:
+        tint_provinces(right, shown, to_px, x0, y0, 2 * radius)
     for (i, j), n in counts.items():
         for lo, hi, colour in _REPEAT_BANDS:
             if lo <= n <= hi:
@@ -673,8 +708,10 @@ def run_map(run, idx: int, book: dict | None = None,
 
     img = np.full((size, size, 3), _MAP_BG, np.uint8)
     provinces = province_grid(book)
-    if provinces is not None:
-        tint_provinces(img, provinces, to_px, x0, y0, 2 * radius)
+    mem = reach_book(book, provinces)
+    shown = display_grid(provinces, mem, city, x0, y0, 2 * radius)
+    if shown is not None:
+        tint_provinces(img, shown, to_px, x0, y0, 2 * radius)
     for (i, j), n in s["counts"].items():
         if (i, j) in s["seen_before"]:
             colour = _OLD[0 if n == 1 else 1 if n <= 3 else 2]
@@ -693,9 +730,9 @@ def run_map(run, idx: int, book: dict | None = None,
             cv2.line(img, (0, y), (size, y), (210, 210, 210), 1)
             cv2.putText(img, str(t), (3, y - 3),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (110, 110, 110), 1)
-    if provinces is not None:
-        province_borders(img, provinces, to_px, x0, y0, 2 * radius)
-    reach_overlay(img, reach_book(book, provinces), city, to_px, x0, y0, 2 * radius)
+    if shown is not None:
+        province_borders(img, shown, to_px, x0, y0, 2 * radius)
+    reach_overlay(img, mem, city, to_px, x0, y0, 2 * radius)
     pts = s["points"]
     for a, b in zip(pts, pts[1:]):
         cv2.line(img, to_px(a[1], a[2]), to_px(b[1], b[2]), (50, 50, 50), 2)

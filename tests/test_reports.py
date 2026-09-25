@@ -200,7 +200,7 @@ def test_the_picture_closes_what_the_farm_closes(tmp_path, monkeypatch):
     assert (1100 // 8, 590 // 8) in closed, "past the pass"
     assert (1113 // 8, 548 // 8) not in closed, "the city's own ground"
     assert (1100 // 8, 548 // 8) not in closed
-    assert reports.city_label(mem, (1113, 548)) == "city: P2 (the line says P6)"
+    assert reports.city_label(mem, (1113, 548)) == "city: P2 (minimap said P6)"
 
 
 def test_the_map_hatches_closed_ground_only_when_there_is_some(tmp_path, monkeypatch):
@@ -215,3 +215,17 @@ def test_the_map_hatches_closed_ground_only_when_there_is_some(tmp_path, monkeyp
         return int((np.abs(img.astype(int) - reports._CLOSED).sum(axis=2) < 10).sum())
     assert closed_px(book) > 50
     assert closed_px(dict(book, unreachable=[])) == 0
+
+
+def test_the_lines_are_drawn_where_the_marches_put_them(tmp_path, monkeypatch):
+    """The operator on !map: the purple line still put the city in the zone
+    above. Round the city the picture's grid follows the marches."""
+    book = _edge_book(tmp_path, monkeypatch)
+    grid = reports.province_grid(book)
+    mem = reports.reach_book(book, grid)
+    shown = reports.display_grid(grid, mem, (1113, 548), 913, 348, 400)
+    at = lambda x, y: int(shown[y // 8, x // 8])
+    assert grid[548 // 8, 1113 // 8] == 6, "the minimap's line puts the city above"
+    assert at(1113, 548) == 2 and at(1100, 530) == 2, "the city's side"
+    assert at(1100, 590) == 6, "past the pass"
+    assert at(1000, 300) == int(grid[300 // 8, 1000 // 8]), "far from any march: the grid"
