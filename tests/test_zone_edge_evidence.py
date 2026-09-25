@@ -48,3 +48,17 @@ def test_refusals_alone_keep_their_disc(book):
     book.record_unreachable((1087, 576), CITY, PASS)
     assert book.unreachable_at(1100, 590, CITY)
     assert not book.unreachable_at(1087, 620, CITY), "44 tiles: past the disc"
+
+
+def test_ground_marches_went_across_stays_open(book):
+    """(1100, 516): no refusal within reach, eleven marches that went -- and
+    the grid's line put it in the closed province."""
+    went = WENT + [(1101, 478), (1066, 485), (1115, 491), (1103, 488)]
+    for p in went:
+        book.record_reached(p, CITY)
+    for p in REFUSED:
+        book.record_unreachable(p, CITY, PASS)
+    assert book.province_of(1100, 516) != book.own_province(CITY)
+    assert not book.unreachable_at(1100, 516, CITY)
+    assert book.unreachable_at(1000, 700, CITY), "the closed province, far from any march"
+

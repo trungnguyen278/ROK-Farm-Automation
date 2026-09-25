@@ -117,6 +117,29 @@ class MapMemory:
         self.size_probe_tries = 0
         self.load()
 
+    @classmethod
+    def from_dict(cls, d: dict, provinces=None) -> "MapMemory":
+        """A book from its saved form, not read from disk and never saved --
+        for the pictures (rok_farm/reports.py), which ask it what the farm
+        would: which ground is out of reach, which province is the city's."""
+        b = cls.__new__(cls)
+        b.map_id = str(d.get("map_id") or "")
+        b.path = None
+        b.terrain = d.get("terrain", {})
+        b.reach = d.get("reach", {})
+        b.track = d.get("track", [])
+        b._recent, b._far_streak, b._past_edge = [], 0, []
+        b.size = int(d.get("size") or (HOME_TILES if is_home_map(b.map_id)
+                                       else MAP_SIZES[0]))
+        b.size_measured = bool(d.get("size_measured"))
+        b.size_probe_t, b.size_probe_tries = 0.0, 0
+        if d.get("city"):
+            b.city = (int(d["city"][0]), int(d["city"][1]))
+        b.unreachable = list(d.get("unreachable", []))
+        b.reached = list(d.get("reached", []))
+        b._provinces = provinces
+        return b
+
     # --- persistence ---
 
     def load(self):
@@ -342,8 +365,10 @@ class MapMemory:
     def _local_evidence(self, x, y, city):
         """True (refused ground), False (ground marches went to) or None.
 
-        Only where both kinds lie within EVIDENCE_TILES -- that is a line to
-        draw between them. Refusals alone keep their UNREACH_RADIUS disc."""
+        Both kinds within EVIDENCE_TILES: a line to draw between them, by
+        vote. Marches that went alone: open -- the grid's line had closed a
+        band the city marches across every day (3560, Y 504-552). Refusals
+        alone keep their UNREACH_RADIUS disc (None)."""
         r = self.EVIDENCE_TILES
 
         def weight(pts):
@@ -355,7 +380,9 @@ class MapMemory:
             return w
         refused = weight(self._unreach_points(city))
         went = weight(self._reached_points(city))
-        if refused == 0.0 or went == 0.0:
+        if refused == 0.0:
+            return False if went > 0.0 else None
+        if went == 0.0:
             return None
         return refused > went
 

@@ -162,3 +162,56 @@ def test_the_active_book_is_a_book_not_its_provinces(tmp_path, monkeypatch):
     assert reports.active_book() == book
     loaded = reports.load_book()
     assert loaded["map_id"] == "4096" and loaded["city"] == [577, 615]
+
+
+# --- reach on the pictures -------------------------------------------------
+# 3560, 2026-09-25, the operator on !map: the city sits by its zone's edge and
+# the minimap's line put it in the zone above, which it cannot enter. The
+# pictures now show what the farm decides, from where its marches went.
+
+def _edge_book(tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    import rok_farm.map_memory as mm
+    monkeypatch.setattr(reports, "BOOKS", tmp_path)
+    monkeypatch.setattr(mm, "MEM_DIR", tmp_path)
+    grid = np.full((150, 150), 6, np.uint8)
+    grid[:504 // 8, :] = 2                      # the minimap's line, 50 tiles south
+    cv2.imwrite(str(tmp_path / "3560_provinces.png"), grid)
+    now = time.time()
+    city = [1113, 548]
+    # The book's own marches from that morning: most went deep in the zone
+    # below, a few in the band between the minimap's line and the pass.
+    went = [(1114, 531), (1085, 536), (1108, 536), (1117, 484), (1135, 514),
+            (1101, 478), (1066, 485), (1115, 491), (1128, 466), (1103, 488),
+            (1110, 425), (1108, 476), (1121, 448)]
+    refused = [(1081, 563), (1087, 576), (1137, 581), (1080, 568), (1114, 601)]
+    return {"map_id": "3560", "city": city, "size": 1200,
+            "track": [[int(now - 60 + k), 1113, 548 - k] for k in range(5)],
+            "reached": [{"x": x, "y": y, "t": now, "city": city} for x, y in went],
+            "unreachable": [{"x": x, "y": y, "t": now, "city": city, "pass": [1126, 554]}
+                            for x, y in refused]}
+
+
+def test_the_picture_closes_what_the_farm_closes(tmp_path, monkeypatch):
+    book = _edge_book(tmp_path, monkeypatch)
+    mem = reports.reach_book(book, reports.province_grid(book))
+    closed = reports.closed_cells(mem, (1113, 548), 900, 350, 400)
+    assert (1100 // 8, 590 // 8) in closed, "past the pass"
+    assert (1113 // 8, 548 // 8) not in closed, "the city's own ground"
+    assert (1100 // 8, 548 // 8) not in closed
+    assert reports.city_label(mem, (1113, 548)) == "city: P2 (the line says P6)"
+
+
+def test_the_map_hatches_closed_ground_only_when_there_is_some(tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    book = _edge_book(tmp_path, monkeypatch)
+
+    def closed_px(b):
+        png, _ = reports.book_map(time.strftime("%Y-%m-%d"), book=b, px=2,
+                                  log=tmp_path / "none.log")
+        img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+        return int((np.abs(img.astype(int) - reports._CLOSED).sum(axis=2) < 10).sum())
+    assert closed_px(book) > 50
+    assert closed_px(dict(book, unreachable=[])) == 0

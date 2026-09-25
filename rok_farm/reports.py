@@ -314,6 +314,65 @@ def province_borders(img, grid, to_px, x0, y0, span):
                     0.5, _PROVINCE_LINE, 2)
 
 
+# What the farm believes about reach, as the farm decides it
+# (MapMemory.unreachable_at), not the province grid alone. 3560, 2026-09-25,
+# the operator on !map: the city sits by its zone's edge, and the minimap's
+# line put it in the zone above -- the one it cannot enter. The farm takes the
+# city's zone from where its marches went; the picture has to show that.
+_CLOSED = (70, 70, 190)
+_WENT = (40, 150, 40)
+_REFUSED = (30, 30, 200)
+
+
+def reach_book(book: dict, provinces):
+    """The book as the farm reads it, for asking about reach; None without a map id."""
+    from rok_farm.map_memory import MapMemory
+    if not book.get("map_id"):
+        return None
+    return MapMemory.from_dict(book, provinces)
+
+
+def closed_cells(mem, city, x0, y0, span) -> set:
+    """Book cells in the window that the farm will not march to."""
+    if mem is None or not city or not mem._unreach_points(city):
+        return set()
+    last = mem.size // CELL - 1
+    i0, j0 = max(0, int(x0) // CELL), max(0, int(y0) // CELL)
+    i1, j1 = min(last, int(x0 + span) // CELL), min(last, int(y0 + span) // CELL)
+    return {(i, j) for j in range(j0, j1 + 1) for i in range(i0, i1 + 1)
+            if mem.unreachable_at(i * CELL + CELL // 2, j * CELL + CELL // 2, city)}
+
+
+def city_label(mem, city) -> str | None:
+    """The city's province by its marches, and the grid's when that differs."""
+    if mem is None or not city:
+        return None
+    own, line = mem.own_province(city), mem.province_of(*city)
+    if not own:
+        return None
+    return f"city: P{own}" + (f" (the line says P{line})" if line and line != own else "")
+
+
+def reach_overlay(img, mem, city, to_px, x0, y0, span) -> None:
+    """Hatch the ground the farm will not march to; mark the marches behind
+    it -- went a green dot, refused a red square; label the city's province."""
+    if mem is None or not city:
+        return
+    for i, j in closed_cells(mem, city, x0, y0, span):
+        (xa, ya), (xb, yb) = to_px(i * CELL, j * CELL + CELL), to_px(i * CELL + CELL, j * CELL)
+        cv2.line(img, (xa, yb), (xb, ya), _CLOSED, 1)
+    for x, y in mem._reached_points(city):
+        cv2.circle(img, to_px(x, y), 4, _WENT, -1)
+    for x, y in mem._unreach_points(city):
+        cx, cy = to_px(x, y)
+        cv2.rectangle(img, (cx - 4, cy - 4), (cx + 4, cy + 4), _REFUSED, -1)
+    label = city_label(mem, city)
+    if label:
+        cx, cy = to_px(*city)
+        cv2.putText(img, label, (cx + 12, cy + 18), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45, (0, 0, 120), 1)
+
+
 def view_cells(cam) -> list[tuple[int, int]]:
     """Book cells a view at `cam` shows -- flow_steps._view_cells."""
     corners = pan_model.view_corners(cam, WIN_W, WIN_H)
@@ -408,10 +467,12 @@ def book_map(since: str, until: str | None = None,
     went = marches(since, until_txt[:16] + ":59", log) if log.exists() else []
 
     provinces = province_grid(book)
+    mem = reach_book(book, provinces)
 
     def overlay(img):
         if provinces is not None:
             province_borders(img, provinces, to_px, x0, y0, 2 * radius)
+        reach_overlay(img, mem, city, to_px, x0, y0, 2 * radius)
         for t in range(0, tiles, 50):
             if x0 <= t <= x0 + 2 * radius:
                 x, _ = to_px(t, y0)
@@ -634,6 +695,7 @@ def run_map(run, idx: int, book: dict | None = None,
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (110, 110, 110), 1)
     if provinces is not None:
         province_borders(img, provinces, to_px, x0, y0, 2 * radius)
+    reach_overlay(img, reach_book(book, provinces), city, to_px, x0, y0, 2 * radius)
     pts = s["points"]
     for a, b in zip(pts, pts[1:]):
         cv2.line(img, to_px(a[1], a[2]), to_px(b[1], b[2]), (50, 50, 50), 2)
