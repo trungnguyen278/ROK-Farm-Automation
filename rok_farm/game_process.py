@@ -118,6 +118,33 @@ def focus_window(hwnd, retries: int = 2) -> bool:
     return False
 
 
+def bring_forward_by_board(ctx, hwnd, tries: int = 2) -> bool:
+    """ALT+TAB on the board until `hwnd` is in front; True once it is.
+
+    Windows refuses SetForegroundWindow to a process that neither owns the
+    window in front nor had the last input -- and to an elevated window, the
+    launcher, from one that is not. Keys from the board are real input and
+    are never refused. The farm started from source used to open a console
+    window that Windows put in front, which quietly lent it the right; run
+    windowless (2026-09-25 17:14), the launcher stayed behind the IDE and the
+    farm refused to click Play blind. _ensure_game_focused already does this
+    for the game.
+    """
+    cmd = getattr(ctx, "cmd", None)
+    if cmd is None:
+        return False
+    for _ in range(tries):
+        cmd.send("COMBO", "ALT", "TAB", random.randint(50, 120))
+        time.sleep(random.uniform(1.0, 1.8))
+        try:
+            if win32gui.GetForegroundWindow() == hwnd:
+                logger.info("Brought window %s forward with ALT+TAB", hwnd)
+                return True
+        except Exception:
+            return False
+    return False
+
+
 def _force_foreground(hwnd) -> None:
     """Take the foreground while another process holds it, without a keystroke.
 
@@ -398,7 +425,8 @@ class GameProcess:
             print(f"  [{FAIL}] Launcher window not found")
             return False
 
-        in_front = focus_window(win["hwnd"])
+        in_front = (focus_window(win["hwnd"])
+                    or bring_forward_by_board(ctx, win["hwnd"]))
         if not in_front:
             print(f"  [{WARN}] Launcher did not come to the front; another "
                   f"window may swallow the click")
