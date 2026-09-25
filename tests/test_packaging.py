@@ -50,10 +50,14 @@ def test_background_roles_start_without_a_window():
     assert roles.matches("bot", cmd), "discovery must still find it"
 
 
-def test_spawn_asks_for_no_window():
+def test_spawn_asks_for_no_window_except_for_the_farm():
+    """The farm keeps its console: 2026-09-25 17:14 and 17:17, windowless, it
+    could not bring the launcher forward and never pressed Play."""
     import inspect
     from rok_farm import session_control as sc
-    assert "windowless=True" in inspect.getsource(sc.spawn_detached)
+    assert "WINDOWLESS_ROLES" in inspect.getsource(sc.spawn_detached)
+    assert {"bot", "watchdog"} <= sc.WINDOWLESS_ROLES
+    assert "farm" not in sc.WINDOWLESS_ROLES
 
 
 def test_command_passes_arguments_as_strings():

@@ -329,6 +329,15 @@ DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
+# Roles started without a console window (pythonw from source). Not the
+# farm: its console, put in front by Windows as it opens, is what lets it
+# bring the (elevated) launcher forward -- and it is the window the focus
+# returns to when the farm quits the client for a wait. Windowless on
+# 2026-09-25 17:14 and 17:17, the launcher stayed behind the IDE, ALT+TAB on
+# the board did not reach it, and both runs ended before Play.
+WINDOWLESS_ROLES = {"bot", "watchdog", "report"}
+
+
 def spawn_detached(role, *args):
     """Launch a role so it outlives this process, and return its real pid.
 
@@ -348,7 +357,8 @@ def spawn_detached(role, *args):
     """
     before = {p.pid for p in find_procs(role)}
     subprocess.Popen(
-        ["cmd", "/c", "start", "", "/b", *roles.command(role, *args, windowless=True)],
+        ["cmd", "/c", "start", "", "/b",
+         *roles.command(role, *args, windowless=role in WINDOWLESS_ROLES)],
         cwd=str(PROJECT),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
