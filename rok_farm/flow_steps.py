@@ -2338,6 +2338,14 @@ class GemFlowMixin:
                                        m.confidence, m.center)
                         save_screenshot(frame,
                                         f"{tag}_WRONG_PLACE_{attempt:02d}")
+                        # Remembered, or the next scan clicks it again. On
+                        # 3560 (2026-09-25 12:12) this was a deposit in
+                        # [C~60]'s land -- "Nguoi so huu [C~60]", THU THAP
+                        # greyed out and drawn higher in the popup.
+                        site = self._read_map_position(frame)
+                        if site:
+                            self._remember_tried((site[1], site[2]),
+                                                 "its Gather refused")
                         self._back_out_of_popup()
                         self._record(f"{tag}_gather", False, "button misplaced")
                         return False

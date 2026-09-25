@@ -116,3 +116,11 @@ def test_the_deposit_itself_is_checked_before_gather():
     own tile, read with the popup open, is checked before the march is set."""
     src = inspect.getsource(GemFlowMixin._step_click_gather)
     assert src.index("unreachable_at(site[1], site[2]") < src.index("self._pending_site = site")
+
+
+def test_a_refused_gather_is_remembered():
+    """3560, 2026-09-25 12:12: a deposit in another alliance's land, its
+    Gather greyed out; without a note the next scan clicks it again."""
+    src = inspect.getsource(GemFlowMixin._step_click_gather)
+    at = src.index("_WRONG_PLACE_")
+    assert "_remember_tried" in src[at:src.index('"button misplaced"', at)]
