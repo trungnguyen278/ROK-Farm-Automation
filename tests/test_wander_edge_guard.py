@@ -133,9 +133,11 @@ def test_the_veto_looks_further_than_the_camera_travels(book):
     """
     from rok_farm.map_memory import CELL, MapMemory
 
-    assert MapMemory.BLOCK_REACH_CELLS * CELL >= 83, (
+    # Reads every scan since 2026-09-23: 2,302 steps, 59 tiles at the most
+    # (83 at p90 was four scans between reads).
+    assert MapMemory.BLOCK_REACH_CELLS * CELL >= 59, (
         f"the veto looks {MapMemory.BLOCK_REACH_CELLS * CELL} tiles ahead but "
-        f"the camera moves 83 tiles between reads at p90")
+        f"the camera has moved 59 tiles between two reads")
 
 
 def test_it_fires_from_the_city_the_bot_returns_to(book):
@@ -143,16 +145,22 @@ def test_it_fires_from_the_city_the_bot_returns_to(book):
     starts there. At 96 tiles of reach a due-west heading sampled out to x=27
     and passed -- 6 crossings in 29 scans, 207 per 1000, against 0 per 1000
     the week before from a city in the middle of the map."""
-    assert book.blocked(123, 226, math.pi), (
-        "standing where the camera lands after every city return, a heading "
-        "straight at the west edge is still not vetoed")
+    # That was four scans between reads. Read every scan, no step has
+    # passed 59 tiles: from the city a westward pan cannot cross, and the
+    # veto fires once the edge is within one longest step.
+    assert not book.blocked(123, 226, math.pi), (
+        "the veto looks twice as far as the camera moves -- a city near an "
+        "edge loses every heading toward it (3560, 2026-09-25)")
+    assert book.blocked(60, 226, math.pi), (
+        "within one longest step of the west edge, a heading at it must be "
+        "vetoed")
     assert not book.blocked(123, 226, 0.0), \
         "inland from the same spot must stay open"
 
 
 def test_a_wall_beyond_the_old_reach_is_now_seen(book):
-    """The specific gap: a wall 10 cells out was invisible, and is not now."""
-    book.record_wall(100 + 10 * CELL, 100)
+    """The specific gap: a wall 7 cells out -- past the old 6 -- is seen."""
+    book.record_wall(100 + 7 * CELL, 100)
     assert book.blocked(100, 100, 0.0), \
         "a wall ten cells ahead is still invisible to the veto"
     assert not book.blocked(500, 500, math.pi), \

@@ -506,7 +506,8 @@ class MapMemory:
         for i in range(cx - r, cx + r + 1):
             for j in range(cy - r, cy + r + 1):
                 x, y = i * CELL + CELL // 2, j * CELL + CELL // 2
-                if x < 0 or y < 0 or x >= self.size or y >= self.size:
+                e = self.EDGE_BLIND_TILES
+                if x < e or y < e or x >= self.size - e or y >= self.size - e:
                     continue
                 k = f"{i},{j}"
                 if self.terrain.get(k, {}).get("wall", 0) > 0:
@@ -686,7 +687,24 @@ class MapMemory:
     # and the mines went 5 done / 10 failed to 10 done / 3 failed with it. The
     # veto firing 6.7x more often per scan is the half that makes the zero mean
     # something: it was being exercised, not merely never approached.
-    BLOCK_REACH_CELLS = 16
+    #
+    # Every number above is from reads four scans apart. Since 2026-09-23 the
+    # HUD is read every scan, and over 2,302 steps (09-23..25, jumps over 60
+    # tiles -- misreads the hold catches, city trips -- left out) the camera
+    # moved 10 tiles at the median, 28 at p99, 51 at p99.9, 59 at most
+    # (scratchpad scan_steps.py). 128 tiles was then twice the longest step,
+    # and on 3560 (2026-09-25), a city 86 tiles from the east edge, it vetoed
+    # every heading with east in it: the sweep's targets by that edge could
+    # not be reached and two mines ended on 18 empty scans each, the camera
+    # circling ground already seen. 8 cells is 64 tiles, past every step.
+    BLOCK_REACH_CELLS = 8
+
+    # Ground this close to the map's edge is never in view, so it is no sweep
+    # target: with the veto at 64 tiles the camera stops about a step inside
+    # that heading straight at the edge and ~35 tiles in at a slant
+    # (64 cos 45 - a 10-tile step), and the icon-zoom view reaches ~12 tiles
+    # either side of its centre (~24 wide mid-frame, project_pan_geometry).
+    EDGE_BLIND_TILES = 24
 
     def blocked(self, x: int, y: int, heading: float,
                 reach_cells: int = BLOCK_REACH_CELLS) -> bool:
