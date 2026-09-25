@@ -36,25 +36,36 @@ SCRIPTS = {
 }
 
 
-def python_exe() -> Path:
+def python_exe(windowless: bool = False) -> Path:
     """The interpreter that runs this project's scripts.
 
     Frozen there is none, and callers must use command() instead. From source
     prefer the venv over sys.executable: the bot can be started by a bare
     `python discord_bot.py` from any interpreter, and the farm it spawns still
     has to be the one with opencv and the rest installed.
+
+    `windowless` is pythonw.exe: a role started in the background from source
+    opened a console window of its own -- the operator, 2026-09-25: "hien
+    chay cmd la ca bot discord lan khi nhan start". The packaged exe is built
+    windowed, so every role already runs without one there.
     """
-    venv = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
-    return venv if venv.is_file() else Path(sys.executable)
+    name = "pythonw.exe" if windowless else "python.exe"
+    venv = PROJECT_ROOT / ".venv" / "Scripts" / name
+    if venv.is_file():
+        return venv
+    exe = Path(sys.executable)
+    if windowless and exe.with_name("pythonw.exe").is_file():
+        return exe.with_name("pythonw.exe")
+    return exe
 
 
-def command(role: str, *args) -> list[str]:
+def command(role: str, *args, windowless: bool = False) -> list[str]:
     """argv that starts `role`, in whichever shape we are running."""
     if role not in SCRIPTS:
         raise KeyError(f"unknown role {role!r}; known: {sorted(SCRIPTS)}")
     if FROZEN:
         return [sys.executable, role, *(str(a) for a in args)]
-    return [str(python_exe()), str(PROJECT_ROOT / SCRIPTS[role]),
+    return [str(python_exe(windowless)), str(PROJECT_ROOT / SCRIPTS[role]),
             *(str(a) for a in args)]
 
 

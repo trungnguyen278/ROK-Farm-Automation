@@ -41,6 +41,21 @@ def test_command_from_source_runs_the_script():
     assert cmd[1].endswith("farm_full.py")
 
 
+def test_background_roles_start_without_a_window():
+    """The operator, 2026-09-25: a cmd window popped up for the bot and for
+    every !start. From source a role in the background runs on pythonw."""
+    cmd = roles.command("bot", windowless=True)
+    assert cmd[0].lower().endswith("pythonw.exe")
+    assert cmd[1].endswith("discord_bot.py")
+    assert roles.matches("bot", cmd), "discovery must still find it"
+
+
+def test_spawn_asks_for_no_window():
+    import inspect
+    from rok_farm import session_control as sc
+    assert "windowless=True" in inspect.getsource(sc.spawn_detached)
+
+
 def test_command_passes_arguments_as_strings():
     assert roles.command("watchdog", 1234)[-1] == "1234"
 

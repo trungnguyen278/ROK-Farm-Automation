@@ -348,7 +348,7 @@ def spawn_detached(role, *args):
     """
     before = {p.pid for p in find_procs(role)}
     subprocess.Popen(
-        ["cmd", "/c", "start", "", "/b", *roles.command(role, *args)],
+        ["cmd", "/c", "start", "", "/b", *roles.command(role, *args, windowless=True)],
         cwd=str(PROJECT),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
@@ -509,7 +509,8 @@ def do_ap_burn(on, by):
 def do_report():
     try:
         r = subprocess.run(roles.command("report"), cwd=str(PROJECT),
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=120,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return (r.stdout or "") + (r.stderr or "")
     except Exception as e:
         return f"report failed: {type(e).__name__}: {e}"
