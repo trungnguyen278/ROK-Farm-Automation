@@ -330,6 +330,35 @@ class MapMemory:
         """Deposits marched to from this city, in the last REACH_HALFLIFE_H."""
         return self._points_from("reached", city, now)
 
+    # How far a march's verdict reaches: within this, the marches that went
+    # and were refused nearby outvote the province grid, each weighing
+    # 1/(distance + 5). 3560, 2026-09-25: the operator's city sits at the
+    # edge of its zone with the zone above closed ("toi o sat mep zone voi
+    # zone tren khong vao duoc"); marches went at Y 531-536 and were refused
+    # at Y 563-601, the pass at 1126:554 between -- and the surveyed line ran
+    # at Y 504, fifty tiles south, putting both kinds in one province.
+    EVIDENCE_TILES = 50
+
+    def _local_evidence(self, x, y, city):
+        """True (refused ground), False (ground marches went to) or None.
+
+        Only where both kinds lie within EVIDENCE_TILES -- that is a line to
+        draw between them. Refusals alone keep their UNREACH_RADIUS disc."""
+        r = self.EVIDENCE_TILES
+
+        def weight(pts):
+            w = 0.0
+            for px, py in pts:
+                d = math.hypot(px - x, py - y)
+                if d <= r:
+                    w += 1.0 / (d + 5.0)
+            return w
+        refused = weight(self._unreach_points(city))
+        went = weight(self._reached_points(city))
+        if refused == 0.0 or went == 0.0:
+            return None
+        return refused > went
+
     def own_province(self, city):
         """The city's province: the one most of its marches went to.
 
@@ -402,6 +431,10 @@ class MapMemory:
         pts = self._unreach_points(city)
         if not pts:
             return False
+        # Beside marches already made, they decide (EVIDENCE_TILES).
+        near = self._local_evidence(x, y, city)
+        if near is not None:
+            return near
         # A deposit out of reach puts its whole province out of reach -- the
         # pass in the way closes all of it -- while more marches there were
         # refused than went (a line a pixel off puts a few that went on the
