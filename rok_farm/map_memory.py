@@ -757,6 +757,28 @@ class MapMemory:
                 return True
         return False
 
+    # How far ahead the wander looks for ground the farm will not march to:
+    # two median steps (10 tiles each) and the view's half-width.
+    CLOSED_REACH_CELLS = 3
+
+    def closed_ahead(self, x: int, y: int, heading: float, city,
+                     reach_cells: int = CLOSED_REACH_CELLS) -> bool:
+        """Does this heading run into ground out of reach from the city?
+
+        3560, 2026-09-25 10:25-11:07: 39 of 201 views (19%) looked at the
+        zone above the pass, where every deposit is skipped; the operator saw
+        it on !map -- the track did not keep out of the closed zone."""
+        if not city or not self._unreach_points(city):
+            return False
+        for step in range(1, reach_cells + 1):
+            d = step * CELL
+            cx = int(x + math.cos(heading) * d)
+            cy = int(y + math.sin(heading) * d)
+            if (0 <= cx < self.size and 0 <= cy < self.size
+                    and self.unreachable_at(cx, cy, city)):
+                return True
+        return False
+
     # What an unseen cell beside the city is worth, and how fast that fades
     # with distance. The bonus has to stay under a known gem (2.0) so a
     # remembered deposit still wins, and above an empty cell (-0.5) so

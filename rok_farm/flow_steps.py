@@ -934,6 +934,25 @@ class GemFlowMixin:
                            math.degrees(best) % 360)
             return best
 
+        # Ground the farm will not march to is not worth a scan either: kept
+        # out of like a wall (MapMemory.closed_ahead), sweep or no sweep --
+        # a straight line to an open target can cross the closed zone. Not
+        # from inside it: there every heading may cross closed cells, and the
+        # sweep's target, always on open ground, leads the camera out.
+        city = getattr(self, "_city_xy", None)
+        book = self.mapmem
+        if (city and book.closed_ahead(x, y, on_map(heading), city)
+                and not book.unreachable_at(x, y, city)):
+            open_ = [(s, h) for s, h in scored
+                     if not book.blocked(x, y, on_map(h))
+                     and not book.closed_ahead(x, y, on_map(h), city)]
+            if open_:
+                best_score, best = max(open_, key=lambda t: t[0])
+                logger.info("steer: refusing %.0f deg (closed ground ahead) "
+                            "-> %.0f deg", math.degrees(heading) % 360,
+                            math.degrees(best) % 360)
+                return best
+
         # While a target is being worked, the sweep alone decides the course.
         # Over 381 pans (2026-09-23 14:52 to 2026-09-24 01:10,
         # tools/dev/steer_check.py) the book's choice below overrode 283 scans
