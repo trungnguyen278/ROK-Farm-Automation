@@ -138,16 +138,18 @@ def test_the_city_province_is_where_its_marches_went(books):
     assert not b.unreachable_at(100, 1000), "where the marches went"
 
 
-def test_a_province_stays_open_while_more_went_than_were_refused(books):
+def test_a_refusal_closes_the_province_beyond_the_marches_that_went(books):
+    """3560, 2026-09-25: 13 marches went in a band the grid gave the closed
+    province and 12 were refused; counted against each other they kept the
+    whole province open, deep in the zone above included."""
     survey(books)
     b = MapMemory("4096")
     b.set_city(*CITY)
     for site in [(300, 300), (200, 900), (400, 500), (1000, 300)]:
         b.record_reached(site, CITY)           # 1, 1, 1 and 2
     b.record_unreachable((1000, 1000), CITY)   # 2
-    assert not b.unreachable_at(1150, 600), "one went, one refused"
-    b.record_unreachable((1100, 1100), CITY)
-    assert b.unreachable_at(1150, 600), "two refused, one went"
+    assert b.unreachable_at(1150, 600), "far from the march that went"
+    assert not b.unreachable_at(1020, 320), "beside the march that went"
 
 
 def test_without_a_march_the_grid_names_the_city_province(books):

@@ -62,3 +62,15 @@ def test_ground_marches_went_across_stays_open(book):
     assert not book.unreachable_at(1100, 516, CITY)
     assert book.unreachable_at(1000, 700, CITY), "the closed province, far from any march"
 
+
+def test_the_nearest_evidence_decides(book):
+    """3560's north-east corner, 2026-09-25 13:30: a refusal 20 tiles off
+    and five marches that went 28-44 tiles off. Summed at 1/(d + 5) the
+    far ones won, 0.114 to 0.111, and the corner stayed open."""
+    for p in [(1157, 540), (1168, 525), (1136, 540), (1140, 534), (1181, 521)]:
+        book.record_reached(p, CITY)
+    for p in [(1152, 564), (1137, 564), (1137, 580), (1137, 581)]:
+        book.record_unreachable(p, CITY, PASS)
+    assert book.unreachable_at(1172, 564, CITY)
+    assert not book.unreachable_at(1165, 530, CITY)
+

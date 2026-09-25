@@ -355,7 +355,9 @@ class MapMemory:
 
     # How far a march's verdict reaches: within this, the marches that went
     # and were refused nearby outvote the province grid, each weighing
-    # 1/(distance + 5). 3560, 2026-09-25: the operator's city sits at the
+    # 1/(distance + 5)^2 -- squared so the nearest decides, as a border
+    # would: at 1/(d + 5), five marches that went 28-44 tiles off outvoted a
+    # refusal 20 tiles away (1172,564 on 3560, 0.114 to 0.111). 3560, 2026-09-25: the operator's city sits at the
     # edge of its zone with the zone above closed ("toi o sat mep zone voi
     # zone tren khong vao duoc"); marches went at Y 531-536 and were refused
     # at Y 563-601, the pass at 1126:554 between -- and the surveyed line ran
@@ -376,7 +378,7 @@ class MapMemory:
             for px, py in pts:
                 d = math.hypot(px - x, py - y)
                 if d <= r:
-                    w += 1.0 / (d + 5.0)
+                    w += 1.0 / (d + 5.0) ** 2
             return w
         refused = weight(self._unreach_points(city))
         went = weight(self._reached_points(city))
@@ -463,16 +465,17 @@ class MapMemory:
         if near is not None:
             return near
         # A deposit out of reach puts its whole province out of reach -- the
-        # pass in the way closes all of it -- while more marches there were
-        # refused than went (a line a pixel off puts a few that went on the
-        # wrong side of it). Never the city's own province: it is always open
-        # to the city, and closing it would stop the sweep.
+        # pass in the way closes all of it. Marches that went in the same
+        # province open only their own ground, above (_local_evidence): a
+        # line a pixel off puts a band of reachable ground inside the closed
+        # province, and counting those against the refusals kept the whole
+        # province open (3560, 2026-09-25 13:30: P6, 13 went in the band by
+        # the city against 12 refused, and sweep targets at 1076,636 deep in
+        # the zone above -- three mines lost to empty scans). Never the
+        # city's own province: always open to the city.
         prov = self.province_of(x, y)
         if prov is not None and prov != self.own_province(city):
-            refused = sum(1 for px, py in pts if self.province_of(px, py) == prov)
-            went = sum(1 for px, py in self._reached_points(city)
-                       if self.province_of(px, py) == prov)
-            if refused > went:
+            if any(self.province_of(px, py) == prov for px, py in pts):
                 return True
         r = self.UNREACH_RADIUS
         for px, py in pts:
