@@ -204,7 +204,8 @@ def test_the_check_happens_before_the_pan():
     mine being clicked again was measured on 2 of 18 mid-burst transitions.
     """
     body = rezoom_body()
-    assert body.index("read_zoom_gauge") < body.index("_human_drag"), \
+    # _zoom_still_close reads the gauge twice, a moment apart (2026-09-28).
+    assert body.index("_zoom_still_close") < body.index("_human_drag"), \
         "the zoom is verified after the pan, so the pan ran at the wrong zoom"
 
 
@@ -252,7 +253,7 @@ def test_skipping_the_pan_does_not_skip_the_zoom():
     assert "if not pan:" in body
     assert body.index("_scroll_at_center") < body.index("if not pan:"), \
         "pan=False returns before the zoom-out, so it does nothing at all"
-    assert body.index("read_zoom_gauge") < body.index("if not pan:"), \
+    assert body.index("_zoom_still_close") < body.index("if not pan:"), \
         "pan=False returns before the verification, so a stuck zoom is missed"
 
 

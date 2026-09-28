@@ -437,7 +437,13 @@ class HidInputMixin:
                 time.sleep(random.uniform(0.3, 1.5))
         if overshoot and extra > 0:
             time.sleep(random.uniform(0.4, 1.0))
-            correction = max(1, int(extra * 0.6))
+            # All the way back. A person scrolls past and back to where they
+            # meant; this used to come back int(extra * 0.6) notches, so a
+            # two-notch overshoot kept one -- and one notch past icon zoom is
+            # where the level labels vanish and the gem template stops
+            # matching (2026-09-28, mine 13: small unlabelled icons, "3 scans
+            # and NOT ONE candidate").
+            correction = extra
             for _ in range(correction):
                 self.cmd.send("SCROLL", -direction)
                 if random.random() < 0.3:

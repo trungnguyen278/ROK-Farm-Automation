@@ -1204,6 +1204,10 @@ class GemFlowMixin:
             # 386 frames. This can only fire while the resource bar is ON
             # screen, which only happens zoomed in, so it cannot walk outward.
             gauge = self.read_zoom_gauge()
+            if gauge == "close":
+                # Confirmed before three notches go out: see _zoom_still_close.
+                self._wait(random.uniform(0.8, 1.4))
+                gauge = self.read_zoom_gauge()
             if gauge is None and getattr(self, "_zoomed_in_by_click", False):
                 # Gauge unreadable -- fall back to the paired undo, which is
                 # safe because a zoom-in provably happened. Do NOT reach for
@@ -1269,6 +1273,9 @@ class GemFlowMixin:
             # correction is what once undid the same zoom-in twice and landed
             # the view at 121 KM.
             self._zoomed_in_by_click = False
+
+        # Whichever way it came, never start a scan in the far view.
+        self._back_from_too_far(tag)
 
         frame = self._grab()
         if frame is not None:
@@ -1643,6 +1650,38 @@ class GemFlowMixin:
         print(f"  [{WARN}] [{attempt}] Not a gem mine")
         return False
 
+    def _zoom_still_close(self) -> bool:
+        """'close' on two reads a moment apart.
+
+        One read taken while the HUD's resource bar was still going after the
+        zoom-out said close, and the three notches that answered it threw the
+        map past icon level into the far view -- the filter panel up, every
+        deposit hidden (2026-09-28 13:13:57, mine 53; the operator: that panel
+        only shows when zoomed out too far). 3 of that day's 12 corrections
+        ended in a no-candidate give-up.
+        """
+        if self.read_zoom_gauge() != "close":
+            return False
+        self._wait(random.uniform(0.8, 1.4))
+        return self.read_zoom_gauge() == "close"
+
+    def _back_from_too_far(self, tag: str = "") -> bool:
+        """Past icon zoom the game shows the map filter panel and draws no
+        deposits: one notch in, at most twice. True if it stepped in."""
+        stepped = False
+        for _ in range(2):
+            frame = self._grab()
+            if frame is None or not self._filter_panel_open(frame):
+                break
+            print(f"  [{WARN}] Zoomed out past icon level (the map filter panel "
+                  f"is up) -- one notch in")
+            logger.warning("%s: zoomed out past icon level, filter panel up -- "
+                           "one notch in", tag or "zoom")
+            self._scroll_at_center(1, 1)
+            self._wait_zoom_settled()
+            stepped = True
+        return stepped
+
     def _return_to_icon_zoom(self, heading: float | None = None,
                              verify: bool = False, pan: bool = True):
         """After a failed icon click, zoom back out AND move on.
@@ -1683,15 +1722,18 @@ class GemFlowMixin:
         # the scan loop, which fires many times per mine -- an OCR there would
         # be paid over and over for a drift the give-up branch already catches.
         if verify:
+            # A notch at a time, each re-read: what is left after an undo is
+            # a notch or two the game swallowed, not a whole zoom level.
             for _ in range(ZOOM_FIX_ROUNDS):
-                if self.read_zoom_gauge() != "close":
+                if not self._zoom_still_close():
                     break
-                print(f"  [{WARN}] Still zoomed in after the march -- scrolling "
-                      f"out again before the next mine inherits it")
+                print(f"  [{WARN}] Still zoomed in after the march -- one notch "
+                      f"out before the next mine inherits it")
                 logger.warning("Re-zoom did not land: the gauge still says "
                                "close -- correcting")
-                self._scroll_at_center(-1, self._zoom_scrolls())
+                self._scroll_at_center(-1, 1)
                 self._wait_zoom_settled()
+            self._back_from_too_far("after the march")
 
         if not pan:
             # The pan is the part that would be wasted when the next thing we
