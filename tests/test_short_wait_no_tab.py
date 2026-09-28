@@ -42,7 +42,7 @@ def test_a_short_wait_returns_before_any_tab(source):
 def test_the_guard_still_waits(source):
     """Skipping the tab must not skip the WAIT -- the troops are still out."""
     body = source[source.index("if wait_s < TAB_CYCLE_COST"):]
-    body = body[:body.index("if plan >")]
+    body = body[:body.index("can_quit = ")]
     assert "_sleep_until_woken" in body, \
         "the short wait no longer sleeps, so the queue is re-read too early"
     assert "wait_s" in body
@@ -51,7 +51,7 @@ def test_the_guard_still_waits(source):
 def test_the_short_wait_is_still_interruptible(source):
     """!check must still be able to cut a wait short, however short it is."""
     body = source[source.index("if wait_s < TAB_CYCLE_COST"):]
-    body = body[:body.index("if plan >")]
+    body = body[:body.index("can_quit = ")]
     assert "_sleep_until_woken" in body, \
         "a plain sleep here would ignore a wake request"
 

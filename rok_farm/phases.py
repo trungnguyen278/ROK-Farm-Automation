@@ -508,6 +508,16 @@ class PhasesMixin:
             if not self._sleep_until_woken(
                     min(left, random.uniform(70.0, 140.0)), "AP burn dwell"):
                 break
+            # Since a game update, the auto stops when the client leaves the
+            # front -- alt-tab included (the operator, 2026-09-28). Nothing
+            # here tabs out, but another window can take the front (the IDE,
+            # the operator), and then the rest of the dwell is spent waiting
+            # on a run that has already ended.
+            if self._game_in_front() is False:
+                logger.warning("AP dwell %.0fs in: the game lost the front -- "
+                               "the auto has stopped; ending the dwell",
+                               time.time() - started)
+                break
             queue = self._detect_march_queue(retries=2)
             if not queue:
                 continue
@@ -1070,6 +1080,70 @@ class PhasesMixin:
                             reason, waited, seconds)
                 return False
 
+    # How a wait is spent. The operator, 2026-09-28: the client quits too
+    # regularly ("tan suat thoat game dung co dinh qua nua"), and a player also
+    # just leaves the game on screen ("treo tai man hinh khong can alt tab").
+    # Measured 09-21..25: 60-95% of waits quit the client, 19-33 quits a day,
+    # 18-28 minutes between them at the median. Now each wait draws one of
+    # three -- quit, alt-tab, stay on the screen -- from weights drawn once a
+    # session around these, and repeats the last wait's way now and then, so
+    # the days come in runs rather than in one beat.
+    WAIT_MODE_BASE = {"quit": 0.5, "tab": 0.3, "screen": 0.2}
+    WAIT_MODE_SPREAD = 4.0        # Dirichlet concentration: sessions differ a lot
+    WAIT_MODE_STICK = 0.45        # chance a wait keeps the last one's way
+    SCREEN_LONG_S = 20 * 60       # past this, staying on screen gets rarer
+    SCREEN_LONG_FACTOR = 0.35
+
+    def _wait_mode_weights(self) -> dict:
+        w = getattr(self, "_wait_weights", None)
+        if w is None:
+            # A centre that never moves is what an estimator locks onto.
+            raw = {m: random.gammavariate(self.WAIT_MODE_SPREAD * b, 1.0)
+                   for m, b in self.WAIT_MODE_BASE.items()}
+            total = sum(raw.values()) or 1.0
+            w = self._wait_weights = {m: v / total for m, v in raw.items()}
+            logger.info("this session spends its waits: %s",
+                        ", ".join(f"{m} {v:.0%}" for m, v in w.items()))
+        return w
+
+    def _choose_wait_mode(self, plan_s: float, can_quit: bool) -> str:
+        """'quit', 'tab' or 'screen' for a wait of plan_s seconds."""
+        w = dict(self._wait_mode_weights())
+        if not can_quit:
+            w["quit"] = 0.0
+        if plan_s > self.SCREEN_LONG_S:
+            w["screen"] *= self.SCREEN_LONG_FACTOR
+        last = getattr(self, "_last_wait_mode", None)
+        if last in w and w[last] > 0 and random.random() < self.WAIT_MODE_STICK:
+            mode = last
+        else:
+            modes = [m for m in w if w[m] > 0] or ["tab"]
+            mode = random.choices(modes, weights=[w.get(m, 1.0) for m in modes])[0]
+        self._last_wait_mode = mode
+        return mode
+
+    def _late_return_s(self) -> float:
+        """How long after the troops a quit comes back: mostly on time, now
+        and then a few minutes late, rarely a proper break."""
+        r = random.random()
+        if r < 0.65:
+            return random.uniform(0.0, 120.0)
+        if r < 0.90:
+            return random.uniform(120.0, 480.0)
+        return random.uniform(480.0, 1500.0)
+
+    def _game_in_front(self):
+        """True / False, or None when it cannot be told."""
+        try:
+            import win32gui
+            win = self.game.game_window()
+            hwnd = (win or {}).get("hwnd")
+            if not hwnd:
+                return None
+            return win32gui.GetForegroundWindow() == hwnd
+        except Exception:
+            return None
+
     def _quit_threshold_s(self) -> float:
         """How long a wait must be before closing the client pays for itself.
 
@@ -1238,31 +1312,45 @@ class PhasesMixin:
                 self._score_wait_prediction(before, wait_s, "in-place")
                 return
 
-            if plan > self._quit_threshold_s() and self._may_quit_again():
+            can_quit = plan > self._quit_threshold_s() and self._may_quit_again()
+            mode = self._choose_wait_mode(plan, can_quit)
+            if mode == "quit":
+                late = self._late_return_s()
+                if not self._window_check(plan + late):
+                    late = 0.0
                 print(f"  [{INFO}] Troops home in ~{wait_s / 60:.1f}min -- "
-                      f"longer than the {self._quit_threshold_s() / 60:.1f}min "
-                      f"a relaunch costs, quitting the client")
+                      f"quitting the client, back in ~{(plan + late) / 60:.0f}min")
                 logger.info("Computed wait %.0fs -> quit+relaunch "
-                            "(threshold %.0fs)", plan, self._quit_threshold_s())
+                            "(threshold %.0fs), back %.0fs after the troops",
+                            plan, self._quit_threshold_s(), late)
                 # Only here. _restart_game is also the RECOVERY path, where the
                 # client may be the thing that is broken, and poking a panel
                 # into it would be the worst possible moment.
                 self._check_panels_before_quit()
                 self._note_quit()
                 away = time.time()
-                if self._restart_game(f"waiting {plan / 60:.0f}min for troops",
-                                      extra_wait=plan):
-                    self._note_relaunch_overhead(time.time() - away - plan)
+                if self._restart_game(f"waiting {(plan + late) / 60:.0f}min for troops",
+                                      extra_wait=plan + late):
+                    self._note_relaunch_overhead(time.time() - away - plan - late)
                     self._view_is_world = False
                     self._score_wait_prediction(before, wait_s, "quit")
                     return
                 print(f"  [{WARN}] Could not quit; falling back to alt-tab")
-            else:
+            elif mode == "screen":
+                stay = plan + random.uniform(0.0, 45.0)
                 print(f"  [{INFO}] Troops home in ~{wait_s / 60:.1f}min -- "
-                      f"alt-tab out for {plan / 60:.1f}min")
+                      f"staying on the game screen for {stay / 60:.1f}min")
+                logger.info("Computed wait %.0fs -> on screen", plan)
+                self._sleep_until_woken(stay, "on-screen wait")
+                self._score_wait_prediction(before, wait_s, "screen")
+                return
+            else:
+                stay = plan + random.uniform(0.0, 60.0)
+                print(f"  [{INFO}] Troops home in ~{wait_s / 60:.1f}min -- "
+                      f"alt-tab out for {stay / 60:.1f}min")
                 self._capture_paused = True
                 self._tab_out()
-                self._sleep_until_woken(plan, "alt-tab wait")
+                self._sleep_until_woken(stay, "alt-tab wait")
                 self._capture_paused = False
                 self._tab_back()
                 self._view_is_world = False
