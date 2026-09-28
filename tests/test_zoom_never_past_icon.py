@@ -7,6 +7,10 @@ overshoot kept one -- one notch past icon zoom is where the level labels go),
 and the post-march check that read "close" once, mid-animation, and answered
 with three more notches (13:13:57, mine 53). 3 of that day's 12 corrections
 ended in a no-candidate give-up.
+
+The afternoon, with that fixed: 2 of 3 far-view step-ins were taken on one
+look as a zoom ended and landed close, and the in-scan correction's three
+notches then threw both mines into the far view (m7, m13).
 """
 
 import inspect
@@ -98,9 +102,54 @@ def test_a_confirmed_close_is_corrected_a_notch_at_a_time():
 
 
 def test_the_far_view_is_stepped_back_from():
-    z = Zoomer(["icon"], panels=[True, False])
+    z = Zoomer(["icon"], panels=[True, True, False])
     z._return_to_icon_zoom(verify=True, pan=False)
     assert z.scrolls == [(-1, 3), (1, 1)]
+
+
+def test_a_glimpse_of_the_panel_is_not_stepped_from():
+    """m7 14:18:06, m13 14:52:21: one look as a zoom ended, a notch in, and
+    the view landed close -- it had been settling at icon zoom."""
+    z = Zoomer(["icon"], panels=[True, False])
+    z._return_to_icon_zoom(verify=True, pan=False)
+    assert z.scrolls == [(-1, 3)]
+
+
+# --- the in-place corrections: a notch at a time -------------------------
+
+def test_an_in_place_correction_goes_a_notch_at_a_time():
+    z = Zoomer(["close", "close", "icon"])
+    assert z._notch_out_of_close("m1") == 2
+    assert z.scrolls == [(-1, 1), (-1, 1)]
+
+
+def test_it_never_goes_further_than_a_whole_level():
+    """The old correction's three notches are the ceiling, not the step."""
+    z = Zoomer(["close"] * 20)
+    assert z._notch_out_of_close("m1") == 3
+    assert z.scrolls == [(-1, 1)] * 3
+
+
+def test_it_steps_back_if_it_ended_in_the_far_view():
+    z = Zoomer(["icon"], panels=[True, True, False])
+    z._notch_out_of_close("m1")
+    assert z.scrolls == [(-1, 1), (1, 1)]
+
+
+def test_no_correction_sends_a_whole_level_on_a_close_reading():
+    """m7 14:18:18 and m13 14:52:33: three notches on a close reading, from
+    a camera one notch in, and the scans after were in the far view."""
+    src = inspect.getsource(fs)
+    at = src.index("def _step_scan_and_verify_gem")
+    scan = src[at:src.index("\n    def ", at + 10)]
+    assert "_scroll_at_center(-1, self._zoom_scrolls())" not in scan
+    assert scan.count("self._notch_out_of_close(tag)") == 3, \
+        "the hint, no-candidate and empty-streak corrections"
+    at = src.index("Already on world map icon-zoom")
+    step1 = src[at:src.index("def _step_stay_and_rezoom", at)]
+    loop = step1[step1.index("for _ in range(ZOOM_FIX_ROUNDS)"):]
+    assert "self._notch_out_of_close(tag)" in loop
+    assert "_scroll_at_center(-1, self._zoom_scrolls())" not in loop
 
 
 def test_step_one_confirms_close_and_checks_the_far_view():

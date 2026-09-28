@@ -105,9 +105,10 @@ def quiet(monkeypatch):
 
 
 def test_two_close_scans_in_a_row_scroll_out_right_there():
+    """A notch, not a whole level (2026-09-28: see _notch_out_of_close)."""
     s = Scan(["close"] * 18)
     s._step_scan_and_verify_gem("m14")
-    assert s.scrolls and s.scrolls[0] == (CLOSE_HINT_SCANS, -1, 3), s.scrolls
+    assert s.scrolls and s.scrolls[0] == (CLOSE_HINT_SCANS, -1, 1), s.scrolls
 
 
 def test_one_close_scan_alone_asks_nothing():
@@ -133,4 +134,8 @@ def test_it_does_not_scroll_without_end():
         (s.scan_no, amount, count))              # the scroll never lands
     s._step_scan_and_verify_gem("m1")
     early = [sc for sc in s.scrolls if sc[0] < 18]
-    assert len(early) == fs.ZOOM_FIX_ROUNDS, s.scrolls
+    # ZOOM_FIX_ROUNDS corrections, each at most a whole level a notch at a
+    # time: the old ceiling of notches, never more.
+    assert all(count == 1 for _, _, count in early), s.scrolls
+    assert len(early) == fs.ZOOM_FIX_ROUNDS * s._zoom_scrolls(), s.scrolls
+    assert len({scan for scan, _, _ in early}) == fs.ZOOM_FIX_ROUNDS, s.scrolls

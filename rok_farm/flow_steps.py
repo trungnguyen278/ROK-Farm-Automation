@@ -1205,7 +1205,7 @@ class GemFlowMixin:
             # screen, which only happens zoomed in, so it cannot walk outward.
             gauge = self.read_zoom_gauge()
             if gauge == "close":
-                # Confirmed before three notches go out: see _zoom_still_close.
+                # Confirmed before any notch goes out: see _zoom_still_close.
                 self._wait(random.uniform(0.8, 1.4))
                 gauge = self.read_zoom_gauge()
             if gauge is None and getattr(self, "_zoomed_in_by_click", False):
@@ -1253,8 +1253,7 @@ class GemFlowMixin:
                         shot = self._grab()
                         if shot is not None:
                             save_screenshot(shot, f"{tag}_ZOOM_CLOSE_ON_ARRIVAL")
-                    self._scroll_at_center(-1, self._zoom_scrolls())
-                    self._wait_zoom_settled()
+                    self._notch_out_of_close(tag)
                     gauge = self.read_zoom_gauge()
                 if gauge == "close":
                     print(f"  [{FAIL}] Still zoomed in after {ZOOM_FIX_ROUNDS} "
@@ -1665,13 +1664,51 @@ class GemFlowMixin:
         self._wait(random.uniform(0.8, 1.4))
         return self.read_zoom_gauge() == "close"
 
+    def _far_view_confirmed(self) -> bool:
+        """The filter panel up on two looks a moment apart.
+
+        One look taken as a zoom animation ended stepped in from a view that
+        was about to settle at icon zoom, and the notch landed close: 2 of the
+        3 step-ins of 2026-09-28 afternoon (m7 14:18:06, m13 14:52:21, each
+        within 2 s of a zoom, the settle wait still logging "animating"). The
+        scan-loop correction then threw both into the far view for real.
+        """
+        frame = self._grab()
+        if frame is None or not self._filter_panel_open(frame):
+            return False
+        self._wait(random.uniform(0.8, 1.4))
+        frame = self._grab()
+        return frame is not None and self._filter_panel_open(frame)
+
+    def _notch_out_of_close(self, tag: str = "") -> int:
+        """Out a notch at a time while the gauge still says close, never more
+        than the notches of a full zoom level; then back from the far view if
+        that is where it ended. Returns the notches taken out.
+
+        The corrections used to send a whole level (three notches) on one
+        close reading. The gauge cannot tell one notch in from three, and from
+        one notch in, three out is two past icon zoom -- the far view, where
+        the game hides every deposit. 2026-09-28, the 40 corrections of the
+        day: 2 of 12 in-scan ones landed there (m7 14:18:18, m13 14:52:33) and
+        3 still read close.
+        """
+        taken = 0
+        for _ in range(self._zoom_scrolls()):
+            self._scroll_at_center(-1, 1)
+            self._wait_zoom_settled()
+            taken += 1
+            if not self._zoom_still_close():
+                break
+        self._back_from_too_far(tag)
+        return taken
+
     def _back_from_too_far(self, tag: str = "") -> bool:
         """Past icon zoom the game shows the map filter panel and draws no
-        deposits: one notch in, at most twice. True if it stepped in."""
+        deposits: one notch in, at most twice, each on a confirmed look (see
+        _far_view_confirmed). True if it stepped in."""
         stepped = False
         for _ in range(2):
-            frame = self._grab()
-            if frame is None or not self._filter_panel_open(frame):
+            if not self._far_view_confirmed():
                 break
             print(f"  [{WARN}] Zoomed out past icon level (the map filter panel "
                   f"is up) -- one notch in")
@@ -1982,8 +2019,7 @@ class GemFlowMixin:
                     logger.warning("zoom hint close on %d scans in a row and the "
                                    "gauge agrees -- scrolling out at scan %d",
                                    CLOSE_HINT_SCANS, scan_count)
-                    self._scroll_at_center(-1, self._zoom_scrolls())
-                    self._wait_zoom_settled()
+                    self._notch_out_of_close(tag)
                     empty_streak = 0
                     continue
 
@@ -2085,8 +2121,7 @@ class GemFlowMixin:
                                        "gauge says close -- correcting in "
                                        "place", scan_count)
                         self._zoom_fixed_this_mine = True
-                        self._scroll_at_center(-1, self._zoom_scrolls())
-                        self._wait_zoom_settled()
+                        self._notch_out_of_close(tag)
                         # Did it take? Nothing used to ask, and the answer is
                         # often no. 2026-09-22 15:05: the gauge said close,
                         # this scrolled out, and the gauge still said close --
@@ -2161,8 +2196,7 @@ class GemFlowMixin:
                                        "reading close -- correcting in place",
                                        max_empty_streak)
                         self._zoom_fixed_this_mine = True
-                        self._scroll_at_center(-1, self._zoom_scrolls())
-                        self._wait_zoom_settled()
+                        self._notch_out_of_close(tag)
                         empty_streak = 0
                         continue
                     # Two very different things end up here, and they have
