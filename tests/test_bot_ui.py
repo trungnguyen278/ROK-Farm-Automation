@@ -170,6 +170,38 @@ def test_a_failed_mine_is_sent_with_its_frame(live, tmp_path, monkeypatch):
     assert kw["file"].filename == "fail.png"
 
 
+def test_a_restart_clears_the_panels_it_left_behind(monkeypatch):
+    """Each bot restart posted a new panel; the old one stayed, frozen."""
+    from types import SimpleNamespace
+    from rok_farm import live_feed
+
+    def msg(author, footer):
+        m = SimpleNamespace(author=author, id=id(author) + len(footer or ""),
+                            deleted=False)
+        m.embeds = [SimpleNamespace(footer=SimpleNamespace(text=footer))] if footer else []
+
+        async def delete():
+            m.deleted = True
+        m.delete = delete
+        return m
+
+    ours = bot.client.user                          # None in a test: no login
+    old_panel = msg(ours, live_feed.PANEL_FOOTER)
+    alert = msg(ours, None)
+    other = msg("operator", live_feed.PANEL_FOOTER)
+
+    class Hist:
+        def history(self, limit):
+            async def gen():
+                for m in (old_panel, alert, other):
+                    yield m
+            return gen()
+
+    monkeypatch.setattr(bot, "_panel_msg", None)
+    asyncio.run(bot.clear_old_panels(Hist()))
+    assert old_panel.deleted and not alert.deleted and not other.deleted
+
+
 def test_more_than_discord_takes_is_split():
     """Ten embeds, 6,000 characters: past either, a second message."""
     m = Message()

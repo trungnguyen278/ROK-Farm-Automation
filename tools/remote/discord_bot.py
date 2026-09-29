@@ -578,6 +578,20 @@ def load_live_state():
     _live_pos = size
 
 
+async def clear_old_panels(ch, limit=50):
+    """Delete panels a previous bot process left behind. Each restart posted
+    a new one and the old stayed up, frozen at its last state."""
+    try:
+        async for m in ch.history(limit=limit):
+            if m.author != client.user or not m.embeds:
+                continue
+            footer = m.embeds[0].footer.text if m.embeds[0].footer else ""
+            if footer == live_feed.PANEL_FOOTER and (_panel_msg is None or m.id != _panel_msg.id):
+                await m.delete()
+    except Exception as e:
+        blog(f"clearing old panels failed: {type(e).__name__}: {e}")
+
+
 async def refresh_panel(ch, force_new=False):
     """Edit the live panel in place; post it again at the bottom when
     something has been posted under it, so it is always the last message."""
@@ -742,6 +756,9 @@ async def on_ready():
     await announce("startup")
     _farm_was_up = bool(farm_procs())
     await asyncio.to_thread(load_live_state)    # today so far, no alerts
+    ch = await alert_target()
+    if ch is not None:
+        await clear_old_panels(ch)
     if not watcher.is_running():
         watcher.start()
     if not feeder.is_running():

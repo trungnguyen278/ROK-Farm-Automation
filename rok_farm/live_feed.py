@@ -267,6 +267,10 @@ def _mins_left(until: float | None, now: float) -> str:
     return f", ~{left:.0f} min left" if left >= 1 else ", any moment"
 
 
+# How the bot recognises its own panels (a restart deletes the old ones).
+PANEL_FOOTER = "Live panel, refreshed as the farm works"
+
+
 def panel_spec(s: LiveState, farm_up: bool, watchdog_up: bool, now: float) -> dict:
     """The live panel: the state leads, in the title and its colour."""
     if not farm_up:
@@ -317,7 +321,7 @@ def panel_spec(s: LiveState, farm_up: bool, watchdog_up: bool, now: float) -> di
         fields.append(("Recent", "\n".join(lines)[:1024], False))
     return {"title": title, "description": desc, "colour": colour,
             "fields": fields, "image": None,
-            "footer": "Live panel, refreshed as the farm works"}
+            "footer": PANEL_FOOTER}
 
 
 def alert_spec(e: Event, s: LiveState, image: str | None = None) -> dict:
