@@ -462,6 +462,13 @@ WORLD_CITY_BTN_MIN = 0.70   # city_btn >= this while wmcb is low -> world map
 # under the lowest real one (tests/test_world_check.py).
 SPACE_CASTLE_MIN = 0.85
 
+# The map glyph on the same button = the city. Every "city/none" verdict in the
+# farm log to 2026-09-29 13:50, by space_map score: 0.80-1.00 on 8,437 (the
+# city), 0.00 on 793 and 0.50-0.55 on 9 (loading screens, notices, the world
+# map mid-toggle). Nothing between 0.55 and 0.80. The older city test,
+# world_map_city_btn >= CITY_WMCB_MIN, reads "unknown" on today's city frames.
+SPACE_MAP_MIN = 0.70
+
 # --- Layer 2: vision-model oracle ---
 # Called only when the local layers cannot tell what is on screen. The budget is
 # ours, not the provider's: free tiers change without notice, so the bot caps

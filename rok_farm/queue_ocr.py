@@ -15,9 +15,11 @@ import json
 import cv2
 
 from rok_farm import PROJECT_ROOT
+from rok_farm.config import MODAL_RATIO_MIN
 from rok_farm.logging_setup import INFO, logger
 from rok_farm.map_memory import read_limit
 from rok_farm.screenshots import save_screenshot
+from rok_farm.state_probe import dim_ratio
 
 try:
     from rapidocr_onnxruntime import RapidOCR
@@ -45,6 +47,36 @@ def ocr_texts(roi) -> list[str]:
     except Exception:
         return []
     return [r[1] for r in (result or []) if len(r) > 1 and r[1]]
+
+
+# The blue expand icon left of the "N/5" badge (templates/ui/queue_badge_icon
+# .png, cut from a 1533x862 frame at x 1442-1467, y 122-148). The game shows
+# icon and badge only while a march is out; searched a little wider than the
+# icon so a frame a pixel or two off still finds it.
+BADGE_ICON_WINDOW = (0.925, 0.115, 0.975, 0.195)     # x0, y0, x1, y1 fractions
+# Measured with tools/dev/queue_badge_presence.py on 616 frames of 2026-09-28
+# and 29, labelled from the log: nothing out -> the icon scores at most 0.38
+# (21 frames); troops out on a plain map or city view -> 0.60 and up, bar
+# frames caught mid-animation (0.27, 0.32), which a second look settles.
+BADGE_ABSENT_MAX = 0.45
+_badge_icon = None
+
+
+def badge_icon_score(frame) -> float:
+    """How much the badge's icon is where it sits: TM_CCOEFF_NORMED max."""
+    global _badge_icon
+    if _badge_icon is None:
+        _badge_icon = cv2.imread(str(PROJECT_ROOT / "templates" / "ui"
+                                     / "queue_badge_icon.png"))
+    if _badge_icon is None or frame is None:
+        return 0.0
+    fh, fw = frame.shape[:2]
+    x0, y0, x1, y1 = BADGE_ICON_WINDOW
+    roi = frame[int(fh * y0):int(fh * y1), int(fw * x0):int(fw * x1)]
+    th, tw = _badge_icon.shape[:2]
+    if roi.shape[0] < th or roi.shape[1] < tw:
+        return 0.0
+    return float(cv2.matchTemplate(roi, _badge_icon, cv2.TM_CCOEFF_NORMED).max())
 
 
 class QueueMixin:
@@ -102,6 +134,7 @@ class QueueMixin:
                     if m:
                         used, total = int(m.group(1)), int(m.group(2))
                         if 0 <= used <= total <= 9:
+                            self._queue_total = total
                             return used, total
             except Exception as e:
                 logger.debug("Queue OCR error: %s", e)
@@ -111,7 +144,44 @@ class QueueMixin:
             path = save_screenshot(last_roi, "queue_roi_miss")
             logger.debug("Queue OCR failed after %d tries (last text='%s'); saved %s",
                          retries, last_text, path)
+
+        # No reading is not no information. The game hides the badge when no
+        # march is out, and read as a failure that sent the farm to its burst
+        # counter: 2026-09-29 12:31 it said 5/5 with nothing out, and the farm
+        # quit for 18 minutes, then sat a 15-minute toast vigil, with every
+        # slot free. An empty read alone does not show it -- 178 of 205 in
+        # September had troops out -- so the icon beside the badge decides.
+        total = getattr(self, "_queue_total", None) or getattr(self, "max_marches", None)
+        if total and self._queue_badge_gone():
+            logger.info("Queue badge not on screen (no icon on a plain view) -- "
+                        "nothing out: 0/%d", total)
+            return 0, total
         return None
+
+    def _queue_badge_gone(self) -> bool:
+        """The badge is not there at all: no icon on three looks spread over
+        about three seconds, each on a plain city or world view with nothing
+        over it.
+
+        Several looks because the right-hand panel slides in as the city
+        opens: city_idle_return_city 11:49 caught it half in, icon score
+        0.27 with five out and the Space glyph already showing. The
+        plain-view test -- the Space button's glyph says city or world, and
+        nothing dims the screen -- keeps a panel, a loading screen or a
+        notice from reading as "nothing out".
+        """
+        space_view = getattr(self, "_space_view", None)
+        if space_view is None:
+            return False
+        for look in range(3):
+            if look:
+                time.sleep(random.uniform(1.2, 1.8))
+            frame = self._grab()
+            if frame is None or badge_icon_score(frame) >= BADGE_ABSENT_MAX:
+                return False
+            if dim_ratio(frame) >= MODAL_RATIO_MIN or space_view(frame) is None:
+                return False
+        return True
 
 
 # --- Map position (the "#3560 X:7 Y:86" readout, top-left of the HUD) ---

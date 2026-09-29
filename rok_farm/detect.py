@@ -23,7 +23,8 @@ from rok_farm.config import (BADGE_AREA, BADGE_DX, BADGE_DY, BADGE_FILL_MIN,
                              FOG_HUE_LAP_MAX, FOG_HUE_STD_MAX, FOG_LAP_VAR_MAX,
                              FOG_SAT_LAP_MAX, FOG_SAT_MAX, MARCH_TEMPLATES,
                              OCCUPIED_TEMPLATES, OCCUPIED_THRESHOLD,
-                             SAFE_ZONE_MARGIN, SPACE_CASTLE_MIN, VERIFY_ROI)
+                             SAFE_ZONE_MARGIN, SPACE_CASTLE_MIN, SPACE_MAP_MIN,
+                             VERIFY_ROI)
 from rok_farm.logging_setup import INFO, logger
 
 
@@ -120,6 +121,27 @@ class DetectMixin:
             return Match(castle.name, ax, ay, castle.w, castle.h,
                          castle.confidence,
                          (ax + castle.w // 2, ay + castle.h // 2))
+        return None
+
+    def _space_view(self, frame) -> str | None:
+        """"city" / "world" from the Space button's glyph on THIS frame, or
+        None when neither glyph is clearly there (loading, a notice, a toggle
+        in flight). Unlike _find_city_btn it judges the frame it is given."""
+        if frame is None:
+            return None
+        fh, fw = frame.shape[:2]
+        rx1, ry1, rx2, ry2 = self._CITY_BTN_REGION
+        crop = frame[int(fh * ry1):int(fh * ry2), int(fw * rx1):int(fw * rx2)]
+        if crop.size == 0:
+            return None
+        castle = self.matcher.match_single(crop, "buttons/space_castle")
+        city = self.matcher.match_single(crop, "buttons/space_map")
+        cc = castle.confidence if castle else 0.0
+        mm = city.confidence if city else 0.0
+        if cc >= SPACE_CASTLE_MIN and cc > mm:
+            return "world"
+        if mm >= SPACE_MAP_MIN and mm > cc:
+            return "city"
         return None
 
     def _on_world_map(self, frame=None) -> bool:
