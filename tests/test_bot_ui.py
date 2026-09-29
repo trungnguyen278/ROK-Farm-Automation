@@ -93,6 +93,83 @@ def test_several_embeds_go_in_one_message():
     assert stamped == [False] * 6 + [True], "only the last embed is stamped"
 
 
+class Msg:
+    _next = 100
+
+    def __init__(self, channel, embed):
+        Msg._next += 1
+        self.id, self.channel, self.embed = Msg._next, channel, embed
+        self.edits, self.deleted = 0, False
+
+    async def edit(self, embed=None):
+        self.embed = embed
+        self.edits += 1
+
+    async def delete(self):
+        self.deleted = True
+
+
+class LiveChannel:
+    def __init__(self):
+        self.sent, self.last_message_id = [], None
+
+    async def send(self, *a, **k):
+        m = Msg(self, k.get("embed"))
+        self.sent.append((m, k))
+        self.last_message_id = m.id
+        return m
+
+
+@pytest.fixture
+def live(monkeypatch):
+    from rok_farm import live_feed
+    monkeypatch.setattr(bot, "LIVE", live_feed.LiveState())
+    monkeypatch.setattr(bot, "_panel_msg", None)
+    monkeypatch.setattr(bot, "_panel_sig", None)
+    monkeypatch.setattr(bot, "farm_procs", lambda: [1])
+    monkeypatch.setattr(bot, "wd_procs", lambda: [1])
+    return bot.LIVE
+
+
+def test_the_panel_is_one_message_edited_in_place(live):
+    ch = LiveChannel()
+    asyncio.run(bot.refresh_panel(ch))
+    asyncio.run(bot.refresh_panel(ch))              # nothing new: no call at all
+    assert len(ch.sent) == 1 and ch.sent[0][0].edits == 0
+    live.feed("  *** MINE 4 ***")
+    asyncio.run(bot.refresh_panel(ch))
+    assert len(ch.sent) == 1 and ch.sent[0][0].edits == 1
+    assert "Mine 4" in ch.sent[0][0].embed.title
+
+
+def test_the_panel_moves_back_under_anything_posted_after_it(live):
+    ch = LiveChannel()
+    asyncio.run(bot.refresh_panel(ch))
+    first = ch.sent[0][0]
+    ch.last_message_id = 999                          # a reply landed below it
+    live.feed("  *** MINE 5 ***")
+    asyncio.run(bot.refresh_panel(ch))
+    assert len(ch.sent) == 2 and first.deleted, "the old panel stays behind"
+
+
+def test_a_failed_mine_is_sent_with_its_frame(live, tmp_path, monkeypatch):
+    import os
+    import time as _t
+    monkeypatch.setattr(bot, "SHOTS", tmp_path)
+    f = tmp_path / "m6_NO_CANDIDATES_120000.png"
+    f.write_bytes(b"\x89PNG fake")
+    os.utime(f, (_t.time(), _t.time()))
+    live.feed("  *** MINE 6 ***")
+    live.feed("  [WARN] 18 consecutive empty scans -- restarting from city")
+    (e,) = live.feed("  Mine 6 FAILED")
+    ch = LiveChannel()
+    asyncio.run(bot.send_alert(ch, e))
+    (_m, kw), = ch.sent
+    assert "Mine 6 failed" in kw["embed"].title
+    assert kw["embed"].description == "18 empty scans in a row"
+    assert kw["file"].filename == "fail.png"
+
+
 def test_more_than_discord_takes_is_split():
     """Ten embeds, 6,000 characters: past either, a second message."""
     m = Message()

@@ -13,8 +13,6 @@ fired.
 """
 
 import ast
-import inspect
-import re
 from pathlib import Path
 
 from rok_farm import PROJECT_ROOT
@@ -54,20 +52,19 @@ def test_the_watchdog_has_a_way_to_speak():
         "nobody")
 
 
-def test_what_it_says_gets_past_the_bot_filter():
-    """Both halves have to agree or the alert is written and dropped."""
-    m = re.search(r"FEED = re\.compile\((.*?)\n\)", BOT, re.S)
-    assert m, "the bot's feed filter moved"
-    assert "WATCHDOG:" in m.group(1), (
-        "the bot drops WATCHDOG lines, so alert() writes into a void")
+def test_what_it_says_reaches_the_channel():
+    """Both halves have to agree or the alert is written and dropped.
 
-    # and the line alert() writes must not look like a logger line, which the
-    # bot skips before it ever reaches the filter
-    logpfx = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+ \[\w+\s*\] [\w.]+: ")
+    The bot reads the farm log through rok_farm.live_feed since 2026-09-29
+    (it used to be a line filter in the bot, FEED); a WATCHDOG line has to
+    come out of it as an alert -- a message of its own, not a panel line.
+    """
+    from rok_farm import live_feed
+    assert "live_feed" in BOT, "the bot no longer reads the log through live_feed"
     sample = "  [WARN] WATCHDOG: 8 consecutive mine failures"
-    assert not logpfx.match(sample), "alert()'s line would be skipped as log noise"
-    feed = re.compile(m.group(1).replace('r"', '"').replace('"', ''), re.X)
-    assert feed.search(sample), sample
+    events = live_feed.LiveState().feed(sample)
+    assert events and events[0].alert, "the bot drops WATCHDOG lines"
+    assert "8 consecutive mine failures" in events[0].text
 
 
 def test_the_judgements_actually_use_it():

@@ -122,9 +122,10 @@ def test_a_long_lock_is_a_planned_wait_and_reaches_discord():
     sys.path.insert(0, "tools/dev/overnight")
     import logscan
     assert re.search(logscan.PATTERNS["planned_wait"], "Windows still locked, 12 min")
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("discord_bot_src",
-                                                  "tools/remote/discord_bot.py")
-    src = open(spec.origin, encoding="utf-8").read()
-    feed = src[src.index("FEED = re.compile("):src.index(")\n", src.index("FEED = re.compile("))]
-    assert "Windows is locked" in feed
+    # The bot reads the log through rok_farm.live_feed (since 2026-09-29):
+    # a lock has to come out of it as an alert.
+    from rok_farm import live_feed
+    for line in ("  [WARN] Windows is locked -- pressing ENTER",
+                 "  [WARN] Windows still locked, 12 min"):
+        events = live_feed.LiveState().feed(line)
+        assert events and events[0].alert, line

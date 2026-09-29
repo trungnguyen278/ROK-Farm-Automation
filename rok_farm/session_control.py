@@ -533,7 +533,8 @@ HELP_GROUPS = (
         ("!status", "farm, watchdog and game state, this run's counters"),
         ("!shot", "the game right now (or the newest saved frame)"),
         ("!log [n]", "the last n interesting log lines (default 25)"),
-        ("!feed on|off", "live progress: mines, marches, queue, gather times"),
+        ("!feed on|off", "the live panel and the failure alerts: on or off"),
+        ("!panel", "post the live panel again, at the bottom"),
     )),
     ("Numbers", (
         ("!days [what] [n]", "day by day, one chart each, last n days (14): "

@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from rok_farm import PROJECT_ROOT as PROJECT
 from rok_farm import ap_burn
+from rok_farm import live_feed
 from rok_farm import reports
 from rok_farm import session_control as sc
 from rok_farm import wake
@@ -67,7 +68,7 @@ WATCH_POLL = 60.0
 
 # Every verb the handler below answers to, including the short aliases.
 KNOWN_CMDS = ("help", "h", "status", "s", "shot", "pic", "live", "log",
-              "report", "feed", "check", "wake", "stats", "days", "map", "run", "runs",
+              "report", "feed", "panel", "check", "wake", "stats", "days", "map", "run", "runs",
               "ap", "start", "stop")
 
 # What a typo may be pointed AT. "start" and "stop" are deliberately absent.
@@ -185,47 +186,6 @@ GEMS = re.compile(r"Gems now (\d+) \(([+-]\d+) since start\)")
 QUEUE = re.compile(
     r"Queue(?:\s+likely)?\s*(?:full\s*\(|reconciled:|reconcile:|:)\s*(\d+)/(\d+)")
 
-# A logger line: "2026-09-09 08:25:42,147 [INFO   ] gem_farm_test: ...".
-# Nearly every event is written twice -- once by the logger and once by the
-# pretty printer -- so the feed keeps only the pretty half. Dropping the logger
-# half halves the traffic and loses nothing: where both exist the pretty
-# wording is the fuller one ("Troops home in ~25min -- too long to sit here"
-# against "Computed wait 1387s -> quit+relaunch").
-LOGPFX = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+ \[\w+\s*\] [\w.]+: ")
-
-# What counts as progress worth pushing to the phone. Deliberately not every
-# INFO line -- scan chatter and click coordinates would bury the events that
-# actually say what the farm is doing.
-FEED = re.compile(
-    r"Mine \d+ (?:DONE|FAILED)"
-    r"|March sent|March did NOT fire"
-    r"|Queue(?:\s+likely)?\s*(?:full\s*\(|reconciled:|:)\s*\d+/\d+"
-    r"|March time .*est\. gather"
-    r"|Troops home in"
-    r"|Staying out for|Still out, \d+ min to go"
-    r"|Wait check:"
-    r"|Restarting the game"
-    r"|FOG \(out of kingdom\)|Retreating inland|Fog vanished on re-check"
-    r"|consecutive empty scans"
-    r"|attempting recovery|Client vanished"
-    r"|Phase: "
-    r"|farm start|FARM EXITED"
-    # The watchdog had no way to reach anyone. It wrote its own log file and
-    # nothing read it, so on 2026-09-22 the farm failed mine after mine
-    # through an hour of server maintenance and the first anyone knew was the
-    # operator looking at the screen. A supervisor that cannot say anything is
-    # a supervisor no one is supervised by.
-    r"|WATCHDOG:"
-    # The machine locks itself when idle (no password; the farm dismisses the
-    # lock screen). Worth seeing when it happens, and loudly when it cannot.
-    r"|Windows is locked|Windows (?:is )?still locked|Unlocked after"
-)
-
-
-def feed_clean(line):
-    """Strip colour codes and the pretty printer's own [TAG] gutter."""
-    s = ANSI.sub("", line).rstrip()
-    return re.sub(r"^\s*\[(?:INFO|PASS|WARN|FAIL|DEBUG)\]\s*", "", s).strip()
 STILL_OUT = re.compile(r"Still out, (\d+) min to go")
 STAY_OUT = re.compile(r"Staying out for ([\d.]+) min")
 
@@ -573,68 +533,123 @@ _farm_was_up = False
 _stop_asked_at = 0.0
 STOP_GRACE = 120.0
 _feed_on = True
-_feed_pos = None
+_live_pos = None
+_panel_msg = None
+_panel_sig = None
+LIVE = live_feed.LiveState()
 
 FEED_POLL = 20.0
-FEED_MAX_LINES = 14
 
 
-def read_new_feed_lines():
-    """Progress lines appended to the farm log since the last check."""
-    global _feed_pos
+def read_new_lines():
+    """Complete lines appended to the farm log since the last look."""
+    global _live_pos
     if not FARM_LOG.exists():
         return []
     size = FARM_LOG.stat().st_size
-    if _feed_pos is None or _feed_pos > size:
-        # First look, or the file got shorter (never in append mode, but a
-        # hand-deleted log would). Start at the end so the channel does not
-        # get a dump of everything that already happened.
-        _feed_pos = size
+    if _live_pos is None or _live_pos > size:
+        # First look, or the file got shorter (a hand-deleted log). Start at
+        # the end: load_live_state() has already read what came before.
+        _live_pos = size
         return []
-    if size == _feed_pos:
+    if size == _live_pos:
         return []
     with FARM_LOG.open("rb") as fh:
-        fh.seek(_feed_pos)
-        raw = fh.read(size - _feed_pos)
+        fh.seek(_live_pos)
+        raw = fh.read(size - _live_pos)
     # Leave a trailing partial line for the next pass -- the farm writes line
     # buffered, so a read can land mid-line.
-    cut = raw.rfind(b"\n")
-    if cut < 0:
+    cut_at = raw.rfind(b"\n")
+    if cut_at < 0:
         return []
-    _feed_pos += cut + 1
-    out = []
-    for ln in raw[:cut].decode("utf-8", errors="replace").splitlines():
-        if LOGPFX.match(ANSI.sub("", ln)):
-            continue
-        if FEED.search(ln):
-            s = feed_clean(ln)
-            if s:
-                out.append(s)
-    return out
+    _live_pos += cut_at + 1
+    return raw[:cut_at].decode("utf-8", errors="replace").splitlines()
+
+
+def load_live_state():
+    """Today so far, read once at startup: the counts and the panel's state
+    start from the log, not from zero."""
+    global _live_pos
+    if not FARM_LOG.exists():
+        return
+    size = FARM_LOG.stat().st_size
+    live_feed.replay(LIVE, log_tail(FARM_LOG, 16_000_000),
+                     datetime.now().strftime("%Y-%m-%d"))
+    _live_pos = size
+
+
+async def refresh_panel(ch, force_new=False):
+    """Edit the live panel in place; post it again at the bottom when
+    something has been posted under it, so it is always the last message."""
+    global _panel_msg, _panel_sig
+    farm_up = bool(await asyncio.to_thread(farm_procs))
+    wd_up = bool(await asyncio.to_thread(wd_procs))
+    spec = live_feed.panel_spec(LIVE, farm_up, wd_up, time.time())
+    sig = repr((spec["title"], spec["description"], spec["fields"]))
+    at_bottom = (_panel_msg is not None
+                 and getattr(ch, "last_message_id", None) == _panel_msg.id)
+    if at_bottom and not force_new:
+        if sig == _panel_sig:
+            return
+        try:
+            await _panel_msg.edit(embed=to_embed(spec))
+            _panel_sig = sig
+            return
+        except discord.NotFound:
+            _panel_msg = None
+        except Exception as e:
+            blog(f"panel edit failed: {type(e).__name__}: {e}")
+            return
+    old = _panel_msg
+    try:
+        _panel_msg = await ch.send(embed=to_embed(spec))
+        _panel_sig = sig
+    except Exception as e:
+        blog(f"panel send failed: {type(e).__name__}: {e}")
+        return
+    if old is not None:
+        try:
+            await old.delete()
+        except Exception:
+            pass
+
+
+async def send_alert(ch, event):
+    """A failed mine (reason + the frame the farm saved) or a warning."""
+    frame = None
+    if event.kind == "failed" and event.mine is not None:
+        frame = await asyncio.to_thread(live_feed.failure_frame, event.mine,
+                                        event.since or event.t - 600, SHOTS)
+    spec = live_feed.alert_spec(event, LIVE, "fail.png" if frame else None)
+    try:
+        if frame:
+            await ch.send(embed=to_embed(spec),
+                          file=discord.File(str(frame), "fail.png"))
+        else:
+            await ch.send(embed=to_embed(spec))
+    except Exception as e:
+        blog(f"alert send failed: {type(e).__name__}: {e}")
 
 
 @tasks.loop(seconds=FEED_POLL)
 async def feeder():
-    """Push farm progress to the channel as it happens."""
+    """Keep the live panel current and say so when something needs a look.
+
+    It posted raw log lines in a code block every twenty seconds; the
+    operator, 2026-09-29: they look ugly -- show what the farm is doing,
+    failures included, and make it look professional.
+    """
+    lines = await asyncio.to_thread(read_new_lines)
+    events = [e for ln in lines for e in LIVE.feed(ln)]
     if not _feed_on:
-        read_new_feed_lines()   # keep the position current, so switching the
-        return                  # feed back on does not replay a backlog
-    lines = read_new_feed_lines()
-    if not lines:
         return
     ch = await alert_target()
     if ch is None:
         return
-    extra = max(0, len(lines) - FEED_MAX_LINES)
-    if extra:
-        lines = lines[-FEED_MAX_LINES:]
-    body = "\n".join(ln[:120] for ln in lines)
-    if extra:
-        body = f"(+{extra} earlier lines skipped)\n" + body
-    try:
-        await ch.send(f"```\n{body[:1850]}\n```")
-    except Exception as e:
-        blog(f"feed send failed: {type(e).__name__}: {e}")
+    for e in events:
+        if e.alert:
+            await send_alert(ch, e)
+    await refresh_panel(ch)
 
 
 async def reply(message, text):
@@ -658,9 +673,13 @@ async def watcher():
         ch = await alert_target()
         if ch is not None:
             lines = interesting_tail(log_tail(FARM_LOG, 200000).splitlines(), 6)
-            body = "\n".join("  " + ln[:110] for ln in lines)
-            await ch.send(
-                f"**Farm stopped** at {datetime.now():%H:%M:%S}.\n```\n{body}\n```")
+            body = "\n".join(ln[:110] for ln in lines)
+            await ch.send(embed=to_embed({
+                "title": f"{live_feed.I_STOP} Farm stopped on its own",
+                "description": (f"At {datetime.now():%H:%M:%S}, and nobody asked "
+                                f"for it. The last lines:\n```\n{body[:3800]}\n```"),
+                "colour": reports.COLOUR_BAD, "fields": [], "image": None,
+                "footer": None}))
             blog("alerted: farm went down")
         else:
             blog("farm went down but no channel to alert in")
@@ -696,7 +715,13 @@ async def announce(why):
              f"it will pick the channel up on its own")
         return False
     try:
-        await ch.send(f"Bot online, {datetime.now():%H:%M}. `!help` for commands.")
+        await ch.send(embed=to_embed({
+            "title": "\U0001F916 Bot online",
+            "description": ("`!help` lists the commands. The live panel below "
+                            "follows the farm; failed mines and warnings get a "
+                            "message of their own."),
+            "colour": reports.COLOUR_INFO, "fields": [], "image": None,
+            "footer": None}))
         blog(f"announced in #{getattr(ch, 'name', CHANNEL_ID)} ({why})")
         return True
     except Exception as e:
@@ -716,7 +741,7 @@ async def on_ready():
              "&permissions=101376&scope=bot")
     await announce("startup")
     _farm_was_up = bool(farm_procs())
-    read_new_feed_lines()               # anchor at the end of the log
+    await asyncio.to_thread(load_live_state)    # today so far, no alerts
     if not watcher.is_running():
         watcher.start()
     if not feeder.is_running():
@@ -852,8 +877,12 @@ async def on_message(message):
             else:
                 _feed_on = not _feed_on
             await reply(message,
-                        f"progress feed **{'ON' if _feed_on else 'OFF'}** "
-                        f"(checks every {FEED_POLL:.0f}s)")
+                        f"live panel and alerts **{'ON' if _feed_on else 'OFF'}** "
+                        f"(refreshed every {FEED_POLL:.0f}s)")
+
+        elif cmd == "panel":
+            ch = await alert_target() or message.channel
+            await refresh_panel(ch, force_new=True)
 
         elif cmd in ("check", "wake"):
             # The player watches the same account on their phone and usually
