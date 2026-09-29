@@ -170,6 +170,7 @@ class LiveState:
         elif (m := DONE.search(text)):
             n = int(m.group(1))
             self.today["done"] += 1
+            self.step, self.scan = "done", None
             where = f" {DOT} {self.last_march}" if self.last_march else ""
             e = self._event("done", f"{I_DONE} Mine {n} done{where}", n)
             self.last_mine = e
@@ -183,6 +184,7 @@ class LiveState:
         elif (m := FAILED.search(text)):
             n = int(m.group(1))
             self.today["failed"] += 1
+            self.step, self.scan = "failed", None
             e = self._event("failed", f"{I_FAIL} Mine {n} failed", n,
                             detail=self.why or "no reason in the log", alert=True)
             e.since = self.mine_start

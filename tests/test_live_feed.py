@@ -151,3 +151,10 @@ def test_an_alert_for_a_failed_mine():
     spec = lf.alert_spec(e, s, "fail.png")
     assert "Mine 2 failed" in spec["title"] and spec["image"] == "fail.png"
     assert spec["description"] == "18 empty scans in a row"
+
+
+def test_the_title_does_not_lag_behind_a_finished_mine():
+    """"Mine 28 . sending the march" stayed up after it was done."""
+    s, _ = fed(LOG.split("  *** MINE 2 ***")[0])
+    assert s.step == "done"
+    assert "Mine 1" in lf.panel_spec(s, True, True, s.stamp)["title"]
