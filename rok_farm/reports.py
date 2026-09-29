@@ -7,6 +7,7 @@ tools that print them (tools/dev/gem_rate.py, track_map.py, run_map.py):
              operator's spending left out
   book_map   where the camera has NOT been and where it went over and over
   run_map    one run out of the city and back: its path, view by view
+  daily_stats  day by day: gems, hours, marches, mines, restarts
 
 Kept off rok_farm.flow_steps on purpose: importing that builds the OCR
 engine, and the bot has no use for one. The few flow constants needed are
@@ -15,7 +16,6 @@ repeated here and locked to the flow's by tests/test_reports.py.
 
 from __future__ import annotations
 
-import io
 import json
 import re
 import time
@@ -26,7 +26,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from rok_farm import PROJECT_ROOT, pan_model
+from rok_farm import PROJECT_ROOT, charts, pan_model
 from rok_farm.map_memory import HOME_TILES
 
 LOG = PROJECT_ROOT / "logs" / "overnight" / "farm_run.log"
@@ -149,82 +149,209 @@ def gem_rate(since: str, until: str | None = None, log: Path = LOG) -> GemRate:
     return r
 
 
-def _font(size: int, bold: bool = False, mono: bool = False):
-    from PIL import ImageFont
-    names = (["consola.ttf"] if mono else
-             ["segoeuib.ttf", "arialbd.ttf"] if bold else ["segoeui.ttf", "arial.ttf"])
-    for name in names:
-        for folder in (Path("C:/Windows/Fonts"), Path("/usr/share/fonts/truetype")):
-            try:
-                return ImageFont.truetype(str(folder / name), size)
-            except OSError:
-                continue
-    return ImageFont.load_default()
-
-
-# Discord's dark theme, so the picture sits in the channel.
-_BG = (43, 45, 49)
-_FG = (220, 221, 222)
-_DIM = (140, 142, 148)
-_GRID = (64, 66, 72)
-_BAND_COLOURS = {"night": (88, 101, 242), "morning": (250, 166, 26),
-                 "afternoon": (59, 165, 93), "evening": (185, 96, 220)}
-
-
 def rate_chart(r: GemRate) -> bytes:
-    """PNG: gems an hour for each hour of the day, coloured by band."""
-    from PIL import Image, ImageDraw
-    w, h = 960, 430
-    left, right, top, bottom = 56, 20, 24, 70
-    img = Image.new("RGB", (w, h), _BG)
-    d = ImageDraw.Draw(img)
-    small, tiny = _font(15), _font(12)
-    rates = {hr: (g / (s / 3600.0) if s >= 600 else None, s / 3600.0)
-             for hr, (g, s) in r.hour.items()}
-    top_rate = max([v for v, _ in rates.values() if v] + [r.rate, 50.0])
-    scale = (h - top - bottom) / (top_rate * 1.15)
-    base_y = h - bottom
-    for k in range(0, int(top_rate * 1.15) + 1, 50):
-        y = base_y - k * scale
-        d.line([(left, y), (w - right, y)], fill=_GRID)
-        d.text((left - 8, y), str(k), fill=_DIM, font=tiny, anchor="rm")
-    slot = (w - left - right) / 24.0
-    for hr in range(24):
-        x0 = left + hr * slot + 4
-        x1 = left + (hr + 1) * slot - 4
-        band = next(b for b, lo, hi in BANDS if lo <= hr < hi)
-        colour = _BAND_COLOURS[band]
-        val, run_h = rates.get(hr, (None, 0.0))
-        if val is not None:
-            y = base_y - val * scale
-            thin = run_h < 0.5
-            if thin:          # under half an hour of data: outline only
-                d.rectangle([x0, y, x1, base_y], outline=colour, width=2)
-            else:
-                d.rectangle([x0, y, x1, base_y], fill=colour)
-            d.text(((x0 + x1) / 2, y - 3), f"{val:.0f}", fill=_FG, font=tiny,
-                   anchor="md")
-            d.text(((x0 + x1) / 2, base_y + 22), f"{run_h:.1f}h", fill=_DIM,
-                   font=tiny, anchor="mt")
-        d.text(((x0 + x1) / 2, base_y + 6), f"{hr:02d}", fill=_FG, font=small,
-               anchor="mt")
-    if r.seconds:
-        y = base_y - r.rate * scale
-        for x in range(left, w - right, 12):
-            d.line([(x, y), (x + 6, y)], fill=_FG, width=1)
-        d.text((w - right, y - 4), f"average {r.rate:.0f}/h", fill=_FG,
-               font=small, anchor="rd")
-    x = left
-    for band, _lo, _hi in BANDS:
-        d.rectangle([x, h - 18, x + 12, h - 6], fill=_BAND_COLOURS[band])
-        d.text((x + 18, h - 12), band, fill=_FG, font=small, anchor="lm")
-        x += 130
-    d.text((w - right, h - 12), "bar = gems/h, below = hours run; "
-           "outline = under half an hour of data", fill=_DIM, font=tiny, anchor="rm")
-    out = io.BytesIO()
-    img.save(out, "PNG")
-    return out.getvalue()
+    """PNG: gems an hour for each hour of the day, bands bracketed below.
 
+    One hue: the job is magnitude by hour, and the bands are stretches of
+    the clock, not series -- they get a bracket, not a colour. An hour with
+    under half an hour of data is a wash; the solid line is the period's
+    average.
+    """
+    rates, thin = [], set()
+    for hr in range(24):
+        g, s_ = r.hour[hr] if hr in r.hour else (0.0, 0.0)
+        rates.append(g / (s_ / 3600.0) if s_ >= 600 else None)
+        if rates[-1] is not None and s_ < 1800:
+            thin.add(hr)
+    shown = [v for v in rates if v is not None]
+    peak = rates.index(max(shown)) if shown else None
+    groups = [(lo, hi - 1, f"{band} {lo:02d}-{hi:02d}") for band, lo, hi in BANDS]
+    return charts.column_chart(
+        [f"{hr:02d}" for hr in range(24)], [rates],
+        title="Gems per hour, by hour of day", subtitle=f"since {r.since[:16]}",
+        partial=thin, partial_note=None,
+        label_at={peak} if peak is not None and peak not in thin else set(),
+        ref=((r.rate, f"average {r.rate:.0f}/h", charts.INK_2)
+             if r.seconds else None),
+        groups=groups, height=480)
+
+
+# --------------------------------------------------------------------------
+# day by day: !days
+
+# Marches in a day the farm is stopped at (practice since 2026-09-28): the
+# anti-cheat letters came after UTC days of 100-105 marches, and the band
+# starts around 85 (docs/PLAN.md, Decisions 2026-09-28).
+DAILY_MARCH_CAP = 80
+
+_DAY_COUNTS = (
+    ("marches", re.compile(r"Marched to deposit")),
+    ("done", re.compile(r"Mine \d+ DONE")),
+    ("failed", re.compile(r"Mine \d+ FAILED")),
+    ("ap", re.compile(r"AP burn started")),
+    ("restarts", re.compile(r"Game restart: ")),
+)
+
+
+@dataclass
+class DayRow:
+    day: str                    # YYYY-MM-DD, local calendar day
+    gems: float = 0.0           # rises of the balance while the farm ran
+    seconds: float = 0.0        # running farm, as gem_rate counts it
+    marches: int = 0
+    done: int = 0
+    failed: int = 0
+    ap: int = 0
+    restarts: int = 0
+
+    @property
+    def hours(self) -> float:
+        return self.seconds / 3600.0
+
+    @property
+    def ran(self) -> bool:
+        return bool(self.seconds or self.marches or self.done or self.failed)
+
+    @property
+    def rate(self) -> float | None:
+        return self.gems / self.hours if self.seconds >= 900 else None
+
+    @property
+    def success(self) -> float | None:
+        tried = self.done + self.failed
+        return 100.0 * self.done / tried if tried else None
+
+
+def daily_stats(days: int = 14, now: float | None = None,
+                log: Path = LOG) -> list[DayRow]:
+    """One row per calendar day, oldest first, ending today.
+
+    A console line ("Mine 3 DONE") carries no timestamp: it is dated by the
+    last logged line before it.
+    """
+    now = time.time() if now is None else now
+    day0 = time.mktime(time.strptime(time.strftime("%Y-%m-%d",
+                                                   time.localtime(now)), "%Y-%m-%d"))
+    # Noon of each day, so a clock change can never land on the wrong date.
+    dates = [time.strftime("%Y-%m-%d", time.localtime(day0 - k * 86400 + 43200))
+             for k in range(max(1, days) - 1, -1, -1)]
+    rows = {d: DayRow(d) for d in dates}
+    since = f"{dates[0]} 00:00"
+    stamp = None
+    for line in _lines(log):
+        m = TS.match(line)
+        if m:
+            stamp = m.group(1)
+        if stamp is None or stamp < since:
+            continue
+        row = rows.get(stamp[:10])
+        if row is None:
+            continue
+        for key, pat in _DAY_COUNTS:
+            if pat.search(line):
+                setattr(row, key, getattr(row, key) + 1)
+                break
+    for d, (g, secs) in gem_rate(since, log=log).day.items():
+        if d in rows:
+            rows[d].gems, rows[d].seconds = g, secs
+    return [rows[d] for d in dates]
+
+
+# key: (title, emoji, table column, parts of a day bottom-up, format, names)
+# The emoji are escapes so the source stays ASCII: gem stone, high voltage,
+# stopwatch, triangular flag, pick, repeat arrows, fire.
+DAY_METRICS = {
+    "gems": ("Gems farmed", "\U0001F48E", "Gems",
+             lambda r: [r.gems if r.ran else None], charts.fmt_int, ()),
+    "rate": ("Gems per hour", "\u26A1", "g/h",
+             lambda r: [r.rate], charts.fmt_int, ()),
+    "hours": ("Hours farmed", "\u23F1\uFE0F", "Hrs",
+              lambda r: [r.hours if r.ran else None], charts.fmt_1, ()),
+    "marches": ("Marches sent", "\U0001F6A9", "Mrch",
+                lambda r: [r.marches if r.ran else None], charts.fmt_int, ()),
+    "mines": ("Mines done and failed", "\u26CF\uFE0F", "Done/Fail",
+              lambda r: [r.done, r.failed] if r.ran else [None, None],
+              charts.fmt_int, ("done", "failed")),
+    "restarts": ("Game restarts", "\U0001F501", "Rst",
+                 lambda r: [r.restarts if r.ran else None], charts.fmt_int, ()),
+    "ap": ("AP burns", "\U0001F525", "AP",
+           lambda r: [r.ap if r.ran else None], charts.fmt_int, ()),
+}
+DAYS_OVERVIEW = ("gems", "rate", "hours", "marches", "mines", "restarts")
+DAYS_DEFAULT, DAYS_MAX = 14, 60
+_DAY_ALIASES = {
+    "gem": "gems", "g": "gems", "gph": "rate", "speed": "rate", "perhour": "rate",
+    "hour": "hours", "h": "hours", "time": "hours", "march": "marches",
+    "m": "marches", "mine": "mines", "done": "mines", "fail": "mines",
+    "failed": "mines", "restart": "restarts", "quit": "restarts",
+    "quits": "restarts", "login": "restarts", "logins": "restarts",
+    "burn": "ap", "burns": "ap",
+}
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def parse_days(args) -> tuple[str | None, int]:
+    """(metric or None for the overview, number of days) from "!days ..."."""
+    key, n = None, DAYS_DEFAULT
+    for a in args:
+        a = a.strip().lower()
+        m = re.fullmatch(r"(\d{1,3})d?", a)
+        if m:
+            n = max(2, min(DAYS_MAX, int(m.group(1))))
+        elif a in DAY_METRICS:
+            key = a
+        elif a in _DAY_ALIASES:
+            key = _DAY_ALIASES[a]
+    return key, n
+
+
+def _ddmm(day: str) -> str:
+    return f"{day[8:10]}/{day[5:7]}"
+
+
+def _weekday(day: str) -> str:
+    return _WEEKDAYS[time.strptime(day, "%Y-%m-%d").tm_wday]
+
+
+def _total(parts) -> float | None:
+    return None if all(p is None for p in parts) else sum(p or 0 for p in parts)
+
+
+def day_chart(rows: list[DayRow], key: str, open_today: bool = True,
+              height: int = 440) -> bytes:
+    """PNG: the metric per day, oldest on the left, today as a wash."""
+    title, _emoji, _col, parts_of, fmt, names = DAY_METRICS[key]
+    parts = [parts_of(r) for r in rows]
+    series = [list(col) for col in zip(*parts)]
+    totals = [_total(p) for p in parts]
+    last = len(rows) - 1
+    partial = {last} if open_today and totals[last] is not None else set()
+    done = [i for i, t in enumerate(totals) if t is not None and i not in partial]
+    label_at = set()
+    if done:
+        label_at = {done[-1], max(done, key=lambda i: totals[i])}
+    ref = None
+    if key == "marches":
+        ref = (DAILY_MARCH_CAP, f"daily cap {DAILY_MARCH_CAP}", charts.WARNING)
+    elif key == "rate":
+        g = sum(r.gems for r in rows if r.rate is not None)
+        h = sum(r.hours for r in rows if r.rate is not None)
+        if h:
+            ref = (g / h, f"average {g / h:.0f}/h", charts.INK_2)
+    def success_label(i):
+        # The cap of a done+failed stack is the attempts; what a reader
+        # wants there is how many of them worked.
+        s = rows[i].success
+        if s is None:
+            return ""
+        return f"{s:.0f}%" if i in partial else f"{s:.0f}% done"
+
+    label_text = success_label if key == "mines" else None
+    return charts.column_chart(
+        [_ddmm(r.day) for r in rows], series, title=title,
+        subtitle=f"{_ddmm(rows[0].day)} to {_ddmm(rows[-1].day)}", fmt=fmt,
+        names=names, partial=partial, label_at=label_at, label_text=label_text,
+        ref=ref, height=height)
 
 # --------------------------------------------------------------------------
 # the map book and the camera's track
@@ -823,11 +950,15 @@ def parse_since(args, default: str = "yesterday", now: float | None = None) -> s
 COLOUR_INFO = 0x5865F2
 COLOUR_OK = 0x3BA55D
 COLOUR_BAD = 0xED4245
+COLOUR_WAIT = 0xFAB219        # status "warning": a planned wait, no watchdog
+
+# Title icons, as escapes so the source stays ASCII.
+ICON_GEMS, ICON_MAP, ICON_RUN = "\U0001F48E", "\U0001F5FA\uFE0F", "\U0001F9ED"
 
 
 def stats_spec(r: GemRate) -> dict:
     if not r.seconds:
-        return {"title": f"Gems since {r.since}", "colour": COLOUR_INFO,
+        return {"title": f"{ICON_GEMS} Gems per hour since {r.since}", "colour": COLOUR_INFO,
                 "description": "No readings of a running farm in that period.",
                 "fields": [], "image": None, "footer": None}
     fields = []
@@ -846,7 +977,7 @@ def stats_spec(r: GemRate) -> dict:
     fields.append(("Left out", "\n".join(left_out) if left_out
                    else "nothing -- no spending in this period", False))
     return {
-        "title": f"Gems since {r.since}",
+        "title": f"{ICON_GEMS} Gems per hour since {r.since}",
         "description": (f"**{r.gems:,.0f}** gems in **{r.hours:.1f} h** of "
                         f"running farm = **{r.rate:.0f} gems/h**"),
         "colour": COLOUR_INFO, "fields": fields, "image": "gem_rate.png",
@@ -857,14 +988,14 @@ def stats_spec(r: GemRate) -> dict:
 
 def map_spec(s: dict, since: str) -> dict:
     if not s.get("views"):
-        return {"title": f"Map book since {since}", "colour": COLOUR_INFO,
+        return {"title": f"{ICON_MAP} Map book since {since}", "colour": COLOUR_INFO,
                 "description": "No camera track in that period.",
                 "fields": [], "image": None, "footer": None}
     rep = s["repeats"]
     far = (f", median {s['march_median']} tiles out, max {s['march_max']}"
            if s["march_median"] is not None else "")
     return {
-        "title": f"Map book since {since}",
+        "title": f"{ICON_MAP} Map book since {since}",
         "description": f"{s['views']} views, {s['marches']} march(es){far}",
         "colour": COLOUR_INFO,
         "fields": [
@@ -885,7 +1016,7 @@ def run_spec(s: dict, idx: int) -> dict:
     start = time.strftime("%m-%d %H:%M", time.localtime(s["start"]))
     stop = time.strftime("%H:%M", time.localtime(s["end"]))
     return {
-        "title": f"Run {idx}: {start} -> {stop} "
+        "title": f"{ICON_RUN} Run {idx}: {start} -> {stop} "
                  f"({(s['end'] - s['start']) / 60:.1f} min)",
         "description": "One run out of the city and back, view by view.",
         "colour": COLOUR_OK if s["crossings"] <= 2 else COLOUR_INFO,
@@ -912,8 +1043,171 @@ def runs_spec(rows: list, since: str) -> dict:
                      f" {s['marches']:5d} {s['farthest']:3d} {s['crossings']:5d}"
                      f" {100 * s['rescan']:4.0f}")
     return {
-        "title": f"Runs since {since}",
+        "title": f"{ICON_RUN} Runs since {since}",
         "description": "```\n" + "\n".join(lines) + "\n```",
         "colour": COLOUR_INFO, "fields": [], "image": None,
         "footer": "!run N draws one of them (N as numbered here).",
     }
+
+
+# --------------------------------------------------------------------------
+# !days
+
+# Arrows and the middle dot, as escapes so the source stays ASCII.
+_UP, _DOWN, _FLAT, _DOT = "▲", "▼", "▶", "·"
+
+
+def _value_text(r: DayRow, key: str) -> str:
+    _t, _e, _c, parts_of, fmt, _names = DAY_METRICS[key]
+    if key == "mines":
+        pct = f" ({r.success:.0f}%)" if r.success is not None else ""
+        return f"{r.done} done / {r.failed} failed{pct}"
+    return fmt(_total(parts_of(r)))
+
+
+def _period_line(rows: list[DayRow], key: str, finished: list[int]) -> str:
+    """The period summed up in the metric's own terms. Averages are per
+    finished run day; totals include today so far."""
+    n = len(rows)
+    ran = [rows[i] for i in finished]
+    runs = len(ran)
+    if key == "gems":
+        total = sum(r.gems for r in rows)
+        if not runs:
+            return f"{n} days: **{total:,.0f}** gems"
+        top = max(ran, key=lambda r: r.gems)
+        return (f"{n} days: **{total:,.0f}** gems {_DOT} "
+                f"**{sum(r.gems for r in ran) / runs:,.0f}** a run day ({runs}) "
+                f"{_DOT} best **{top.gems:,.0f}** ({_ddmm(top.day)})")
+    if key == "rate":
+        timed = [r for r in rows if r.rate is not None]
+        g, h = sum(r.gems for r in timed), sum(r.hours for r in timed)
+        if not h:
+            return f"{n} days: no hour of running farm"
+        top = max(timed, key=lambda r: r.rate)
+        return (f"{n} days: **{g / h:,.0f}**/h over {h:.1f} h {_DOT} best "
+                f"**{top.rate:,.0f}**/h ({_ddmm(top.day)})")
+    if key == "hours":
+        total = sum(r.hours for r in rows)
+        if not runs:
+            return f"{n} days: **{total:.1f}** h"
+        top = max(ran, key=lambda r: r.hours)
+        return (f"{n} days: **{total:.1f}** h {_DOT} "
+                f"**{sum(r.hours for r in ran) / runs:.1f}** h a run day {_DOT} "
+                f"longest **{top.hours:.1f}** h ({_ddmm(top.day)})")
+    if key == "marches":
+        total = sum(r.marches for r in rows)
+        over = sum(1 for r in rows if r.marches > DAILY_MARCH_CAP)
+        top = max(rows, key=lambda r: r.marches)
+        return (f"{n} days: **{total:,}** {_DOT} most **{top.marches}** "
+                f"({_ddmm(top.day)}) {_DOT} **{over}** day(s) over the cap of "
+                f"{DAILY_MARCH_CAP}")
+    if key == "mines":
+        done, failed = sum(r.done for r in rows), sum(r.failed for r in rows)
+        pct = (f" {_DOT} **{100.0 * done / (done + failed):.0f}%** done"
+               if done + failed else "")
+        return f"{n} days: **{done:,}** done {_DOT} **{failed:,}** failed{pct}"
+    if key == "restarts":
+        total = sum(r.restarts for r in rows)
+        if not runs:
+            return f"{n} days: **{total}**"
+        top = max(ran, key=lambda r: r.restarts)
+        return (f"{n} days: **{total}** {_DOT} "
+                f"**{sum(r.restarts for r in ran) / runs:.0f}** a run day "
+                f"{_DOT} most **{top.restarts}** ({_ddmm(top.day)})")
+    return f"{n} days: **{sum(r.ap for r in rows)}**"
+
+
+def _headline(rows: list[DayRow], key: str, open_today: bool) -> str:
+    """The last finished day against the run day before it, today so far,
+    then the period."""
+    _t, _e, _c, parts_of, fmt, _names = DAY_METRICS[key]
+    totals = [_total(parts_of(r)) for r in rows]
+    last = len(rows) - 1
+    finished = [i for i, t in enumerate(totals)
+                if t is not None and not (open_today and i == last)]
+    lines = []
+    if finished:
+        i = finished[-1]
+        head = (f"**{_value_text(rows[i], key)}** on {_weekday(rows[i].day)} "
+                f"{_ddmm(rows[i].day)}")
+        if len(finished) >= 2:
+            j = finished[-2]
+            # Mines compare what worked, not attempts.
+            if key == "mines":
+                d, unit = rows[i].done - rows[j].done, " done"
+            else:
+                d, unit = totals[i] - totals[j], ""
+            arrow = _UP if d > 0 else _DOWN if d < 0 else _FLAT
+            head += (f" {_DOT} {arrow} {'+' if d >= 0 else '-'}{fmt(abs(d))}{unit} "
+                     f"vs {_ddmm(rows[j].day)}")
+        lines.append(head)
+    else:
+        lines.append("No finished day with a run in this period.")
+    if open_today and totals[last] is not None:
+        lines.append(f"Today so far: **{_value_text(rows[last], key)}**")
+    lines.append(_period_line(rows, key, finished))
+    return "\n".join(lines)
+
+
+def _day_table(rows: list[DayRow], open_today: bool) -> str:
+    """Everything, one line a day, newest first, in a code block."""
+    out = ["Day     Gems  g/h   Hrs Mrch Done Fail Rst AP"]
+    last = len(rows) - 1
+    for i in range(last, -1, -1):
+        r = rows[i]
+        if not r.ran:
+            out.append(f"{_ddmm(r.day)}      -")
+            continue
+        rate = f"{r.rate:.0f}" if r.rate is not None else "-"
+        mark = " *" if open_today and i == last else ""
+        out.append(f"{_ddmm(r.day)} {r.gems:6,.0f} {rate:>4} {r.hours:5.1f} "
+                   f"{r.marches:4d} {r.done:4d} {r.failed:4d} {r.restarts:3d} "
+                   f"{r.ap:2d}{mark}")
+    return "```\n" + "\n".join(out) + "\n```"
+
+
+DAYS_FOOTER = ("Local calendar days. Gems = rises of the balance while the farm "
+               "runs; spending never counts. g/h = gems per hour of running "
+               "farm. Rst = game restarts.")
+
+
+def days_report(key: str | None = None, days: int = DAYS_DEFAULT,
+                now: float | None = None,
+                log: Path = LOG) -> list[tuple[dict, bytes | None]]:
+    """[(spec, png)] for !days: one embed per metric then the table of
+    everything (the overview), or one metric with its own column of days."""
+    now = time.time() if now is None else now
+    rows = daily_stats(days, now=now, log=log)
+    open_today = time.localtime(now).tm_hour < 23       # the run window's end
+    if key is None:
+        out = []
+        for k in DAYS_OVERVIEW:
+            title, emoji, *_rest = DAY_METRICS[k]
+            out.append(({"title": f"{emoji} {title}",
+                         "description": _headline(rows, k, open_today),
+                         "colour": COLOUR_INFO, "fields": [],
+                         "image": f"days_{k}.png", "footer": None},
+                        day_chart(rows, k, open_today, height=380)))
+        note = "\n`*` today, so far" if open_today and rows[-1].ran else ""
+        out.append(({"title": "\U0001F4CB Day by day",
+                     "description": _day_table(rows, open_today) + note,
+                     "colour": COLOUR_INFO, "fields": [], "image": None,
+                     "footer": DAYS_FOOTER}, None))
+        return out
+    title, emoji, col, parts_of, _fmt, _names = DAY_METRICS[key]
+    lines = []
+    last = len(rows) - 1
+    for i in range(last, -1, -1):
+        r = rows[i]
+        value = _value_text(r, key) if _total(parts_of(r)) is not None else "-"
+        mark = "  so far" if open_today and i == last and value != "-" else ""
+        lines.append(f"{_weekday(r.day)} {_ddmm(r.day)}  {value:>10}{mark}")
+    # In the description, not a field: a field holds 1,024 characters, about
+    # 25 of these lines, and "!days gems 60" asks for 60.
+    table = f"**{col}, newest first**\n```\n" + "\n".join(lines) + "\n```"
+    spec = {"title": f"{emoji} {title}, day by day",
+            "description": _headline(rows, key, open_today) + "\n\n" + table,
+            "colour": COLOUR_INFO, "fields": [],
+            "image": f"days_{key}.png", "footer": DAYS_FOOTER}
+    return [(spec, day_chart(rows, key, open_today))]

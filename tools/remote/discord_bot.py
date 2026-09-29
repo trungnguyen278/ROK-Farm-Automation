@@ -29,7 +29,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # The install path is not knowable in advance -- this ships to other people's
@@ -67,7 +67,7 @@ WATCH_POLL = 60.0
 
 # Every verb the handler below answers to, including the short aliases.
 KNOWN_CMDS = ("help", "h", "status", "s", "shot", "pic", "live", "log",
-              "report", "feed", "check", "wake", "stats", "map", "run", "runs",
+              "report", "feed", "check", "wake", "stats", "days", "map", "run", "runs",
               "ap", "start", "stop")
 
 # What a typo may be pointed AT. "start" and "stop" are deliberately absent.
@@ -289,77 +289,141 @@ def uptime_str(proc):
     return f"{h}h{rem // 60:02d}m" if h else f"{rem // 60}m"
 
 
+# The farm announces every wait before it starts it ("Troops home in ~12.4min
+# -- alt-tab out for 13.0min"); a mine header or result ends it.
+WAIT_START = re.compile(r"Troops home in ~([\d.]+)(min|s) -- (quitting the client|"
+                        r"staying on the game screen|alt-tab out|shorter than)")
+WORKING = re.compile(r"--- \[m\d+\] Step|Mine \d+ (?:DONE|FAILED)")
+WAIT_HOW = {"quitting the client": "client closed on purpose",
+            "staying on the game screen": "on the game screen",
+            "alt-tab out": "alt-tabbed out", "shorter than": "in place"}
+DOT = "\u00B7"
+
+
+def _last_at(lines, pattern, window=600):
+    """Index of the last of the final `window` lines that matches, or -1."""
+    for k in range(len(lines) - 1, max(-1, len(lines) - window - 1), -1):
+        if pattern.search(lines[k]):
+            return k
+    return -1
+
+
+def _stamp_before(lines, k):
+    """The timestamp a console line inherits: the last logged one above it."""
+    for j in range(k, max(-1, k - 200), -1):
+        m = TS.search(lines[j])
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+    return None
+
+
+def current_wait(lines):
+    """(how, minutes left) while the farm sits out a planned wait, else None."""
+    k = _last_at(lines, WAIT_START)
+    if k < 0 or k < _last_at(lines, WORKING):
+        return None
+    m = WAIT_START.search(lines[k])
+    total = float(m.group(1)) * (60.0 if m.group(2) == "min" else 1.0)
+    how = WAIT_HOW[m.group(3)]
+    still = _last_at(lines, STILL_OUT)
+    if still > k:                               # the quit's own countdown
+        return how, float(STILL_OUT.search(lines[still]).group(1))
+    began = _stamp_before(lines, k)
+    if began is None:
+        return how, None
+    left = total - (datetime.now() - began).total_seconds()
+    return how, max(0.0, left / 60.0)
+
+
 def status_spec():
-    """!status as an embed: the counters as fields, the last lines as text.
+    """!status as an embed: the state in the title and the colour, the
+    counters as fields, the last lines as text.
 
     It was one block of monospaced "key : value" lines; the operator, 2026-
     09-24: the log reads fine as plain text, the numbers look odd that way.
+    2026-09-29: "the commands' look is not professional yet" -- so what the
+    farm is doing now leads, before any counter.
     """
     farms, wds = farm_procs(), wd_procs()
     game = game_proc()
     seg, started = current_segment(log_tail(FARM_LOG))
     lines = seg.splitlines()
     c = {k: sum(bool(p.search(ln)) for ln in lines) for k, p in STAT.items()}
+    wait = current_wait(lines) if farms else None
 
-    fields = [
-        ("Farm", f"UP · pid {farms[0].pid} · {uptime_str(farms[0])}"
-         if farms else "**DOWN**", True),
-        ("Watchdog", f"UP · pid {wds[0].pid}" if wds else "**DOWN**", True),
-        ("Game", "UP" if game else "DOWN", True),
-        ("AP burn", "on" if ap_burn.enabled() else "**OFF**", True),
-    ]
+    if not farms:
+        title, colour = "\U0001F534 Farm is not running", reports.COLOUR_BAD
+    elif wait:
+        how, left = wait
+        title = ("\u23F3 Waiting for the troops"
+                 + (f", ~{left:.0f} min left" if left is not None else ""))
+        colour = reports.COLOUR_WAIT
+    elif not wds:
+        title, colour = "\U0001F7E0 Farming, but no watchdog", reports.COLOUR_WAIT
+    else:
+        title, colour = "\U0001F7E2 Farming", reports.COLOUR_OK
+
     attempts = c["done"] + c["failed"]
-    rate = f" ({100.0 * c['done'] / attempts:.0f}%)" if attempts else ""
-    fields.append(("Mines", f"**{c['done']}** done · {c['failed']} failed{rate}",
-                   True))
-    fields.append(("Marches", f"{c['march']} sent · {c['march_fail']} did not "
-                   f"fire", True))
+    pct = f" ({100.0 * c['done'] / attempts:.0f}%)" if attempts else ""
+    when = started[11:16] if TS.fullmatch(started or "") else started
+    desc = [f"Run started **{when}**"
+            + (f" {DOT} up **{uptime_str(farms[0])}**" if farms else ""),
+            f"**{c['done']}** mines done {DOT} {c['failed']} failed{pct} {DOT} "
+            f"**{c['march']}** marches"]
+    if wait:
+        desc.append(f"Waiting {wait[0]}.")
 
     q = [m for ln in lines for m in [QUEUE.search(ln)] if m]
-    fields.append(("Queue", f"{q[-1].group(1)}/{q[-1].group(2)}" if q else "--",
-                   True))
     gems = [m for ln in lines for m in [GEMS.search(ln)] if m]
-    if gems:
-        fields.append(("Gems", f"{int(gems[-1].group(1)):,} ({gems[-1].group(2)} "
-                       f"this run)", True))
+    fields = [
+        ("Farm", f"up {DOT} pid {farms[0].pid}" if farms else "**down**", True),
+        ("Watchdog", "up" if wds else "**down**", True),
+        ("Game", "up" if game else ("closed, on purpose"
+                                    if wait and wait[0].startswith("client")
+                                    else "**closed**"), True),
+        ("Queue", f"{q[-1].group(1)}/{q[-1].group(2)}" if q else "-", True),
+        ("Gems", f"{int(gems[-1].group(1)):,} ({gems[-1].group(2)} this run)"
+         if gems else "-", True),
+        ("AP burn", "on" if ap_burn.enabled() else "**off**", True),
+    ]
     last = last_mine_time(lines)
     if last:
         mins = (datetime.now() - last).total_seconds() / 60.0
-        fields.append(("Last mine", f"{last:%H:%M:%S} ({mins:.0f} min ago)", True))
-    fields.append(("Scans / trouble", f"{c['empty']} empty scans · {c['fog']} fog "
-                   f"· {c['restart']} restart(s) · {c['recovery']} recovery",
-                   False))
-
-    # A planned wait produces no mines BY DESIGN. Without this a healthy
-    # 25-minute gather reads as a hang.
-    tail_txt = "\n".join(lines[-400:])
-    still = STILL_OUT.findall(tail_txt)
-    stay = STAY_OUT.findall(tail_txt)
-    if still:
-        fields.append(("Waiting", f"planned wait, {still[-1]} min to go "
-                       f"(client closed on purpose)", False))
-    elif stay:
-        fields.append(("Waiting", f"planned wait of {stay[-1]} min started", False))
+        fields.append(("Last mine", f"{last:%H:%M} ({mins:.0f} min ago)", True))
+    fields.append(("Marches", f"{c['march']} sent {DOT} {c['march_fail']} did "
+                   f"not fire", True))
+    fields.append(("Scans", f"{c['empty']} empty {DOT} {c['fog']} fog", True))
+    fields.append(("Trouble", f"{c['restart']} restart(s) {DOT} "
+                   f"{c['recovery']} recovery", False))
 
     tail = interesting_tail(lines, 3)
     if tail:
         body = "\n".join(ln[:110] for ln in tail)
         fields.append(("Last lines", f"```\n{body[:1000]}\n```", False))
-    return {"title": "Farm status", "description": f"run started {started}",
-            "colour": reports.COLOUR_OK if farms else reports.COLOUR_BAD,
+    return {"title": title, "description": "\n".join(desc), "colour": colour,
             "fields": fields, "image": None, "footer": None}
 
 
-def to_embed(spec):
-    """A reports-style spec dict as a Discord embed."""
+def to_embed(spec, stamp=True):
+    """A reports-style spec dict as a Discord embed.
+
+    `stamp` puts the time in the footer (Discord shows it in the reader's
+    own clock). A message of several embeds stamps only the last.
+    """
     emb = discord.Embed(title=spec["title"][:256],
-                        description=(spec.get("description") or "")[:4000],
+                        description=(spec.get("description") or "")[:4096],
                         colour=spec.get("colour", reports.COLOUR_INFO))
     for name, value, inline in spec.get("fields", [])[:25]:
-        emb.add_field(name=name[:256], value=(value or "--")[:1024], inline=inline)
+        emb.add_field(name=name[:256], value=(value or "-")[:1024], inline=inline)
     if spec.get("image"):
         emb.set_image(url=f"attachment://{spec['image']}")
-    if spec.get("footer"):
+    if stamp:
+        emb.timestamp = datetime.now(timezone.utc)
+        emb.set_footer(text=(spec.get("footer") or "ROK Farm")[:2048])
+    elif spec.get("footer"):
         emb.set_footer(text=spec["footer"][:2048])
     return emb
 
@@ -372,6 +436,52 @@ async def send_spec(message, spec, png=None):
     else:
         spec = dict(spec, image=None)
         await message.channel.send(embed=to_embed(spec))
+
+
+def _embed_chars(spec):
+    return (len(spec.get("title") or "") + len(spec.get("description") or "")
+            + len(spec.get("footer") or "")
+            + sum(len(n) + len(v or "") for n, v, _i in spec.get("fields", [])))
+
+
+async def send_specs(message, pairs):
+    """[(spec, png)] as few messages as Discord allows: ten embeds and 6,000
+    characters a message. Each picture rides with its own embed; the time
+    goes on the last embed of the last message only."""
+    batches, cur, size = [], [], 0
+    for spec, png in pairs:
+        n = _embed_chars(spec)
+        if cur and (len(cur) == 10 or size + n > 5800):
+            batches.append(cur)
+            cur, size = [], 0
+        cur.append((spec, png))
+        size += n
+    if cur:
+        batches.append(cur)
+    for b, batch in enumerate(batches):
+        embeds, files = [], []
+        for k, (spec, png) in enumerate(batch):
+            last = b == len(batches) - 1 and k == len(batch) - 1
+            if png and spec.get("image"):
+                files.append(discord.File(io.BytesIO(png), spec["image"]))
+            else:
+                spec = dict(spec, image=None)
+            embeds.append(to_embed(spec, stamp=last))
+        await message.channel.send(embeds=embeds, files=files)
+
+
+def help_embed():
+    """!help: the commands in groups, from session_control.HELP_GROUPS."""
+    emb = discord.Embed(
+        title="\U0001F4D6 Commands",
+        description="Everything the bot answers to. `[x]` is optional.",
+        colour=reports.COLOUR_INFO)
+    for group, items in sc.HELP_GROUPS:
+        emb.add_field(name=group, value="\n".join(
+            f"`{cmd}` {DOT} {what}" for cmd, what in items)[:1024], inline=False)
+    emb.timestamp = datetime.now(timezone.utc)
+    emb.set_footer(text="ROK Farm")
+    return emb
 
 
 def recent_runs(since, min_views=3):
@@ -649,7 +759,7 @@ async def on_message(message):
 
     try:
         if cmd in ("help", "h"):
-            await reply(message, HELP)
+            await message.channel.send(embed=help_embed())
 
         elif cmd in ("status", "s"):
             await send_spec(message, await asyncio.to_thread(status_spec))
@@ -661,6 +771,15 @@ async def on_message(message):
                 png = (await asyncio.to_thread(reports.rate_chart, r)
                        if r.seconds else None)
             await send_spec(message, reports.stats_spec(r), png)
+
+        elif cmd == "days":
+            # Day by day, one chart a metric, days along the bottom. The
+            # operator, 2026-09-29: one column the day, one the value to
+            # compare -- and long is fine for our own bot.
+            key, n = reports.parse_days(args)
+            async with message.channel.typing():
+                pairs = await asyncio.to_thread(reports.days_report, key, n)
+            await send_specs(message, pairs)
 
         elif cmd == "map":
             since = reports.parse_since(args, default="today")

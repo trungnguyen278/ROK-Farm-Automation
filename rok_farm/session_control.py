@@ -526,24 +526,38 @@ def do_report():
         return f"report failed: {type(e).__name__}: {e}"
 
 
-HELP = """```
-!status          farm/watchdog/game state + counters for the current run
-!shot            screenshot of the game right now (falls back to newest saved)
-!log [n]         last n interesting log lines (default 25, debug stripped)
-!report          full run report from report.py
-!feed on|off     live progress: mines, marches, queue, gather-time maths
-!check           stop waiting and look at the queue now (troops home early)
-!ap              AP burn (the game's barbarian auto): on or off
-!ap on|off       switch it -- off for an account without the monthly pass
-!stats [period]  gems/hour since yesterday; or today, 24h, 7d, 2026-09-23
-!map [period]    map book: ground not reached, ground gone over (default today)
-!runs            today's runs out of the city, one line each
-!run [n]         one run's path, view by view (default: the latest)
-!start           start farm + watchdog
-!start solo      start the farm with no watchdog
-!start force     start even if someone is using the machine
-!stop            stop farm + watchdog, close the game, ESP32 jitter off
-!stop keep       ...but leave the game running
-!help            this
-```"""
+# Every command, grouped as !help shows them. The Discord bot draws these as
+# an embed; HELP below is the same list as plain text.
+HELP_GROUPS = (
+    ("Watch", (
+        ("!status", "farm, watchdog and game state, this run's counters"),
+        ("!shot", "the game right now (or the newest saved frame)"),
+        ("!log [n]", "the last n interesting log lines (default 25)"),
+        ("!feed on|off", "live progress: mines, marches, queue, gather times"),
+    )),
+    ("Numbers", (
+        ("!days [what] [n]", "day by day, one chart each, last n days (14): "
+                             "gems, rate, hours, marches, mines, restarts, ap"),
+        ("!stats [period]", "gems per hour by hour of day: today, 24h, 7d, "
+                            "09-23 (default since yesterday)"),
+        ("!map [period]", "map book: ground not reached, ground gone over"),
+        ("!runs", "today's runs out of the city, one line each"),
+        ("!run [n]", "one run's path, view by view (default: the latest)"),
+        ("!report", "the full run report as a file"),
+    )),
+    ("Control", (
+        ("!start", "farm + watchdog, once the machine has been quiet"),
+        ("!start solo", "the farm with no watchdog"),
+        ("!start force", "start even if someone is using the machine"),
+        ("!stop", "stop farm + watchdog, close the game, ESP32 jitter off"),
+        ("!stop keep", "...but leave the game running"),
+        ("!check", "stop waiting and look at the queue now"),
+        ("!ap", "AP burn (the game's barbarian auto): on or off"),
+        ("!ap on|off", "switch it -- off for an account without the monthly pass"),
+    )),
+)
+
+HELP = ("```\n" + "\n".join(f"{cmd:<17}{what}" for _g, items in HELP_GROUPS
+                            for cmd, what in items)
+        + f"\n{'!help':<17}this\n```")
 

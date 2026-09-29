@@ -107,7 +107,7 @@ def test_a_run_is_drawn_and_counted(tmp_path):
     assert s["views"] == 8 and s["marches"] == 1 and s["crossings"] == 0
     assert s["farthest"] == 70
     spec = reports.run_spec(s, 1)
-    assert spec["image"] == "run.png" and spec["title"].startswith("Run 1:")
+    assert spec["image"] == "run.png" and "Run 1:" in spec["title"]
 
 
 # --- provinces on the pictures ---------------------------------------------
